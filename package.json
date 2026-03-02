@@ -2,7 +2,7 @@
     "name": "hernandezorganizador",
     "private": true,
     "dependencies": {
-        "next": "16.1.6",
+        "next": "^15.1.6",
         "react": "19.2.3",
         "react-dom": "19.2.3",
         "lucide-react": "^0.563.0"
@@ -14,12 +14,12 @@
         "@types/react-dom": "^19",
         "babel-plugin-react-compiler": "1.0.0",
         "eslint": "^9",
-        "eslint-config-next": "16.1.6",
+        "eslint-config-next": "^15.1.6",
         "tailwindcss": "^4",
         "typescript": "^5"
     },
     "scripts": {
-        "build": "cd excel_sort_bot/cuaderno-ui && next build",
-        "vercel-build": "cd excel_sort_bot/cuaderno-ui && npm install && next build"
+        "build": "cd excel_sort_bot/cuaderno-ui && npm install && npx next build",
+        "vercel-build": "cd excel_sort_bot/cuaderno-ui && npm install && npx next build"
     }
 }
