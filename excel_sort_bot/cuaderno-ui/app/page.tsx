@@ -229,15 +229,19 @@ export default function Home() {
     setChatOpen(true);
   }, []);
 
+  // Mobile panel state: which panel is visible on mobile
+  const [mobilePanel, setMobilePanel] = useState<"editor" | "sidebar" | "chat">("editor");
+
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-[var(--bg-darker)]">
       {/* Header — barra superior limpia */}
-      <header className="h-12 shrink-0 flex items-center gap-0.5 pl-[72px] pr-4 border-b border-white/5 bg-[var(--bg-dark)]/80 backdrop-blur-sm electron-drag">
+      <header className="app-header h-12 shrink-0 flex items-center gap-0.5 pl-[72px] pr-4 border-b border-white/5 bg-[var(--bg-dark)]/80 backdrop-blur-sm electron-drag">
+        {/* Desktop toggle buttons */}
         <button
           type="button"
           onClick={() => setLeftSidebarOpen((v) => !v)}
           title={leftSidebarOpen ? "Ocultar panel izquierdo" : "Mostrar panel izquierdo"}
-          className={`p-2 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-white/5 transition-colors electron-no-drag ${leftSidebarOpen ? "text-emerald-400" : ""}`}
+          className={`desktop-only p-2 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-white/5 transition-colors electron-no-drag ${leftSidebarOpen ? "text-emerald-400" : ""}`}
         >
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
             <rect x="2" y="3" width="20" height="18" rx="1" />
@@ -248,19 +252,25 @@ export default function Home() {
           type="button"
           onClick={() => setChatOpen((v) => !v)}
           title={chatOpen ? "Ocultar panel derecho (Chat)" : "Mostrar panel derecho (Chat)"}
-          className={`p-2 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-white/5 transition-colors electron-no-drag ${chatOpen ? "text-emerald-400" : ""}`}
+          className={`desktop-only p-2 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-white/5 transition-colors electron-no-drag ${chatOpen ? "text-emerald-400" : ""}`}
         >
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
             <rect x="2" y="3" width="20" height="18" rx="1" />
             <rect x="16" y="3" width="6" height="18" rx="0.5" fill="currentColor" fillOpacity="0.5" />
           </svg>
         </button>
+
+        {/* Mobile header title */}
+        <span className="mobile-only header-title items-center gap-2 flex-1 text-sm font-semibold text-zinc-200 truncate">
+          {mobilePanel === "sidebar" ? "Cuadernos" : mobilePanel === "chat" ? "VIera AI Chat" : (activeCuaderno?.nombre_explotacion || "Editor")}
+        </span>
       </header>
 
-      <div className="flex flex-1 min-h-0">
-        {/* Sidebar izquierdo + resizer (ocultable) */}
+      <div className="app-main-area flex flex-1 min-h-0 relative">
+        {/* =================== DESKTOP LAYOUT =================== */}
+        {/* Sidebar izquierdo + resizer (ocultable) — desktop only */}
         {leftSidebarOpen && (
-          <div className="flex h-full" style={{ width: leftWidth }}>
+          <div className="desktop-only h-full" style={{ width: leftWidth }}>
             <Sidebar
               cuadernos={cuadernos}
               activeCuaderno={activeCuaderno}
@@ -279,13 +289,13 @@ export default function Home() {
             />
             <div
               onMouseDown={() => setDragging("left")}
-              className="w-1 cursor-col-resize bg-zinc-900 hover:bg-zinc-700 transition-colors"
+              className="panel-resizer w-1 cursor-col-resize bg-zinc-900 hover:bg-zinc-700 transition-colors"
             />
           </div>
         )}
 
-        {/* Área central */}
-        <main className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
+        {/* Área central — desktop */}
+        <main className="desktop-only flex-1 flex-col min-w-0 min-h-0 overflow-hidden">
           {activeCuaderno ? (
             <Editor
               cuaderno={activeCuaderno}
@@ -304,12 +314,12 @@ export default function Home() {
           )}
         </main>
 
-        {/* Chat Panel + resizer (ocultable) */}
+        {/* Chat Panel + resizer (ocultable) — desktop */}
         {chatOpen && (
-          <div className="flex h-full" style={{ width: rightWidth }}>
+          <div className="desktop-only h-full" style={{ width: rightWidth }}>
             <div
               onMouseDown={() => setDragging("right")}
-              className="w-1 cursor-col-resize bg-zinc-900 hover:bg-zinc-700 transition-colors"
+              className="panel-resizer w-1 cursor-col-resize bg-zinc-900 hover:bg-zinc-700 transition-colors"
             />
             <ChatPanel
               cuaderno={activeCuaderno}
@@ -338,13 +348,106 @@ export default function Home() {
             />
           </div>
         )}
+
+        {/* =================== MOBILE LAYOUT =================== */}
+        {/* Sidebar — mobile full screen */}
+        {mobilePanel === "sidebar" && (
+          <div className="mobile-only mobile-panel sidebar-mobile flex-col w-full">
+            <Sidebar
+              cuadernos={cuadernos}
+              activeCuaderno={activeCuaderno}
+              activeSheet={activeSheet}
+              loading={loading}
+              onSelectCuaderno={(id) => {
+                selectCuaderno(id);
+                setMobilePanel("editor");
+              }}
+              onSelectSheet={(sheet) => {
+                setActiveSheet(sheet);
+                setMobilePanel("editor");
+              }}
+              onCreateCuaderno={(data) => {
+                createCuaderno(data);
+                setMobilePanel("editor");
+              }}
+              onUploadSuccess={async (id) => {
+                await onUploadSuccess(id);
+                setMobilePanel("editor");
+              }}
+              onCuadernoDeleted={async () => {
+                await loadCuadernos();
+                if (activeCuaderno && !cuadernos.find(c => c.id === activeCuaderno.id)) {
+                  setActiveCuaderno(null);
+                }
+              }}
+            />
+          </div>
+        )}
+
+        {/* Editor — mobile full screen */}
+        {mobilePanel === "editor" && (
+          <div className="mobile-only mobile-panel flex-col w-full">
+            {activeCuaderno ? (
+              <Editor
+                cuaderno={activeCuaderno}
+                activeSheet={activeSheet}
+                onSheetChange={setActiveSheet}
+                onRefresh={refreshData}
+                highlight={highlight}
+                onRequestHighlight={(sheet, id) => setHighlight({ sheet, id })}
+                focusSheetId={focusSheetId}
+                onFocusModeExit={() => setFocusSheetId(null)}
+                editorActionsRef={editorActionsRef}
+                onSendSelectionToChat={(sel) => {
+                  handleSendSelectionToChat(sel);
+                  setMobilePanel("chat");
+                }}
+              />
+            ) : (
+              <WelcomeScreen onCreateCuaderno={createCuaderno} />
+            )}
+          </div>
+        )}
+
+        {/* Chat — mobile full screen */}
+        {mobilePanel === "chat" && (
+          <div className="mobile-only mobile-panel chat-mobile flex-col w-full">
+            <ChatPanel
+              cuaderno={activeCuaderno}
+              messages={activeSession?.messages ?? [INITIAL_MESSAGE]}
+              onMessagesChange={setActiveSessionMessages}
+              sessions={chatSessions}
+              activeSessionId={activeChatId}
+              onSelectSession={handleSelectChat}
+              onNewChat={handleNewChat}
+              onClose={() => setMobilePanel("editor")}
+              onRefresh={refreshData}
+              onNavigate={(nav) => {
+                setActiveSheet(nav.sheet);
+                setHighlight({ sheet: nav.sheet, id: nav.id });
+                setMobilePanel("editor");
+              }}
+              focusSheetId={focusSheetId}
+              onSelectSheetFromChat={(sheetId) => {
+                setFocusSheetId(sheetId);
+                const base: SheetType[] = ["parcelas", "productos", "tratamientos", "fertilizantes", "cosecha", "historico"];
+                if (base.includes(sheetId as SheetType)) setActiveSheet(sheetId as SheetType);
+                setMobilePanel("editor");
+              }}
+              onFocusModeExit={() => setFocusSheetId(null)}
+              editorActionsRef={editorActionsRef}
+              pendingSelection={pendingSelection}
+              onSelectionConsumed={() => setPendingSelection(null)}
+            />
+          </div>
+        )}
       </div>
 
-      {/* Botón flotante para abrir chat si está cerrado */}
+      {/* Desktop: Botón flotante para abrir chat si está cerrado */}
       {!chatOpen && (
         <button
           onClick={() => setChatOpen(true)}
-          className="fixed right-4 bottom-4 w-12 h-12 rounded-full bg-green-600 hover:bg-green-500 text-white flex items-center justify-center shadow-lg transition-all"
+          className="desktop-only fixed right-4 bottom-4 w-12 h-12 rounded-full bg-green-600 hover:bg-green-500 text-white items-center justify-center shadow-lg transition-all"
           title="Abrir Chat"
         >
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -352,6 +455,41 @@ export default function Home() {
           </svg>
         </button>
       )}
+
+      {/* MOBILE: Bottom navigation bar */}
+      <nav className="mobile-nav">
+        <button
+          onClick={() => setMobilePanel("sidebar")}
+          className={mobilePanel === "sidebar" ? "active" : ""}
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+            <polyline points="9 22 9 12 15 12 15 22" />
+          </svg>
+          Inicio
+        </button>
+        <button
+          onClick={() => setMobilePanel("editor")}
+          className={mobilePanel === "editor" ? "active" : ""}
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+            <line x1="3" y1="9" x2="21" y2="9" />
+            <line x1="9" y1="21" x2="9" y2="9" />
+          </svg>
+          Editor
+        </button>
+        <button
+          onClick={() => setMobilePanel("chat")}
+          className={mobilePanel === "chat" ? "active" : ""}
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+          </svg>
+          Chat
+        </button>
+      </nav>
     </div>
   );
 }
+

@@ -81,3 +81,194 @@ body {
   background: var(--accent-subtle);
   color: var(--accent);
 }
+
+/* ============================================ */
+/* MOBILE RESPONSIVE                            */
+/* ============================================ */
+
+/* Mobile bottom navigation bar */
+.mobile-nav {
+  display: none;
+}
+
+/* Desktop: hide mobile-only elements */
+.mobile-only {
+  display: none;
+}
+
+.desktop-only {
+  display: flex;
+}
+
+@media (max-width: 768px) {
+
+  /* Show mobile nav, hide desktop elements */
+  .mobile-nav {
+    display: flex;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 56px;
+    background: var(--bg-dark);
+    border-top: 1px solid var(--border);
+    z-index: 100;
+    align-items: center;
+    justify-content: space-around;
+    padding: 0 8px;
+    -webkit-backdrop-filter: blur(12px);
+    backdrop-filter: blur(12px);
+  }
+
+  .mobile-nav button {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    padding: 6px 12px;
+    border: none;
+    background: none;
+    color: var(--text-muted);
+    font-size: 10px;
+    font-weight: 500;
+    border-radius: 8px;
+    transition: all 0.2s;
+    cursor: pointer;
+    min-width: 56px;
+  }
+
+  .mobile-nav button.active {
+    color: var(--accent);
+    background: var(--accent-subtle);
+  }
+
+  .mobile-nav button svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  .mobile-only {
+    display: flex;
+  }
+
+  .desktop-only {
+    display: none !important;
+  }
+
+  /* Header adjustments */
+  .app-header {
+    padding-left: 12px !important;
+    padding-right: 12px !important;
+    height: 48px !important;
+  }
+
+  .app-header .header-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Main content area: account for bottom nav */
+  .app-main-area {
+    padding-bottom: 56px;
+  }
+
+  /* Mobile panel views: full screen overlays */
+  .mobile-panel {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 56px;
+    z-index: 50;
+    background: var(--bg-darker);
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+
+  /* Sidebar on mobile: full width */
+  .sidebar-mobile {
+    width: 100% !important;
+    max-width: 100% !important;
+    border-right: none !important;
+  }
+
+  /* Chat on mobile: full width */
+  .chat-mobile {
+    width: 100% !important;
+    max-width: 100% !important;
+    border-left: none !important;
+  }
+
+  /* Editor responsive: allow horizontal scroll on tables */
+  .editor-table-container {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Hide panel resizers on mobile */
+  .panel-resizer {
+    display: none !important;
+  }
+
+  /* Editor toolbar: wrap on small screens */
+  .editor-toolbar {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  /* Editor tabs: horizontal scroll */
+  .editor-tabs {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .editor-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Modals: almost full screen */
+  .modal-overlay {
+    padding: 12px !important;
+  }
+
+  .modal-content {
+    max-height: 90vh !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    border-radius: 12px !important;
+  }
+
+  /* Welcome screen mobile */
+  .welcome-grid {
+    grid-template-columns: 1fr !important;
+    padding: 16px !important;
+  }
+}
+
+/* Small phones */
+@media (max-width: 390px) {
+  .mobile-nav {
+    height: 52px;
+    padding: 0 4px;
+  }
+
+  .mobile-nav button {
+    font-size: 9px;
+    padding: 4px 8px;
+    min-width: 48px;
+  }
+
+  .app-main-area {
+    padding-bottom: 52px;
+  }
+
+  .mobile-panel {
+    bottom: 52px;
+  }
+}
