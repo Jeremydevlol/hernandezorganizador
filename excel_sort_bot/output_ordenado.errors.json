@@ -1,0 +1,14 @@
+{
+  "generated_at": "2026-02-03T01:17:13.648491",
+  "total_errors": 1,
+  "errors": [
+    {
+      "field": "fecha_apertura",
+      "type": "required_missing",
+      "message": "Campo obligatorio 'fecha_apertura' no encontrado o vacío",
+      "source_sheet": "inf.gral 1",
+      "source_cell": "A8",
+      "raw_value": null
+    }
+  ]
+}

@@ -1,0 +1,75 @@
+{
+    "templates": [
+        {
+            "template_id": "sigpac_v1_pablo_perez_rubio_2025",
+            "description": "Cuaderno SIGPAC típico (2.1 DATOS PARCELAS) con header_row ~13",
+            "required_sheets_any_of": [
+                [
+                    "2.1. DATOS PARCELAS"
+                ],
+                [
+                    "2.1. DATOS PARCELAS (2)"
+                ]
+            ],
+            "parcels_sheet_name_contains": [
+                "2.1.",
+                "DATOS",
+                "PARCELAS"
+            ],
+            "header_tokens_required": [
+                "Nº DE POLIGONO",
+                "Nº DE PARCELA",
+                "Nº DE RECINTO",
+                "ESPECIE/VARIEDAD"
+            ],
+            "columns_required": [
+                "polygon",
+                "parcel",
+                "recinto",
+                "crop",
+                "municipio"
+            ],
+            "scoring": {
+                "sheet_match": 0.25,
+                "header_tokens": 0.45,
+                "columns_map": 0.30
+            }
+        },
+        {
+            "template_id": "sigpac_v2_alt_headers",
+            "description": "Variación SIGPAC (tokens alternos: POLIG., PARC., REC.)",
+            "required_sheets_any_of": [
+                [
+                    "2.1. DATOS PARCELAS"
+                ],
+                [
+                    "DATOS PARCELAS"
+                ]
+            ],
+            "parcels_sheet_name_contains": [
+                "PARCELAS"
+            ],
+            "header_tokens_required": [
+                "POLIGONO",
+                "PARCELA",
+                "RECINTO",
+                "ESPECIE"
+            ],
+            "columns_required": [
+                "polygon",
+                "parcel",
+                "recinto",
+                "crop"
+            ],
+            "scoring": {
+                "sheet_match": 0.25,
+                "header_tokens": 0.45,
+                "columns_map": 0.30
+            }
+        }
+    ],
+    "policy": {
+        "accept_threshold": 0.85,
+        "warn_threshold": 0.65
+    }
+}

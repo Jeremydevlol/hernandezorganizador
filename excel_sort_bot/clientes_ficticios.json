@@ -1,0 +1,213 @@
+{
+    "clientes": [
+        {
+            "id": "juan_garcia_guisantes",
+            "empresa": "Granja de Guisantes García S.L.",
+            "titular": "Juan García Hernández",
+            "nif": "12345678A",
+            "direccion": "Ctra. Salamanca km 23, 37800 Alba de Tormes",
+            "telefono": "923 456 789",
+            "email": "juan@granjagarcia.es",
+            "municipios": [
+                "ALBA DE TORMES",
+                "TERRADILLOS",
+                "CALVARRASA DE ARRIBA",
+                "MOZARBEZ"
+            ],
+            "cultivos": [
+                {
+                    "nombre": "GUISANTE",
+                    "peso": 0.40
+                },
+                {
+                    "nombre": "LENTEJA",
+                    "peso": 0.25
+                },
+                {
+                    "nombre": "GARBANZO",
+                    "peso": 0.20
+                },
+                {
+                    "nombre": "VEZA",
+                    "peso": 0.15
+                }
+            ],
+            "productos": [
+                {
+                    "nombre": "Glifosato 36%",
+                    "registro": "21001",
+                    "dosis": 3.0,
+                    "unidad": "l/ha",
+                    "plaga": "MALAS HIERBAS"
+                },
+                {
+                    "nombre": "Clorpirifos",
+                    "registro": "19887",
+                    "dosis": 1.5,
+                    "unidad": "l/ha",
+                    "plaga": "PULGON"
+                },
+                {
+                    "nombre": "Azufre Mojable",
+                    "registro": "15234",
+                    "dosis": 2.5,
+                    "unidad": "kg/ha",
+                    "plaga": "OIDIO"
+                },
+                {
+                    "nombre": "Deltametrina 2.5%",
+                    "registro": "22456",
+                    "dosis": 0.5,
+                    "unidad": "l/ha",
+                    "plaga": "GORGOJO"
+                }
+            ],
+            "parcelas": 380,
+            "aplicaciones_por_parcela": 2
+        },
+        {
+            "id": "pedro_perez_maiz",
+            "empresa": "Siembra de Maíz Pérez e Hijos S.A.",
+            "titular": "Pedro Pérez Martínez",
+            "nif": "87654321B",
+            "direccion": "Avda. de la Agricultura 45, 47400 Medina del Campo",
+            "telefono": "983 654 321",
+            "email": "pedro@siembraperez.com",
+            "municipios": [
+                "MEDINA DEL CAMPO",
+                "RUEDA",
+                "LA SECA",
+                "POZALDEZ",
+                "RODILANA"
+            ],
+            "cultivos": [
+                {
+                    "nombre": "MAIZ",
+                    "peso": 0.50
+                },
+                {
+                    "nombre": "GIRASOL",
+                    "peso": 0.25
+                },
+                {
+                    "nombre": "REMOLACHA",
+                    "peso": 0.15
+                },
+                {
+                    "nombre": "ALFALFA",
+                    "peso": 0.10
+                }
+            ],
+            "productos": [
+                {
+                    "nombre": "Nicosulfuron 40%",
+                    "registro": "23567",
+                    "dosis": 1.2,
+                    "unidad": "l/ha",
+                    "plaga": "MALAS HIERBAS"
+                },
+                {
+                    "nombre": "Mesotriona",
+                    "registro": "24789",
+                    "dosis": 1.0,
+                    "unidad": "l/ha",
+                    "plaga": "MALAS HIERBAS"
+                },
+                {
+                    "nombre": "Cipermetrina 10%",
+                    "registro": "18234",
+                    "dosis": 0.4,
+                    "unidad": "l/ha",
+                    "plaga": "TALADRO"
+                },
+                {
+                    "nombre": "Tebuconazol 25%",
+                    "registro": "20567",
+                    "dosis": 1.0,
+                    "unidad": "l/ha",
+                    "plaga": "ROYA"
+                }
+            ],
+            "parcelas": 520,
+            "aplicaciones_por_parcela": 3
+        },
+        {
+            "id": "enrique_iglesias_agricola",
+            "empresa": "Granja Agrícola Iglesias Hnos. S.L.",
+            "titular": "Enrique Iglesias López",
+            "nif": "11223344C",
+            "direccion": "Camino de la Vega s/n, 49800 Toro",
+            "telefono": "980 123 456",
+            "email": "enrique@granjaiglesias.es",
+            "municipios": [
+                "TORO",
+                "MORALES DE TORO",
+                "VENIALBO",
+                "VILLABUENA",
+                "PELEAGONZALO",
+                "SANZOLES"
+            ],
+            "cultivos": [
+                {
+                    "nombre": "VID",
+                    "peso": 0.35
+                },
+                {
+                    "nombre": "CEBADA",
+                    "peso": 0.25
+                },
+                {
+                    "nombre": "TRIGO BLANDO",
+                    "peso": 0.20
+                },
+                {
+                    "nombre": "ALMENDRO",
+                    "peso": 0.12
+                },
+                {
+                    "nombre": "OLIVO",
+                    "peso": 0.08
+                }
+            ],
+            "productos": [
+                {
+                    "nombre": "Glifosato 36%",
+                    "registro": "21001",
+                    "dosis": 3.0,
+                    "unidad": "l/ha",
+                    "plaga": "MALAS HIERBAS"
+                },
+                {
+                    "nombre": "Cobre 50% WP",
+                    "registro": "16890",
+                    "dosis": 2.0,
+                    "unidad": "kg/ha",
+                    "plaga": "MILDIU"
+                },
+                {
+                    "nombre": "Azufre 80% WG",
+                    "registro": "15234",
+                    "dosis": 3.0,
+                    "unidad": "kg/ha",
+                    "plaga": "OIDIO"
+                },
+                {
+                    "nombre": "Spirotetramat",
+                    "registro": "25123",
+                    "dosis": 0.6,
+                    "unidad": "l/ha",
+                    "plaga": "ARAÑA ROJA"
+                },
+                {
+                    "nombre": "Piriproxifen",
+                    "registro": "23890",
+                    "dosis": 0.5,
+                    "unidad": "l/ha",
+                    "plaga": "COCHINILLA"
+                }
+            ],
+            "parcelas": 650,
+            "aplicaciones_por_parcela": 3
+        }
+    ]
+}

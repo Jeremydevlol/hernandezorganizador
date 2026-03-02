@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.pyo
+
+# Node
+node_modules/
+
+# Environment (NUNCA subir claves)
+.env
+.env.local
+.env.*.local
+.env.production
+
+# Build outputs
+dist/
+dist-ssr/
+output/
+temp/
+.next/
+
+# Logs
+*.log
+logs/
+frontend.log
+
+# OS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.sw?
+
+# Test cache
+.pytest_cache/
+coverage/
+
+# Data local
+cuadernos_data/
+*.xlsx
+*.XLSX
+
+# Archivos grandes innecesarios
+*.png
+tsconfig.tsbuildinfo
+next-env.d.ts

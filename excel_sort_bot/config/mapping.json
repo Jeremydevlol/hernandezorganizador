@@ -1,0 +1,594 @@
+{
+  "meta": {
+    "template_default_sheet": "inf.gral 1",
+    "log_sheet_name": "LOG",
+    "version": "2.0",
+    "description": "Mapping completo para Cuaderno de Explotación Agrícola - España"
+  },
+  "fields": [
+    {
+      "key": "fecha_apertura",
+      "required": true,
+      "description": "Fecha de apertura del cuaderno",
+      "source": {
+        "type": "label_or_pattern",
+        "labels": [
+          "FECHA DE APERTURA",
+          "Fecha apertura",
+          "Fecha de apertura del cuaderno"
+        ],
+        "take": "right",
+        "max_distance": 5,
+        "patterns": [
+          "date"
+        ],
+        "sheet_hint": "inf.gral 1"
+      },
+      "target": {
+        "sheet": "inf.gral 1",
+        "cell": "E6"
+      },
+      "transforms": [
+        "parse_date"
+      ]
+    },
+    {
+      "key": "anio",
+      "required": true,
+      "description": "Año del cuaderno",
+      "source": {
+        "type": "label",
+        "labels": [
+          "AÑO",
+          "Año",
+          "EJERCICIO"
+        ],
+        "take": "right",
+        "max_distance": 2,
+        "sheet_hint": "inf.gral 1"
+      },
+      "target": {
+        "sheet": "inf.gral 1",
+        "cell": "M6"
+      },
+      "transforms": [
+        "strip"
+      ]
+    },
+    {
+      "key": "nombre_titular",
+      "required": true,
+      "description": "Nombre y apellidos o razón social del titular",
+      "source": {
+        "type": "label",
+        "labels": [
+          "Nombre y apellidos o razón social",
+          "Titular",
+          "Nombre y apellidos"
+        ],
+        "take": "right",
+        "max_distance": 4,
+        "sheet_hint": "inf.gral 1"
+      },
+      "target": {
+        "sheet": "inf.gral 1",
+        "cell": "D9"
+      },
+      "transforms": [
+        "strip",
+        "uppercase"
+      ]
+    },
+    {
+      "key": "nif_titular",
+      "required": true,
+      "description": "NIF/NIE del titular",
+      "source": {
+        "type": "label_or_pattern",
+        "labels": [
+          "NIF:",
+          "NIF",
+          "NIE",
+          "DNI"
+        ],
+        "take": "right",
+        "max_distance": 3,
+        "patterns": [
+          "nif_nie"
+        ],
+        "sheet_hint": "inf.gral 1"
+      },
+      "target": {
+        "sheet": "inf.gral 1",
+        "cell": "L9"
+      },
+      "transforms": [
+        "strip",
+        "uppercase"
+      ]
+    },
+    {
+      "key": "registro_autonomico",
+      "required": false,
+      "description": "Número de Registro de Explotaciones Autonómico",
+      "source": {
+        "type": "label",
+        "labels": [
+          "Nº Registro de Explotaciones Autonómico",
+          "Registro Autonómico"
+        ],
+        "take": "right",
+        "max_distance": 5,
+        "sheet_hint": "inf.gral 1"
+      },
+      "target": {
+        "sheet": "inf.gral 1",
+        "cell": "L10"
+      },
+      "transforms": [
+        "strip"
+      ]
+    },
+    {
+      "key": "direccion",
+      "required": true,
+      "description": "Dirección del titular",
+      "source": {
+        "type": "label",
+        "labels": [
+          "Dirección:",
+          "Dirección",
+          "Domicilio"
+        ],
+        "take": "right",
+        "max_distance": 3,
+        "sheet_hint": "inf.gral 1"
+      },
+      "target": {
+        "sheet": "inf.gral 1",
+        "cell": "B11"
+      },
+      "transforms": [
+        "strip",
+        "uppercase"
+      ]
+    },
+    {
+      "key": "localidad",
+      "required": true,
+      "description": "Localidad",
+      "source": {
+        "type": "label",
+        "labels": [
+          "Localidad:",
+          "Localidad",
+          "Municipio"
+        ],
+        "take": "right",
+        "max_distance": 2,
+        "sheet_hint": "inf.gral 1"
+      },
+      "target": {
+        "sheet": "inf.gral 1",
+        "cell": "G11"
+      },
+      "transforms": [
+        "strip",
+        "uppercase"
+      ]
+    },
+    {
+      "key": "codigo_postal",
+      "required": true,
+      "description": "Código Postal",
+      "source": {
+        "type": "label_or_pattern",
+        "labels": [
+          "C. Postal:",
+          "C. Postal",
+          "Código Postal",
+          "CP"
+        ],
+        "take": "right",
+        "max_distance": 2,
+        "patterns": [
+          "postal_code"
+        ],
+        "sheet_hint": "inf.gral 1"
+      },
+      "target": {
+        "sheet": "inf.gral 1",
+        "cell": "J11"
+      },
+      "transforms": [
+        "strip"
+      ]
+    },
+    {
+      "key": "provincia",
+      "required": true,
+      "description": "Provincia",
+      "source": {
+        "type": "label",
+        "labels": [
+          "Provincia:",
+          "Provincia"
+        ],
+        "take": "right",
+        "max_distance": 2,
+        "sheet_hint": "inf.gral 1"
+      },
+      "target": {
+        "sheet": "inf.gral 1",
+        "cell": "M11"
+      },
+      "transforms": [
+        "strip",
+        "uppercase"
+      ]
+    },
+    {
+      "key": "telefono_fijo",
+      "required": false,
+      "description": "Teléfono fijo",
+      "source": {
+        "type": "label_or_pattern",
+        "labels": [
+          "Teléfono fijo:",
+          "Teléfono fijo",
+          "Tel. fijo"
+        ],
+        "take": "right",
+        "max_distance": 2,
+        "patterns": [
+          "phone"
+        ],
+        "sheet_hint": "inf.gral 1"
+      },
+      "target": {
+        "sheet": "inf.gral 1",
+        "cell": "B12"
+      },
+      "transforms": [
+        "strip"
+      ]
+    },
+    {
+      "key": "telefono_movil",
+      "required": false,
+      "description": "Teléfono móvil",
+      "source": {
+        "type": "label_or_pattern",
+        "labels": [
+          "Teléfono móvil:",
+          "Teléfono móvil",
+          "Móvil"
+        ],
+        "take": "right",
+        "max_distance": 2,
+        "patterns": [
+          "phone"
+        ],
+        "sheet_hint": "inf.gral 1"
+      },
+      "target": {
+        "sheet": "inf.gral 1",
+        "cell": "F12"
+      },
+      "transforms": [
+        "strip"
+      ]
+    },
+    {
+      "key": "email",
+      "required": false,
+      "description": "Correo electrónico",
+      "source": {
+        "type": "label_or_pattern",
+        "labels": [
+          "e-mail:",
+          "e-mail",
+          "Email",
+          "Correo"
+        ],
+        "take": "right",
+        "max_distance": 2,
+        "patterns": [
+          "email"
+        ],
+        "sheet_hint": "inf.gral 1"
+      },
+      "target": {
+        "sheet": "inf.gral 1",
+        "cell": "I12"
+      },
+      "transforms": [
+        "strip",
+        "lowercase"
+      ]
+    },
+    {
+      "key": "aplicador_nombre",
+      "required": false,
+      "description": "Nombre del aplicador ROPO",
+      "source": {
+        "type": "label",
+        "labels": [
+          "Nombre y apellidos/ Empresas de servicios"
+        ],
+        "take": "down",
+        "max_distance": 3,
+        "sheet_hint": "inf.gral 2"
+      },
+      "target": {
+        "sheet": "inf.gral 2",
+        "cell": "B10"
+      },
+      "transforms": [
+        "strip",
+        "uppercase"
+      ]
+    },
+    {
+      "key": "aplicador_nif",
+      "required": false,
+      "description": "NIF del aplicador ROPO",
+      "source": {
+        "type": "pattern",
+        "labels": [],
+        "take": "right",
+        "max_distance": 2,
+        "patterns": [
+          "nif_nie"
+        ],
+        "sheet_hint": "inf.gral 2"
+      },
+      "target": {
+        "sheet": "inf.gral 2",
+        "cell": "C10"
+      },
+      "transforms": [
+        "strip",
+        "uppercase"
+      ]
+    },
+    {
+      "key": "titular_infgral2",
+      "required": false,
+      "description": "Titular en inf.gral 2",
+      "source": {
+        "type": "copy_from",
+        "copy_field": "nombre_titular"
+      },
+      "target": {
+        "sheet": "inf.gral 2",
+        "cell": "C1"
+      },
+      "transforms": []
+    },
+    {
+      "key": "anio_infgral2",
+      "required": false,
+      "description": "Año en inf.gral 2",
+      "source": {
+        "type": "copy_from",
+        "copy_field": "anio"
+      },
+      "target": {
+        "sheet": "inf.gral 2",
+        "cell": "I1"
+      },
+      "transforms": []
+    },
+    {
+      "key": "titular_idparc2",
+      "required": false,
+      "description": "Titular en id.parc 2",
+      "source": {
+        "type": "copy_from",
+        "copy_field": "nombre_titular"
+      },
+      "target": {
+        "sheet": "id.parc 2",
+        "cell": "D1"
+      },
+      "transforms": []
+    },
+    {
+      "key": "anio_idparc2",
+      "required": false,
+      "description": "Año en id.parc 2",
+      "source": {
+        "type": "copy_from",
+        "copy_field": "anio"
+      },
+      "target": {
+        "sheet": "id.parc 2",
+        "cell": "I1"
+      },
+      "transforms": []
+    },
+    {
+      "key": "titular_inftrat1",
+      "required": false,
+      "description": "Titular en inf.trat 1",
+      "source": {
+        "type": "copy_from",
+        "copy_field": "nombre_titular"
+      },
+      "target": {
+        "sheet": "inf.trat 1",
+        "cell": "E1"
+      },
+      "transforms": []
+    },
+    {
+      "key": "anio_inftrat1",
+      "required": false,
+      "description": "Año en inf.trat 1",
+      "source": {
+        "type": "copy_from",
+        "copy_field": "anio"
+      },
+      "target": {
+        "sheet": "inf.trat 1",
+        "cell": "M1"
+      },
+      "transforms": []
+    },
+    {
+      "key": "titular_inftrat2",
+      "required": false,
+      "description": "Titular en inf.trat 2",
+      "source": {
+        "type": "copy_from",
+        "copy_field": "nombre_titular"
+      },
+      "target": {
+        "sheet": "inf.trat 2",
+        "cell": "G1"
+      },
+      "transforms": []
+    },
+    {
+      "key": "titular_inftrat3",
+      "required": false,
+      "description": "Titular en inf.trat 3",
+      "source": {
+        "type": "copy_from",
+        "copy_field": "nombre_titular"
+      },
+      "target": {
+        "sheet": "inf.trat 3",
+        "cell": "E1"
+      },
+      "transforms": []
+    },
+    {
+      "key": "anio_inftrat3",
+      "required": false,
+      "description": "Año en inf.trat 3",
+      "source": {
+        "type": "copy_from",
+        "copy_field": "anio"
+      },
+      "target": {
+        "sheet": "inf.trat 3",
+        "cell": "K1"
+      },
+      "transforms": []
+    },
+    {
+      "key": "titular_inftrat4",
+      "required": false,
+      "description": "Titular en inf.trat 4",
+      "source": {
+        "type": "copy_from",
+        "copy_field": "nombre_titular"
+      },
+      "target": {
+        "sheet": "inf.trat 4",
+        "cell": "C1"
+      },
+      "transforms": []
+    },
+    {
+      "key": "anio_inftrat4",
+      "required": false,
+      "description": "Año en inf.trat 4",
+      "source": {
+        "type": "copy_from",
+        "copy_field": "anio"
+      },
+      "target": {
+        "sheet": "inf.trat 4",
+        "cell": "H1"
+      },
+      "transforms": []
+    },
+    {
+      "key": "titular_regprod",
+      "required": false,
+      "description": "Titular en reg.prod",
+      "source": {
+        "type": "copy_from",
+        "copy_field": "nombre_titular"
+      },
+      "target": {
+        "sheet": "reg.prod",
+        "cell": "C1"
+      },
+      "transforms": []
+    },
+    {
+      "key": "anio_regprod",
+      "required": false,
+      "description": "Año en reg.prod",
+      "source": {
+        "type": "copy_from",
+        "copy_field": "anio"
+      },
+      "target": {
+        "sheet": "reg.prod",
+        "cell": "G1"
+      },
+      "transforms": []
+    },
+    {
+      "key": "titular_regcosecha",
+      "required": false,
+      "description": "Titular en reg. cosecha",
+      "source": {
+        "type": "copy_from",
+        "copy_field": "nombre_titular"
+      },
+      "target": {
+        "sheet": "reg. cosecha",
+        "cell": "E1"
+      },
+      "transforms": []
+    },
+    {
+      "key": "anio_regcosecha",
+      "required": false,
+      "description": "Año en reg. cosecha",
+      "source": {
+        "type": "copy_from",
+        "copy_field": "anio"
+      },
+      "target": {
+        "sheet": "reg. cosecha",
+        "cell": "J1"
+      },
+      "transforms": []
+    },
+    {
+      "key": "titular_regfert",
+      "required": false,
+      "description": "Titular en reg.fert.",
+      "source": {
+        "type": "copy_from",
+        "copy_field": "nombre_titular"
+      },
+      "target": {
+        "sheet": "reg.fert.",
+        "cell": "D1"
+      },
+      "transforms": []
+    },
+    {
+      "key": "anio_regfert",
+      "required": false,
+      "description": "Año en reg.fert.",
+      "source": {
+        "type": "copy_from",
+        "copy_field": "anio"
+      },
+      "target": {
+        "sheet": "reg.fert.",
+        "cell": "J1"
+      },
+      "transforms": []
+    }
+  ]
+}

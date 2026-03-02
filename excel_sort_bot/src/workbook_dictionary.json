@@ -1,0 +1,297 @@
+{
+    "template_id": "sigpac_cuaderno_campo_v1",
+    "description": "Cuaderno de Campo SIGPAC - Pablo Pérez Rubio 2025",
+    "golden_file": "PABLO PEREZ RUBIO 2025 RESUELTO.XLSX",
+    "sheets": {
+        "inf.gral 1": {
+            "purpose": "Datos generales del titular/explotación",
+            "type": "form",
+            "fields": {
+                "titular": {
+                    "cell": "E1"
+                },
+                "year": {
+                    "cell": "M1"
+                },
+                "explotacion": {
+                    "cell": "E1"
+                }
+            }
+        },
+        "inf.gral 2": {
+            "purpose": "Operadores, asesores, ROPO",
+            "type": "table",
+            "header_row": 9,
+            "data_start_row": 10,
+            "columns": {
+                "nro_orden": 1,
+                "nombre": 2,
+                "nif": 3,
+                "ropo": 4,
+                "basico": 5,
+                "cualificado": 6,
+                "fumigador": 7,
+                "piloto": 8,
+                "asesor": 9
+            }
+        },
+        "2.1. DATOS PARCELAS": {
+            "purpose": "Maestro SIGPAC de parcelas (fuente de verdad)",
+            "type": "table",
+            "header_row": 13,
+            "data_start_row": 14,
+            "columns": {
+                "nro_orden": 2,
+                "codigo_provincia": 3,
+                "municipio": 4,
+                "codigo_agregado": 5,
+                "zona": 6,
+                "polygon": 7,
+                "parcel": 8,
+                "recinto": 9,
+                "uso_sigpac": 10,
+                "superficie_sigpac": 11,
+                "superficie_cultivada": 12,
+                "crop": 13,
+                "ecoregimen": 14
+            },
+            "key_fields": [
+                "polygon",
+                "parcel",
+                "recinto"
+            ]
+        },
+        "id.parc 2": {
+            "purpose": "Datos medioambientales por parcela",
+            "type": "table",
+            "header_row": 9,
+            "data_start_row": 10,
+            "columns": {
+                "id_parcelas": 1,
+                "especie": 2,
+                "variedad": 3,
+                "incluido_captacion": 4,
+                "distancia": 5,
+                "utm": 6,
+                "denominacion": 7,
+                "zona_total": 8,
+                "zona_parcial": 9
+            }
+        },
+        "inf.trat 1": {
+            "purpose": "Tratamientos fitosanitarios en parcela (CORE)",
+            "type": "table",
+            "header_rows": [
+                8,
+                9
+            ],
+            "data_start_row": 11,
+            "footer_marker": "[1]",
+            "style_anchor_row": 11,
+            "columns": {
+                "id_parcelas": 1,
+                "especie": 2,
+                "variedad": 3,
+                "superficie_tratada": 4,
+                "fecha": 5,
+                "problema_fito": 6,
+                "aplicador": 7,
+                "equipo": 8,
+                "producto": 9,
+                "nro_registro": 10,
+                "dosis": 11,
+                "eficacia": 12,
+                "observaciones": 13
+            },
+            "required_fields": [
+                "id_parcelas",
+                "especie",
+                "superficie_tratada",
+                "fecha",
+                "producto",
+                "dosis"
+            ],
+            "defaults": {
+                "aplicador": 1,
+                "equipo": 1,
+                "eficacia": "BUENA"
+            }
+        },
+        "inf.trat 2": {
+            "purpose": "Cultivos bajo asesoramiento (alternativas)",
+            "type": "table",
+            "header_row": 10,
+            "data_start_row": 11,
+            "columns": {
+                "especie": 1,
+                "variedad": 2,
+                "id_parcelas": 3,
+                "superficie_cultivada": 4,
+                "superficie_tratada": 5,
+                "plaga": 6,
+                "justificacion": 7,
+                "tipo_medida": 8,
+                "intensidad": 9,
+                "fecha_actuacion": 10,
+                "producto": 11,
+                "nro_registro": 12,
+                "dosis": 13,
+                "fecha_actuacion_2": 14
+            }
+        },
+        "inf.trat 3": {
+            "purpose": "Semilla tratada / siembra",
+            "type": "table",
+            "header_row": 9,
+            "data_start_row": 10,
+            "columns": {
+                "fecha_siembra": 1,
+                "id_parcelas": 2,
+                "cultivo": 3,
+                "superficie_sembrada": 4,
+                "cantidad_semilla": 5,
+                "producto": 6,
+                "materia_activa": 7,
+                "nro_registro": 8
+            }
+        },
+        "inf.trat 4": {
+            "purpose": "Tratamientos en almacenes/locales",
+            "type": "table",
+            "header_row": 9,
+            "data_start_row": 10,
+            "columns": {
+                "fecha": 1,
+                "local_tipo": 2,
+                "local_direccion": 3,
+                "problema_fito": 4,
+                "volumen_tratado": 5,
+                "producto": 6,
+                "nro_registro": 7,
+                "cantidad": 8
+            }
+        },
+        "reg.prod": {
+            "purpose": "Análisis / residuos / laboratorio",
+            "type": "table",
+            "header_row": 10,
+            "data_start_row": 11,
+            "columns": {
+                "fecha": 1,
+                "material_analizado": 2,
+                "cultivo_muestreado": 3,
+                "nro_boletin": 4,
+                "laboratorio_nombre": 5,
+                "laboratorio_direccion": 6,
+                "sustancias_detectadas": 7
+            }
+        },
+        "reg. cosecha": {
+            "purpose": "Registro de cosecha / salida",
+            "type": "table",
+            "header_row": 10,
+            "data_start_row": 11,
+            "columns": {
+                "fecha": 1,
+                "producto": 2,
+                "cantidad_kg": 3,
+                "parcelas_origen": 4,
+                "albaran": 5,
+                "lote": 6,
+                "cliente_nombre": 7,
+                "cliente_nif": 8,
+                "cliente_direccion": 9,
+                "rgseaa": 10
+            }
+        },
+        "reg.fert.": {
+            "purpose": "Registro de fertilización",
+            "type": "table",
+            "header_row": 10,
+            "data_start_row": 11,
+            "columns": {
+                "fecha_inicio": 1,
+                "fecha_fin": 2,
+                "parcelas": 3,
+                "especie": 4,
+                "variedad": 5,
+                "tipo_abono": 6,
+                "albaran": 7,
+                "riqueza_n": 8,
+                "riqueza_p": 9,
+                "riqueza_k": 10,
+                "dosis": 11,
+                "tipo_fertilizacion": 12,
+                "observaciones": 13
+            }
+        }
+    },
+    "actions_schema": {
+        "ADD_TREATMENT": {
+            "target_sheet": "inf.trat 1",
+            "required": [
+                "id_parcelas",
+                "especie",
+                "superficie_tratada",
+                "fecha",
+                "producto",
+                "dosis"
+            ],
+            "optional": [
+                "variedad",
+                "problema_fito",
+                "nro_registro",
+                "observaciones"
+            ]
+        },
+        "ADD_FERTILIZATION": {
+            "target_sheet": "reg.fert.",
+            "required": [
+                "fecha_inicio",
+                "parcelas",
+                "tipo_abono",
+                "dosis"
+            ],
+            "optional": [
+                "fecha_fin",
+                "especie",
+                "riqueza_n",
+                "riqueza_p",
+                "riqueza_k"
+            ]
+        },
+        "ADD_HARVEST": {
+            "target_sheet": "reg. cosecha",
+            "required": [
+                "fecha",
+                "producto",
+                "cantidad_kg",
+                "parcelas_origen"
+            ],
+            "optional": [
+                "albaran",
+                "lote",
+                "cliente_nombre"
+            ]
+        },
+        "ADD_SEEDING": {
+            "target_sheet": "inf.trat 3",
+            "required": [
+                "fecha_siembra",
+                "id_parcelas",
+                "cultivo",
+                "superficie_sembrada"
+            ],
+            "optional": [
+                "cantidad_semilla",
+                "producto"
+            ]
+        }
+    },
+    "validation_rules": {
+        "date_format": "DD/MM/YYYY",
+        "dose_format": "X,XX l|kg",
+        "superficie_min": 0.01,
+        "id_parcelas_must_exist": true
+    }
+}
