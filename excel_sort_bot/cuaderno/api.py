@@ -833,7 +833,8 @@ async def exportar_pdf_cuaderno(
     elif hojas_editadas:
         sheet_ids_a_incluir = [h["sheet_id"] for h in hojas_editadas]
     
-    output_dir = Path(storage.base_dir) / "exports"
+    import tempfile
+    output_dir = Path(tempfile.gettempdir()) / "cuaderno_exports"
     output_dir.mkdir(exist_ok=True)
     
     base_name = _sanitize_filename(cuaderno.nombre_explotacion)
@@ -878,7 +879,8 @@ async def exportar_pdf_parcela(cuaderno_id: str, parcela_id: str):
         raise HTTPException(status_code=404, detail="Parcela no encontrada")
     
     # Generar PDF
-    output_dir = Path(storage.base_dir) / "exports"
+    import tempfile
+    output_dir = Path(tempfile.gettempdir()) / "cuaderno_exports"
     output_dir.mkdir(exist_ok=True)
     
     base_name = _sanitize_filename(parcela.nombre)
