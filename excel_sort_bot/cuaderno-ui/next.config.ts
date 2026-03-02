@@ -18,16 +18,6 @@ const nextConfig: NextConfig = {
       },
     ];
   },
-  // Turbopack (Next 16): fijar root para que resuelva tailwindcss desde cuaderno-ui
-  turbopack: {
-    root: uiRoot,
-  },
-  // Webpack (fallback): forzar resolución desde cuaderno-ui
-  webpack: (config) => {
-    config.resolve = config.resolve || {};
-    config.resolve.modules = [path.join(uiRoot, "node_modules"), "node_modules"];
-    return config;
-  },
 };
 
 export default nextConfig;
