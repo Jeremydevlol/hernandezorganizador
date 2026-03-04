@@ -3,7 +3,7 @@
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL
     ? `${process.env.NEXT_PUBLIC_API_URL}/api/cuaderno`
-    : "/api/cuaderno";
+    : (process.env.VERCEL ? "https://hernandezback.onrender.com/api/cuaderno" : "/api/cuaderno");
 
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
     // Increase timeout for chat operations (AI can take time)
