@@ -1,9 +1,16 @@
 // API client for Cuaderno de Explotación v2.0
 // Con soporte para upload de archivos y procesamiento GPT-4o
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL
-    ? `${process.env.NEXT_PUBLIC_API_URL}/api/cuaderno`
-    : (process.env.VERCEL ? "https://hernandezback.onrender.com/api/cuaderno" : "/api/cuaderno");
+function getApiBase(): string {
+    if (process.env.NEXT_PUBLIC_API_URL) {
+        return `${process.env.NEXT_PUBLIC_API_URL}/api/cuaderno`;
+    }
+    if (typeof window !== "undefined" && (window.location.hostname.includes("vercel.app") || window.location.hostname.includes("hernandezbueno"))) {
+        return "https://hernandezback.onrender.com/api/cuaderno";
+    }
+    return "/api/cuaderno";
+}
+const API_BASE = getApiBase();
 
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
     // Increase timeout for chat operations (AI can take time)
