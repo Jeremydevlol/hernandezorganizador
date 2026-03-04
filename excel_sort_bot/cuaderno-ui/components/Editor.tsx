@@ -973,11 +973,12 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
     }, [editorActionsRef, openSearch, replacePreview, replaceApply]);
 
     const buildExportParams = useCallback((params?: { desde?: string; hasta?: string }) => {
-        const base = { ...params };
-        base.orden_parcelas_modo = parcelSortMode;
-        base.orden_parcelas = sortedParcelasForExport.map((p: any) => p.id).join(",");
-        base.orden_tratamientos = sortedTratamientosForExport.map((t: any) => t.id).join(",");
-        return base;
+        return {
+            ...params,
+            orden_parcelas_modo: parcelSortMode,
+            orden_parcelas: sortedParcelasForExport.map((p: any) => p.id).join(","),
+            orden_tratamientos: sortedTratamientosForExport.map((t: any) => t.id).join(","),
+        };
     }, [parcelSortMode, sortedParcelasForExport, sortedTratamientosForExport]);
 
     const exportPDF = async (params?: { desde?: string; hasta?: string }) => {
@@ -1041,10 +1042,13 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
         const { type, params } = exportHojasModal;
         // Usar siempre el orden ACTUAL del editor (no el congelado al abrir el modal)
         const freshOrder = buildExportParams({ desde: params.desde, hasta: params.hasta });
-        const queryParams = { ...params, orden_parcelas_modo: freshOrder.orden_parcelas_modo, orden_parcelas: freshOrder.orden_parcelas, orden_tratamientos: freshOrder.orden_tratamientos };
-        if (selectedExportHojas.size > 0) {
-            queryParams.incluir_hojas = Array.from(selectedExportHojas).join(",");
-        }
+        const queryParams: Record<string, unknown> = {
+            ...params,
+            orden_parcelas_modo: freshOrder.orden_parcelas_modo,
+            orden_parcelas: freshOrder.orden_parcelas,
+            orden_tratamientos: freshOrder.orden_tratamientos,
+            incluir_hojas: selectedExportHojas.size > 0 ? Array.from(selectedExportHojas).join(",") : undefined,
+        };
         if (type === "pdf") {
             window.open(api.getExportPDFUrl(cuaderno.id, queryParams), "_blank");
         } else {

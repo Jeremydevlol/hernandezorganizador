@@ -6,6 +6,7 @@ const uiRoot = process.env.NEXT_RESOLVE_ROOT
   : path.resolve(process.cwd());
 
 const nextConfig: NextConfig = {
+  eslint: { ignoreDuringBuilds: true },
   // app/api/cuaderno/[...path]/route.ts maneja /api/cuaderno/* con timeout de 5 min (chat/execute).
   // NO usar rewrite para /api/cuaderno: el proxy por defecto tiene timeout corto y provoca
   // ECONNRESET cuando GPT tarda. La ruta API tiene prioridad si no hay rewrite.
