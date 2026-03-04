@@ -7,7 +7,7 @@ Servidor web unificado para:
 Endpoints:
 - /                   - RTE Frontend
 - /api/...            - RTE API
-- /api/cuaderno/...   - Cuaderno API (consumido por Next.js en :3001)
+- /api/cuaderno/...   - Cuaderno API (consumido por Next.js en :3000)
 """
 import os
 import sys
@@ -253,7 +253,7 @@ async def serve_rte_frontend():
     return HTMLResponse("<h1>Frontend no encontrado. Ejecuta el setup.</h1>")
 
 
-# Legacy cuaderno frontend removido - Usar Next.js en http://localhost:3001
+# Legacy cuaderno frontend removido - Usar Next.js en http://localhost:3000
 
 
 # ============================================
@@ -274,7 +274,7 @@ if __name__ == "__main__":
     print("🚀 RTE + Cuaderno de Explotación Server v2.2")
     print("━" * 50)
     print("   📊 RTE Editor:      http://localhost:8000")
-    print("   🌾 Cuaderno UI:     http://localhost:3001 (Next.js)")
+    print("   🌾 Cuaderno UI:     http://localhost:3000 (Next.js)")
     print("   📚 API Docs:        http://localhost:8000/docs")
     print("━" * 50)
     uvicorn.run(app, host="0.0.0.0", port=8000, timeout_keep_alive=300)

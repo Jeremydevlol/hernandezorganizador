@@ -149,25 +149,25 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
         if (ext === "pdf") {
             return <FileText className="w-8 h-8 text-red-400" />;
         }
-        return <FileText className="w-8 h-8 text-zinc-400" />;
+        return <FileText className="w-8 h-8 text-gray-600" />;
     };
 
     if (!isOpen) return null;
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
-            <div className="w-full max-w-xl bg-[#18181b] border border-zinc-800 rounded-xl shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+            <div className="w-full max-w-xl bg-white border border-gray-200 rounded-xl shadow-2xl animate-in fade-in zoom-in-95 duration-200">
                 {/* Header */}
-                <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-800">
+                <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
                     <div className="flex items-center gap-2">
                         <Sparkles size={20} className="text-green-500" />
-                        <h2 className="text-lg font-semibold text-zinc-100">
+                        <h2 className="text-lg font-semibold text-gray-900">
                             Importar Cuaderno
                         </h2>
                     </div>
                     <button
                         onClick={() => { onClose(); resetModal(); }}
-                        className="p-1.5 rounded-lg hover:bg-zinc-800 text-zinc-500 hover:text-zinc-300 transition-colors"
+                        className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500 hover:text-gray-700 transition-colors"
                     >
                         <X size={18} />
                     </button>
@@ -185,7 +185,7 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
                                 onDrop={handleDrop}
                                 className={`relative border-2 border-dashed rounded-xl p-8 transition-all ${dragActive
                                     ? "border-green-500 bg-green-500/10"
-                                    : "border-zinc-700 hover:border-zinc-600 bg-zinc-900/50"
+                                    : "border-gray-300 hover:border-gray-400 bg-gray-50/50"
                                     }`}
                             >
                                 <input
@@ -199,10 +199,10 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
                                     <div className="w-16 h-16 rounded-full bg-green-500/10 flex items-center justify-center mb-4">
                                         <Upload className="w-8 h-8 text-green-500" />
                                     </div>
-                                    <p className="text-zinc-200 font-medium mb-1">
+                                    <p className="text-gray-800 font-medium mb-1">
                                         Arrastra un archivo aquí
                                     </p>
-                                    <p className="text-sm text-zinc-500">
+                                    <p className="text-sm text-gray-500">
                                         o haz clic para seleccionar
                                     </p>
                                 </div>
@@ -210,32 +210,32 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
 
                             {/* Supported Formats */}
                             <div className="mt-6 grid grid-cols-2 gap-3">
-                                <div className="flex items-center gap-2 p-3 rounded-lg bg-zinc-900/50 border border-zinc-800">
+                                <div className="flex items-center gap-2 p-3 rounded-lg bg-gray-50/50 border border-gray-200">
                                     <FileSpreadsheet className="w-5 h-5 text-green-400" />
                                     <div>
-                                        <p className="text-sm font-medium text-zinc-300">Excel</p>
-                                        <p className="text-xs text-zinc-500">.xlsx, .xls, .csv</p>
+                                        <p className="text-sm font-medium text-gray-700">Excel</p>
+                                        <p className="text-xs text-gray-500">.xlsx, .xls, .csv</p>
                                     </div>
                                 </div>
-                                <div className="flex items-center gap-2 p-3 rounded-lg bg-zinc-900/50 border border-zinc-800">
+                                <div className="flex items-center gap-2 p-3 rounded-lg bg-gray-50/50 border border-gray-200">
                                     <FileText className="w-5 h-5 text-red-400" />
                                     <div>
-                                        <p className="text-sm font-medium text-zinc-300">PDF</p>
-                                        <p className="text-xs text-zinc-500">OCR automático</p>
+                                        <p className="text-sm font-medium text-gray-700">PDF</p>
+                                        <p className="text-xs text-gray-500">OCR automático</p>
                                     </div>
                                 </div>
-                                <div className="flex items-center gap-2 p-3 rounded-lg bg-zinc-900/50 border border-zinc-800">
+                                <div className="flex items-center gap-2 p-3 rounded-lg bg-gray-50/50 border border-gray-200">
                                     <FileImage className="w-5 h-5 text-blue-400" />
                                     <div>
-                                        <p className="text-sm font-medium text-zinc-300">Imágenes</p>
-                                        <p className="text-xs text-zinc-500">.png, .jpg, .webp</p>
+                                        <p className="text-sm font-medium text-gray-700">Imágenes</p>
+                                        <p className="text-xs text-gray-500">.png, .jpg, .webp</p>
                                     </div>
                                 </div>
-                                <div className="flex items-center gap-2 p-3 rounded-lg bg-zinc-900/50 border border-zinc-800">
+                                <div className="flex items-center gap-2 p-3 rounded-lg bg-gray-50/50 border border-gray-200">
                                     <Sparkles className="w-5 h-5 text-purple-400" />
                                     <div>
-                                        <p className="text-sm font-medium text-zinc-300">VIera AI Vision</p>
-                                        <p className="text-xs text-zinc-500">Extracción IA avanzada</p>
+                                        <p className="text-sm font-medium text-gray-700">VIera AI Vision</p>
+                                        <p className="text-xs text-gray-500">Extracción IA avanzada</p>
                                     </div>
                                 </div>
                             </div>
@@ -245,17 +245,17 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
                     {state === "idle" && selectedFile && (
                         <div className="space-y-6">
                             {/* Selected File */}
-                            <div className="flex items-center gap-4 p-4 rounded-lg bg-zinc-900 border border-zinc-700">
+                            <div className="flex items-center gap-4 p-4 rounded-lg bg-gray-50 border border-gray-300">
                                 {getFileIcon(selectedFile.name)}
                                 <div className="flex-1 min-w-0">
-                                    <p className="font-medium text-zinc-200 truncate">{selectedFile.name}</p>
-                                    <p className="text-sm text-zinc-500">
+                                    <p className="font-medium text-gray-800 truncate">{selectedFile.name}</p>
+                                    <p className="text-sm text-gray-500">
                                         {(selectedFile.size / 1024 / 1024).toFixed(2)} MB
                                     </p>
                                 </div>
                                 <button
                                     onClick={() => setSelectedFile(null)}
-                                    className="p-1.5 rounded hover:bg-zinc-800 text-zinc-500"
+                                    className="p-1.5 rounded hover:bg-gray-100 text-gray-500"
                                 >
                                     <X size={16} />
                                 </button>
@@ -266,8 +266,8 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
                                 <div className="flex items-start gap-3">
                                     <Sparkles className="w-5 h-5 text-green-400 mt-0.5" />
                                     <div>
-                                        <p className="font-medium text-zinc-200">Procesamiento con VIera AI</p>
-                                        <p className="text-sm text-zinc-400 mt-1">
+                                        <p className="font-medium text-gray-800">Procesamiento con VIera AI</p>
+                                        <p className="text-sm text-gray-600 mt-1">
                                             El archivo será analizado con IA de última generación para extraer
                                             y organizar automáticamente los datos en las tablas del editor.
                                         </p>
@@ -286,12 +286,12 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
                     {(state === "uploading" || state === "analyzing" || state === "creating") && (
                         <div className="py-8 flex flex-col items-center">
                             <Loader2 className="w-12 h-12 text-green-500 animate-spin mb-4" />
-                            <p className="text-zinc-200 font-medium">
+                            <p className="text-gray-800 font-medium">
                                 {state === "uploading" && "Subiendo archivo..."}
                                 {state === "analyzing" && "VIera AI analizando..."}
                                 {state === "creating" && "Creando cuaderno..."}
                             </p>
-                            <p className="text-sm text-zinc-500 mt-1">
+                            <p className="text-sm text-gray-500 mt-1">
                                 {state === "creating" ? "Guardando datos y hojas seleccionadas" : "Extrayendo y organizando datos"}
                             </p>
                         </div>
@@ -300,10 +300,10 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
                     {state === "confirm_import" && analysisResult && (
                         <div className="space-y-4">
                             <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
-                                <p className="text-sm font-medium text-zinc-200 mb-2">
+                                <p className="text-sm font-medium text-gray-800 mb-2">
                                     Este archivo tiene datos extraídos y puede tener hojas.
                                 </p>
-                                <p className="text-sm text-zinc-400">
+                                <p className="text-sm text-gray-600">
                                     ¿Quiere guardar solo los datos en las tablas del cuaderno o también guardar las hojas del archivo?
                                 </p>
                             </div>
@@ -318,13 +318,13 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
                                 const vacias = hojas.filter((h) => h.vacia);
                                 return (
                                     <>
-                                        <div className="p-3 rounded-lg bg-white/5 border border-white/10 text-sm text-zinc-300">
-                                            <span className="font-medium text-zinc-200">Datos extraídos: </span>
+                                        <div className="p-3 rounded-lg bg-gray-100 border border-gray-300 text-sm text-gray-700">
+                                            <span className="font-medium text-gray-800">Datos extraídos: </span>
                                             {nParcelas} parcelas, {nProductos} productos, {nTratamientos} tratamientos.
                                             {hojas.length > 0 && (
                                                 <>
                                                     {" "}
-                                                    <span className="font-medium text-zinc-200">Hojas: </span>
+                                                    <span className="font-medium text-gray-800">Hojas: </span>
                                                     {conDatos.length > 0 && (
                                                         <span>{conDatos.map((h) => `"${h.nombre}" (${h.num_filas} filas)`).join(", ")}</span>
                                                     )}
@@ -340,25 +340,25 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
 
                                         {hojas.length > 0 && (
                                             <div className="space-y-2">
-                                                <p className="text-xs font-medium text-zinc-400 uppercase tracking-wider">
+                                                <p className="text-xs font-medium text-gray-600 uppercase tracking-wider">
                                                     Seleccione las hojas a guardar
                                                 </p>
-                                                <div className="max-h-48 overflow-y-auto space-y-1.5 p-2 rounded-lg bg-white/5 border border-white/10">
+                                                <div className="max-h-48 overflow-y-auto space-y-1.5 p-2 rounded-lg bg-gray-100 border border-gray-300">
                                                     {hojas.map((h) => (
                                                         <label
                                                             key={h.indice}
-                                                            className="flex items-center gap-3 py-2 px-3 rounded-md hover:bg-white/5 cursor-pointer"
+                                                            className="flex items-center gap-3 py-2 px-3 rounded-md hover:bg-gray-100 cursor-pointer"
                                                         >
                                                             <input
                                                                 type="checkbox"
                                                                 checked={hojasSeleccionadas.includes(h.indice)}
                                                                 onChange={() => toggleHoja(h.indice)}
-                                                                className="w-4 h-4 rounded border-white/20 bg-white/5 text-emerald-500 focus:ring-emerald-500"
+                                                                className="w-4 h-4 rounded border-gray-300 bg-gray-100 text-emerald-500 focus:ring-emerald-500"
                                                             />
-                                                            <span className="flex-1 text-sm text-zinc-200 truncate">
+                                                            <span className="flex-1 text-sm text-gray-800 truncate">
                                                                 {h.nombre}
                                                             </span>
-                                                            <span className="text-xs text-zinc-500 shrink-0">
+                                                            <span className="text-xs text-gray-500 shrink-0">
                                                                 {h.vacia ? "Vacía" : `${h.num_filas} filas`}
                                                             </span>
                                                         </label>
@@ -371,7 +371,7 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
                                             <button
                                                 type="button"
                                                 onClick={() => setState("idle")}
-                                                className="px-4 py-2 rounded-lg text-sm font-medium text-zinc-400 hover:text-zinc-200 hover:bg-white/5 transition-colors"
+                                                className="px-4 py-2 rounded-lg text-sm font-medium text-gray-600 hover:text-gray-800 hover:bg-gray-100 transition-colors"
                                             >
                                                 Volver
                                             </button>
@@ -387,7 +387,7 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
                                                     type="button"
                                                     onClick={() => confirmCreate(false)}
                                                     disabled={hojasSeleccionadas.length === 0}
-                                                    className="px-4 py-2 rounded-lg text-sm font-medium bg-white/10 hover:bg-white/15 text-zinc-200 border border-white/10 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                                                    className="px-4 py-2 rounded-lg text-sm font-medium bg-gray-200 hover:bg-gray-300 text-gray-800 border border-gray-300 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                                                 >
                                                     Guardar datos y {hojasSeleccionadas.length} hoja(s) seleccionada(s)
                                                 </button>
@@ -407,24 +407,24 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
                                 </div>
                                 <div>
                                     <p className="font-medium text-green-400">Datos organizados en tablas</p>
-                                    <p className="text-sm text-zinc-400">Abriendo editor en tiempo real...</p>
+                                    <p className="text-sm text-gray-600">Abriendo editor en tiempo real...</p>
                                 </div>
                             </div>
 
-                            <div className="p-4 rounded-lg bg-zinc-900 border border-zinc-700">
-                                <h3 className="font-medium text-zinc-200 mb-3">Datos extraídos por VIera AI</h3>
+                            <div className="p-4 rounded-lg bg-gray-50 border border-gray-300">
+                                <h3 className="font-medium text-gray-800 mb-3">Datos extraídos por VIera AI</h3>
                                 <div className="grid grid-cols-3 gap-3 text-sm">
-                                    <div className="text-center p-2 rounded bg-zinc-800">
+                                    <div className="text-center p-2 rounded bg-gray-100">
                                         <p className="text-2xl font-bold text-green-400">{result.parcelas_creadas}</p>
-                                        <p className="text-zinc-500 text-xs">Parcelas</p>
+                                        <p className="text-gray-500 text-xs">Parcelas</p>
                                     </div>
-                                    <div className="text-center p-2 rounded bg-zinc-800">
+                                    <div className="text-center p-2 rounded bg-gray-100">
                                         <p className="text-2xl font-bold text-blue-400">{result.productos_creados}</p>
-                                        <p className="text-zinc-500 text-xs">Productos</p>
+                                        <p className="text-gray-500 text-xs">Productos</p>
                                     </div>
-                                    <div className="text-center p-2 rounded bg-zinc-800">
+                                    <div className="text-center p-2 rounded bg-gray-100">
                                         <p className="text-2xl font-bold text-purple-400">Auto</p>
-                                        <p className="text-zinc-500 text-xs">Ordenado</p>
+                                        <p className="text-gray-500 text-xs">Ordenado</p>
                                     </div>
                                 </div>
                             </div>
@@ -437,10 +437,10 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
                                 <X className="w-6 h-6 text-red-400" />
                             </div>
                             <p className="text-red-400 font-medium">Error al procesar</p>
-                            <p className="text-sm text-zinc-500 mt-1 text-center">{error}</p>
+                            <p className="text-sm text-gray-500 mt-1 text-center">{error}</p>
                             <button
                                 onClick={resetModal}
-                                className="mt-4 px-4 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-sm"
+                                className="mt-4 px-4 py-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm"
                             >
                                 Intentar de nuevo
                             </button>
@@ -449,12 +449,12 @@ export default function UploadModal({ isOpen, onClose, onSuccess }: UploadModalP
                 </div>
 
                 {/* Footer */}
-                <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-zinc-800 bg-zinc-900/30">
+                <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-gray-200 bg-gray-50">
                     {state === "idle" && (
                         <>
                             <button
                                 onClick={() => { onClose(); resetModal(); }}
-                                className="px-4 py-2 rounded-lg text-sm font-medium text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
+                                className="px-4 py-2 rounded-lg text-sm font-medium text-gray-600 hover:text-gray-800 hover:bg-gray-100 transition-colors"
                             >
                                 Cancelar
                             </button>

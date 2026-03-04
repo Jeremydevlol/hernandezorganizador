@@ -86,6 +86,31 @@ def _sanitize_row(row: List[Any]) -> List[str]:
     return [_sanitize(cell) for cell in row]
 
 
+def _sort_key_parcela(p: Parcela, mode: str) -> tuple:
+    """Clave de ordenación para parcela según modo (igual que frontend)."""
+    a_orden = int(p.num_orden or 0)
+    a_cultivo = (p.especie or p.cultivo or "").lower()
+    a_sup = float(p.superficie_cultivada or p.superficie_ha or p.superficie_sigpac or 0)
+    a_nombre = (p.nombre or "").lower()
+    a_termino = (p.termino_municipal or "").lower()
+    if mode == "todo_az":
+        return (a_cultivo, a_termino, a_nombre, a_orden)
+    if mode == "cultivo":
+        return (a_cultivo, a_orden)
+    if mode == "alfabetico":
+        return (a_nombre, a_orden)
+    if mode == "superficie_desc":
+        return (-a_sup, a_orden)
+    if mode == "superficie_asc":
+        return (a_sup, a_orden)
+    if mode == "termino_municipal":
+        return (a_termino, a_orden)
+    if mode == "cultivo_superficie":
+        return (a_cultivo, -a_sup, a_orden)
+    # num_orden o default
+    return (a_orden, a_cultivo, -a_sup)
+
+
 # Si fpdf2 no está disponible, crear clase base dummy para que el módulo cargue
 if FPDF is None:
     class _DummyFPDF:
@@ -596,9 +621,14 @@ class PDFGenerator:
                                    output_path: str,
                                    date_desde: Optional[str] = None,
                                    date_hasta: Optional[str] = None,
-                                   hojas_a_incluir: Optional[List[str]] = None) -> str:
+                                   hojas_a_incluir: Optional[List[str]] = None,
+                                   orden_parcelas: Optional[List[str]] = None,
+                                   orden_tratamientos: Optional[List[str]] = None,
+                                   orden_parcelas_modo: Optional[str] = None) -> str:
         """Genera el PDF del cuaderno completo con diseño moderno.
-        Analiza los datos antes de exportar: omite secciones/hojas vacías."""
+        Analiza los datos antes de exportar: omite secciones/hojas vacías.
+        orden_parcelas/orden_tratamientos: IDs en el orden deseado (del editor).
+        orden_parcelas_modo: modo de orden (cultivo, num_orden, etc.) - evita URL larga."""
 
         # ==============================
         # FASE 1: ANÁLISIS PREVIO
@@ -609,6 +639,17 @@ class PDFGenerator:
             p for p in cuaderno.parcelas
             if p.activa and self._parcela_tiene_datos(p)
         ]
+        if orden_parcelas_modo:
+            parcelas_validas = sorted(
+                parcelas_validas,
+                key=lambda p: _sort_key_parcela(p, orden_parcelas_modo)
+            )
+        elif orden_parcelas:
+            id_to_idx = {pid: i for i, pid in enumerate(orden_parcelas)}
+            parcelas_validas = sorted(
+                parcelas_validas,
+                key=lambda p: (id_to_idx.get(p.id, 99999), p.num_orden or 0)
+            )
 
         # Filtrar productos con nombre
         productos_validos = [
@@ -629,6 +670,12 @@ class PDFGenerator:
             t for t in tratamientos_list
             if self._tratamiento_tiene_datos(t)
         ]
+        if orden_tratamientos:
+            id_to_idx = {tid: i for i, tid in enumerate(orden_tratamientos)}
+            tratamientos_validos = sorted(
+                tratamientos_validos,
+                key=lambda t: (id_to_idx.get(t.id, 99999), t.fecha_aplicacion or "")
+            )
 
         # Filtrar hojas importadas: solo las que tienen datos reales
         hojas_validas = []

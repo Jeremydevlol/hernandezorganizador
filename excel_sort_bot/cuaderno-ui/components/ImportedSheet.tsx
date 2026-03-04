@@ -34,6 +34,11 @@ export default function ImportedSheet({ hoja, onSave, onPatchCell, onDelete, onR
     // ---- Cell Selection State ----
     const [selectedCells, setSelectedCells] = useState<Set<string>>(new Set());
     const [selectionAnchor, setSelectionAnchor] = useState<{ rowIdx: number; colIdx: number } | null>(null);
+    const [bulkEditValue, setBulkEditValue] = useState("");
+    const [pasteValues, setPasteValues] = useState("");
+    const [buscarValue, setBuscarValue] = useState("");
+    const [reemplazarValue, setReemplazarValue] = useState("");
+    const [bulkApplying, setBulkApplying] = useState(false);
 
     useEffect(() => {
         setLocalData(hoja.datos || []);
@@ -151,6 +156,101 @@ export default function ImportedSheet({ hoja, onSave, onPatchCell, onDelete, onR
             clearCellSelection();
         }
     }, [buildCellSelection, onSendSelectionToChat, clearCellSelection]);
+
+    const applyBulkEdit = useCallback(async () => {
+        if (selectedCells.size === 0 || !onPatchCell) return;
+        setBulkApplying(true);
+        setSaving(true);
+        try {
+            for (const key of selectedCells) {
+                const [rStr, cStr] = key.split(":");
+                const rowIdx = parseInt(rStr, 10);
+                const colIdx = parseInt(cStr, 10);
+                if (!isNaN(rowIdx) && !isNaN(colIdx)) {
+                    await onPatchCell(rowIdx, colIdx, bulkEditValue);
+                }
+            }
+            setSelectedCells(new Set());
+            setSelectionAnchor(null);
+            setBulkEditValue("");
+        } catch (e) {
+            console.error("Error en edición masiva:", e);
+            alert("No se pudo aplicar la edición masiva.");
+        } finally {
+            setBulkApplying(false);
+            setSaving(false);
+        }
+    }, [selectedCells, bulkEditValue, onPatchCell]);
+
+    const applyReplaceInSelection = useCallback(async () => {
+        if (selectedCells.size === 0 || !buscarValue.trim() || !onPatchCell) return;
+        setBulkApplying(true);
+        setSaving(true);
+        try {
+            let count = 0;
+            for (const key of selectedCells) {
+                const [rStr, cStr] = key.split(":");
+                const rowIdx = parseInt(rStr, 10);
+                const colIdx = parseInt(cStr, 10);
+                if (isNaN(rowIdx) || isNaN(colIdx)) continue;
+                const row = localData[rowIdx];
+                const currentVal = String((row && row[colIdx]) ?? "").trim();
+                if (!currentVal.includes(buscarValue)) continue;
+                const newVal = currentVal.split(buscarValue).join(reemplazarValue);
+                await onPatchCell(rowIdx, colIdx, newVal);
+                count++;
+            }
+            if (count > 0) {
+                setSelectedCells(new Set());
+                setSelectionAnchor(null);
+                setBuscarValue("");
+                setReemplazarValue("");
+            }
+        } catch (e) {
+            console.error("Error en buscar/reemplazar:", e);
+            alert("No se pudo aplicar.");
+        } finally {
+            setBulkApplying(false);
+            setSaving(false);
+        }
+    }, [selectedCells, buscarValue, reemplazarValue, localData, onPatchCell]);
+
+    const applyPasteToSelection = useCallback(async () => {
+        if (selectedCells.size === 0 || !pasteValues.trim() || !onPatchCell) return;
+        const delim = pasteValues.includes("\t") ? "\t" : ",";
+        const lines = pasteValues.trim().split(/\r?\n/).map((l) => l.split(delim).map((v) => v.trim()));
+        const values = lines.flat();
+
+        const sorted = Array.from(selectedCells)
+            .map((key) => {
+                const [rStr, cStr] = key.split(":");
+                return { rowIdx: parseInt(rStr, 10), colIdx: parseInt(cStr, 10), key };
+            })
+            .filter((x) => !isNaN(x.rowIdx) && !isNaN(x.colIdx))
+            .sort((a, b) => (a.rowIdx !== b.rowIdx ? a.rowIdx - b.rowIdx : a.colIdx - b.colIdx));
+
+        if (values.length !== sorted.length) {
+            alert(`Has pegado ${values.length} valor(es) pero hay ${sorted.length} celda(s) seleccionadas. Deben coincidir.`);
+            return;
+        }
+
+        setBulkApplying(true);
+        setSaving(true);
+        try {
+            for (let i = 0; i < sorted.length; i++) {
+                await onPatchCell(sorted[i].rowIdx, sorted[i].colIdx, values[i]);
+            }
+            setSelectedCells(new Set());
+            setSelectionAnchor(null);
+            setPasteValues("");
+        } catch (e) {
+            console.error("Error al aplicar pegada:", e);
+            alert("No se pudo aplicar.");
+        } finally {
+            setBulkApplying(false);
+            setSaving(false);
+        }
+    }, [selectedCells, pasteValues, onPatchCell]);
 
     // ---- Edit functions ----
     const startEdit = (row: number, col: number, value: any) => {
@@ -272,7 +372,7 @@ export default function ImportedSheet({ hoja, onSave, onPatchCell, onDelete, onR
 
     return (
         <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-            <div className="flex items-center gap-2 px-4 py-2 border-b border-white/5 bg-[var(--bg-dark)] shrink-0">
+            <div className="flex items-center gap-2 px-4 py-2 border-b border-gray-200 bg-[var(--bg-dark)] shrink-0">
                 <span className="text-[10px] px-2 py-0.5 rounded-md bg-purple-500/15 text-purple-400">
                     Hoja importada (editable)
                 </span>
@@ -300,12 +400,12 @@ export default function ImportedSheet({ hoja, onSave, onPatchCell, onDelete, onR
                                 }
                             }}
                             autoFocus
-                            className="bg-white/5 border border-purple-500/50 rounded px-2 py-0.5 text-zinc-200 text-xs min-w-[120px] focus:outline-none focus:ring-1 focus:ring-purple-500/30"
+                            className="bg-gray-100 border border-purple-500/50 rounded px-2 py-0.5 text-gray-800 text-xs min-w-[120px] focus:outline-none focus:ring-1 focus:ring-purple-500/30"
                         />
                     </div>
                 ) : (
                     <span
-                        className="text-xs text-zinc-300 font-medium cursor-pointer hover:text-purple-400 transition-colors flex items-center gap-1"
+                        className="text-xs text-gray-700 font-medium cursor-pointer hover:text-purple-400 transition-colors flex items-center gap-1"
                         title="Doble clic para renombrar"
                         onDoubleClick={() => {
                             setSheetNameValue(hoja.nombre || "");
@@ -313,14 +413,14 @@ export default function ImportedSheet({ hoja, onSave, onPatchCell, onDelete, onR
                         }}
                     >
                         {hoja.nombre || "Sin nombre"}
-                        <Edit3 size={10} className="text-zinc-500" />
+                        <Edit3 size={10} className="text-gray-500" />
                     </span>
                 )}
                 <button
                     type="button"
                     onClick={handleAddRow}
                     disabled={saving}
-                    className="flex items-center gap-1 px-2 py-1 rounded-md bg-white/5 hover:bg-white/10 text-zinc-300 text-xs"
+                    className="flex items-center gap-1 px-2 py-1 rounded-md bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs"
                 >
                     <Plus size={12} />
                     Añadir fila
@@ -329,7 +429,7 @@ export default function ImportedSheet({ hoja, onSave, onPatchCell, onDelete, onR
                     type="button"
                     onClick={handleAddColumn}
                     disabled={saving}
-                    className="flex items-center gap-1 px-2 py-1 rounded-md bg-white/5 hover:bg-white/10 text-zinc-300 text-xs"
+                    className="flex items-center gap-1 px-2 py-1 rounded-md bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs"
                 >
                     <Plus size={12} />
                     Añadir columna
@@ -346,8 +446,8 @@ export default function ImportedSheet({ hoja, onSave, onPatchCell, onDelete, onR
             </div>
             <div className="flex-1 overflow-auto bg-[var(--bg-darker)]">
                 {displayData.length === 0 && columns.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center h-64 text-zinc-500">
-                        <FileSpreadsheet size={48} className="mb-4 text-zinc-600" />
+                    <div className="flex flex-col items-center justify-center h-64 text-gray-500">
+                        <FileSpreadsheet size={48} className="mb-4 text-gray-600" />
                         <p>Hoja vacía: {hoja.nombre}</p>
                         <button
                             type="button"
@@ -361,13 +461,13 @@ export default function ImportedSheet({ hoja, onSave, onPatchCell, onDelete, onR
                     <table className="w-full text-sm border-collapse">
                         <thead className="sticky top-0 z-10 bg-[var(--bg-dark)]">
                             <tr>
-                                <th className="w-12 px-3 py-2.5 text-left text-[11px] font-medium text-zinc-500 uppercase border-b border-r border-white/5">
+                                <th className="w-12 px-3 py-2.5 text-left text-[11px] font-medium text-gray-500 uppercase border-b border-r border-gray-200">
                                     #
                                 </th>
                                 {columns.map((col: string, idx: number) => (
                                     <th
                                         key={idx}
-                                        className="group relative px-3 py-2.5 text-left text-[11px] font-medium text-zinc-500 uppercase border-b border-r border-white/5 whitespace-nowrap max-w-[200px] cursor-pointer hover:bg-white/[0.03]"
+                                        className="group relative px-3 py-2.5 text-left text-[11px] font-medium text-gray-500 uppercase border-b border-r border-gray-200 whitespace-nowrap max-w-[200px] cursor-pointer hover:bg-gray-50"
                                         onClick={(e) => handleSelectColumn(idx, e)}
                                     >
                                         {editingColIndex === idx ? (
@@ -379,13 +479,13 @@ export default function ImportedSheet({ hoja, onSave, onPatchCell, onDelete, onR
                                                     onBlur={saveRenameCol}
                                                     onKeyDown={(e) => e.key === "Enter" && saveRenameCol()}
                                                     autoFocus
-                                                    className="w-full min-w-[80px] bg-white/5 border border-purple-500/50 rounded px-1.5 py-0.5 text-zinc-200 text-xs"
+                                                    className="w-full min-w-[80px] bg-gray-100 border border-purple-500/50 rounded px-1.5 py-0.5 text-gray-800 text-xs"
                                                 />
                                             </div>
                                         ) : (
                                             <>
                                                 <span
-                                                    className="truncate block cursor-pointer hover:bg-white/5 rounded px-1 -mx-1 pr-6"
+                                                    className="truncate block cursor-pointer hover:bg-gray-100 rounded px-1 -mx-1 pr-6"
                                                     title="Doble clic para renombrar"
                                                     onDoubleClick={(e) => { e.stopPropagation(); startRenameCol(idx); }}
                                                 >
@@ -398,7 +498,7 @@ export default function ImportedSheet({ hoja, onSave, onPatchCell, onDelete, onR
                                                         handleDeleteColumn(idx);
                                                     }}
                                                     disabled={saving || columns.length <= 1}
-                                                    className="absolute right-1 top-1/2 -translate-y-1/2 p-1 rounded-md opacity-0 group-hover:opacity-100 transition-opacity text-zinc-500 hover:text-red-400 hover:bg-red-500/10 disabled:opacity-0 disabled:cursor-not-allowed"
+                                                    className="absolute right-1 top-1/2 -translate-y-1/2 p-1 rounded-md opacity-0 group-hover:opacity-100 transition-opacity text-gray-500 hover:text-red-400 hover:bg-red-500/10 disabled:opacity-0 disabled:cursor-not-allowed"
                                                     title="Eliminar columna"
                                                 >
                                                     <Trash2 size={10} />
@@ -411,9 +511,9 @@ export default function ImportedSheet({ hoja, onSave, onPatchCell, onDelete, onR
                         </thead>
                         <tbody>
                             {displayData.map((row: any, rowIdx: number) => (
-                                <tr key={rowIdx} className="group hover:bg-white/[0.03] transition-colors">
+                                <tr key={rowIdx} className="group hover:bg-gray-50 transition-colors">
                                     <td
-                                        className="px-3 py-2 text-zinc-500 text-xs font-mono border-b border-r border-white/5 bg-[var(--bg-dark)] cursor-pointer hover:bg-blue-500/10 hover:text-blue-400 select-none"
+                                        className="px-3 py-2 text-gray-500 text-xs font-mono border-b border-r border-gray-200 bg-[var(--bg-dark)] cursor-pointer hover:bg-blue-500/10 hover:text-blue-400 select-none"
                                         onClick={(e) => handleRowClick(rowIdx, e)}
                                         title="Clic para seleccionar fila"
                                     >
@@ -440,11 +540,11 @@ export default function ImportedSheet({ hoja, onSave, onPatchCell, onDelete, onR
                                                         startEdit(rowIdx, colIdx, cell);
                                                     }
                                                 }}
-                                                className={`px-3 py-2 text-zinc-300 border-b border-r border-white/5 cursor-pointer select-none transition-colors ${isCellSelected
+                                                className={`px-3 py-2 text-gray-700 border-b border-r border-gray-200 cursor-pointer select-none transition-colors ${isCellSelected
                                                     ? "bg-blue-500/20 ring-1 ring-inset ring-blue-500/40"
                                                     : isSearchMatch
                                                         ? (isActiveMatch ? "bg-amber-500/30 ring-1 ring-amber-500/60" : "bg-amber-500/15")
-                                                        : "hover:bg-white/5"
+                                                        : "hover:bg-gray-100"
                                                     }`}
                                             >
                                                 {isEditing ? (
@@ -455,7 +555,7 @@ export default function ImportedSheet({ hoja, onSave, onPatchCell, onDelete, onR
                                                             onChange={(e) => setEditValue(e.target.value)}
                                                             onKeyDown={handleKeyDown}
                                                             autoFocus
-                                                            className="w-full bg-white/5 border border-emerald-500/50 rounded-lg px-2 py-1 text-zinc-200 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500/30"
+                                                            className="w-full bg-gray-100 border border-emerald-500/50 rounded-lg px-2 py-1 text-gray-800 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500/30"
                                                         />
                                                         <button
                                                             type="button"
@@ -467,7 +567,7 @@ export default function ImportedSheet({ hoja, onSave, onPatchCell, onDelete, onR
                                                         <button
                                                             type="button"
                                                             onClick={(e) => { e.stopPropagation(); cancelEdit(); }}
-                                                            className="p-1.5 rounded-lg bg-white/10 text-zinc-300 hover:bg-white/15"
+                                                            className="p-1.5 rounded-lg bg-gray-200 text-gray-700 hover:bg-gray-300"
                                                         >
                                                             <X size={12} />
                                                         </button>
@@ -495,10 +595,10 @@ export default function ImportedSheet({ hoja, onSave, onPatchCell, onDelete, onR
                             <div className="w-6 h-6 rounded-md bg-blue-500/20 flex items-center justify-center">
                                 <Table2 size={14} className="text-blue-400" />
                             </div>
-                            <span className="text-xs text-zinc-400">Selección:</span>
+                            <span className="text-xs text-gray-600">Selección:</span>
                             <span className="text-sm font-semibold text-blue-300">{selectedCells.size} celda{selectedCells.size !== 1 ? "s" : ""}</span>
-                            <span className="text-xs text-zinc-500">·</span>
-                            <span className="text-xs text-zinc-400">
+                            <span className="text-xs text-gray-500">·</span>
+                            <span className="text-xs text-gray-600">
                                 {(() => {
                                     const rows = new Set<number>();
                                     for (const key of selectedCells) rows.add(parseInt(key.split(":")[0]));
@@ -508,6 +608,62 @@ export default function ImportedSheet({ hoja, onSave, onPatchCell, onDelete, onR
                         </div>
                     </div>
                     <div className="flex items-center gap-2">
+                        {onPatchCell && (
+                            <>
+                                <input
+                                    type="text"
+                                    value={bulkEditValue}
+                                    onChange={(e) => setBulkEditValue(e.target.value)}
+                                    placeholder="Nuevo valor para todas"
+                                    className="w-40 px-3 py-1.5 rounded-lg bg-gray-100 border border-white/10 text-gray-800 placeholder-gray-500 text-xs focus:outline-none focus:border-blue-500/50"
+                                />
+                                <button
+                                    onClick={applyBulkEdit}
+                                    disabled={bulkApplying}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    {bulkApplying ? "..." : "Aplicar"}
+                                </button>
+                                <div className="w-px h-5 bg-gray-200" />
+                                <textarea
+                                    value={pasteValues}
+                                    onChange={(e) => setPasteValues(e.target.value)}
+                                    placeholder="Pegar (tab o coma entre columnas, Enter entre filas)"
+                                    rows={1}
+                                    className="w-48 min-h-[32px] max-h-16 px-3 py-1.5 rounded-lg bg-gray-100 border border-white/10 text-gray-800 placeholder-gray-500 text-xs focus:outline-none focus:border-blue-500/50 resize-y"
+                                />
+                                <button
+                                    onClick={applyPasteToSelection}
+                                    disabled={bulkApplying || !pasteValues.trim()}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-600/80 hover:bg-violet-600 text-white text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    {bulkApplying ? "..." : "Asignar"}
+                                </button>
+                                <div className="w-px h-5 bg-gray-200" />
+                                <input
+                                    type="text"
+                                    value={buscarValue}
+                                    onChange={(e) => setBuscarValue(e.target.value)}
+                                    placeholder="Buscar"
+                                    className="w-28 px-2.5 py-1.5 rounded-lg bg-gray-100 border border-white/10 text-gray-800 placeholder-gray-500 text-xs focus:outline-none focus:border-blue-500/50"
+                                />
+                                <span className="text-gray-500 text-xs">→</span>
+                                <input
+                                    type="text"
+                                    value={reemplazarValue}
+                                    onChange={(e) => setReemplazarValue(e.target.value)}
+                                    placeholder="Reemplazar"
+                                    className="w-28 px-2.5 py-1.5 rounded-lg bg-gray-100 border border-white/10 text-gray-800 placeholder-gray-500 text-xs focus:outline-none focus:border-blue-500/50"
+                                />
+                                <button
+                                    onClick={applyReplaceInSelection}
+                                    disabled={bulkApplying || !buscarValue.trim()}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600/80 hover:bg-amber-600 text-white text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    {bulkApplying ? "..." : "Reemplazar"}
+                                </button>
+                            </>
+                        )}
                         <button
                             onClick={handleSendToChat}
                             disabled={!onSendSelectionToChat}
@@ -518,7 +674,7 @@ export default function ImportedSheet({ hoja, onSave, onPatchCell, onDelete, onR
                         </button>
                         <button
                             onClick={clearCellSelection}
-                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-zinc-200 text-xs transition-colors"
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 hover:text-gray-800 text-xs transition-colors"
                         >
                             <X size={13} />
                             Limpiar

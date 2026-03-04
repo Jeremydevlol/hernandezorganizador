@@ -53,7 +53,8 @@
                 "superficie_sigpac": 11,
                 "superficie_cultivada": 12,
                 "crop": 13,
-                "ecoregimen": 14
+                "ecoregimen": 14,
+                "secano_regadio": 15
             },
             "key_fields": [
                 "polygon",

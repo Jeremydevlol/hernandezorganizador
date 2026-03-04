@@ -558,9 +558,9 @@ export default function ChatPanel({
     }, [input]);
 
     return (
-        <aside className="min-w-0 flex-1 flex flex-col bg-[var(--bg-dark)] border-l border-white/5 overflow-hidden">
+        <aside className="min-w-0 flex-1 flex flex-col bg-[var(--bg-dark)] border-l border-gray-200 overflow-hidden">
             {/* Header */}
-            <div className="shrink-0 electron-drag border-b border-white/5">
+            <div className="shrink-0 electron-drag border-b border-gray-200">
                 <div className="h-12 px-4 flex items-center justify-between">
                     <div className="flex items-center gap-2.5">
                         <div className="w-8 h-8 rounded-lg bg-emerald-500/10 flex items-center justify-center">
@@ -571,14 +571,14 @@ export default function ChatPanel({
                     <div className="flex items-center gap-1">
                         <button
                             onClick={onNewChat}
-                            className="p-2 rounded-md text-zinc-500 hover:text-emerald-400 hover:bg-white/5 transition-colors electron-no-drag"
+                            className="p-2 rounded-md text-gray-500 hover:text-emerald-400 hover:bg-gray-100 transition-colors electron-no-drag"
                             title="Nuevo chat (mismo cuaderno)"
                         >
                             <Plus size={16} />
                         </button>
                         <button
                             onClick={onClose}
-                            className="p-2 rounded-md text-zinc-500 hover:text-zinc-200 hover:bg-white/5 transition-colors electron-no-drag"
+                            className="p-2 rounded-md text-gray-500 hover:text-gray-800 hover:bg-gray-100 transition-colors electron-no-drag"
                         >
                             <X size={16} />
                         </button>
@@ -592,7 +592,7 @@ export default function ChatPanel({
                             onClick={() => onSelectSession(s.id)}
                             className={`shrink-0 flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs transition-colors electron-no-drag ${activeSessionId === s.id
                                 ? "bg-emerald-500/20 text-emerald-400 ring-1 ring-emerald-500/30"
-                                : "text-zinc-500 hover:bg-white/5 hover:text-zinc-300"
+                                : "text-gray-500 hover:bg-gray-100 hover:text-gray-700"
                                 }`}
                             title={s.cuadernoId ? `Chat para este cuaderno` : "Chat sin cuaderno"}
                         >
@@ -610,20 +610,20 @@ export default function ChatPanel({
                         <div
                             className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 text-xs ${msg.role === "assistant"
                                 ? "bg-emerald-500/10 text-emerald-400"
-                                : "bg-white/10 text-zinc-300"
+                                : "bg-gray-200 text-zinc-300"
                                 }`}
                         >
                             {msg.role === "assistant" ? (msg.isLoading ? <Loader2 className="animate-spin w-4 h-4" /> : "VI") : "Tú"}
                         </div>
                         <div className={`flex-1 min-w-0 max-w-[85%] ${msg.role === "user" ? "text-right" : ""}`}>
                             <div className={`inline-block text-sm text-zinc-300 whitespace-pre-wrap leading-relaxed rounded-xl px-4 py-2.5 ${msg.role === "user"
-                                ? "bg-white/10 text-zinc-100"
-                                : "bg-white/5"
+                                ? "bg-gray-200 text-zinc-100"
+                                : "bg-gray-100"
                                 }`}>
                                 {msg.content}
                             </div>
                             {msg.createdAt && (
-                                <div className={`mt-1 text-[10px] text-zinc-500 ${msg.role === "user" ? "text-right" : ""}`}>
+                                <div className={`mt-1 text-[10px] text-gray-500 ${msg.role === "user" ? "text-right" : ""}`}>
                                     {formatTime(msg.createdAt)}
                                 </div>
                             )}
@@ -649,10 +649,10 @@ export default function ChatPanel({
                                         <CheckCircle size={12} />
                                         <span className="font-medium">Acción ejecutada</span>
                                     </div>
-                                    <div className="text-xs text-zinc-400 space-y-0.5">
+                                    <div className="text-xs text-gray-600 space-y-0.5">
                                         {Object.entries(msg.datos).map(([key, value]) => (
                                             <div key={key}>
-                                                <span className="text-zinc-500">{key}:</span>{" "}
+                                                <span className="text-gray-500">{key}:</span>{" "}
                                                 {typeof value === "string" ? value : JSON.stringify(value)}
                                             </div>
                                         ))}
@@ -746,7 +746,7 @@ export default function ChatPanel({
                                     <button
                                         type="button"
                                         onClick={() => setMessages((prev) => prev.map((m, j) => j === idx ? { ...m, replaceFrom: undefined, replaceTo: undefined } : m))}
-                                        className="px-3 py-1.5 text-xs rounded-lg bg-white/10 hover:bg-white/15 text-zinc-300"
+                                        className="px-3 py-1.5 text-xs rounded-lg bg-gray-200 hover:bg-gray-300 text-zinc-300"
                                     >
                                         Cancelar
                                     </button>
@@ -759,7 +759,7 @@ export default function ChatPanel({
             </div>
 
             {/* Input Area */}
-            <div className="p-4 border-t border-white/5 bg-black/20">
+            <div className="p-4 border-t border-gray-200 bg-gray-100">
                 {/* Attached Selection Preview */}
                 {attachedSelection && (
                     <div className="mb-3 rounded-xl border border-blue-500/30 bg-blue-500/5 overflow-hidden">
@@ -768,7 +768,7 @@ export default function ChatPanel({
                             tabIndex={0}
                             onClick={() => setSelectionExpanded(v => !v)}
                             onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSelectionExpanded(v => !v); } }}
-                            className="w-full flex items-center justify-between px-3 py-2 hover:bg-white/5 transition-colors cursor-pointer select-none"
+                            className="w-full flex items-center justify-between px-3 py-2 hover:bg-gray-100 transition-colors cursor-pointer select-none"
                         >
                             <div className="flex items-center gap-2">
                                 <div className="w-5 h-5 rounded bg-blue-500/20 flex items-center justify-center">
@@ -783,11 +783,11 @@ export default function ChatPanel({
                                 </span>
                             </div>
                             <div className="flex items-center gap-1">
-                                {selectionExpanded ? <ChevronUp size={14} className="text-zinc-500" /> : <ChevronDown size={14} className="text-zinc-500" />}
+                                {selectionExpanded ? <ChevronUp size={14} className="text-gray-500" /> : <ChevronDown size={14} className="text-gray-500" />}
                                 <button
                                     type="button"
                                     onClick={(e) => { e.stopPropagation(); setAttachedSelection(null); }}
-                                    className="p-1 rounded hover:bg-white/10 text-zinc-500 hover:text-zinc-300"
+                                    className="p-1 rounded hover:bg-gray-200 text-gray-500 hover:text-gray-700"
                                 >
                                     <X size={12} />
                                 </button>
@@ -798,7 +798,7 @@ export default function ChatPanel({
                                 <table className="w-full text-[11px]">
                                     <thead>
                                         <tr>
-                                            <th className="px-2 py-1.5 text-left text-zinc-500 font-medium bg-blue-500/5 border-b border-blue-500/10">#</th>
+                                            <th className="px-2 py-1.5 text-left text-gray-500 font-medium bg-blue-500/5 border-b border-blue-500/10">#</th>
                                             {(() => {
                                                 const allCols = new Map<string, string>();
                                                 for (const r of attachedSelection.rows) {
@@ -807,7 +807,7 @@ export default function ChatPanel({
                                                     }
                                                 }
                                                 return Array.from(allCols.entries()).map(([key, label]) => (
-                                                    <th key={key} className="px-2 py-1.5 text-left text-zinc-500 font-medium bg-blue-500/5 border-b border-blue-500/10 whitespace-nowrap">
+                                                    <th key={key} className="px-2 py-1.5 text-left text-gray-500 font-medium bg-blue-500/5 border-b border-blue-500/10 whitespace-nowrap">
                                                         {label}
                                                     </th>
                                                 ));
@@ -824,10 +824,10 @@ export default function ChatPanel({
                                             }
                                             const cellMap = new Map(row.cells.map(c => [c.colKey, c.value]));
                                             return (
-                                                <tr key={ri} className="hover:bg-white/5">
-                                                    <td className="px-2 py-1 text-zinc-500 border-b border-white/5">{row.rowIndex + 1}</td>
+                                                <tr key={ri} className="hover:bg-gray-100">
+                                                    <td className="px-2 py-1 text-gray-500 border-b border-gray-200">{row.rowIndex + 1}</td>
                                                     {Array.from(allCols.keys()).map(colKey => (
-                                                        <td key={colKey} className="px-2 py-1 text-zinc-300 border-b border-white/5 max-w-[120px] truncate">
+                                                        <td key={colKey} className="px-2 py-1 text-zinc-300 border-b border-gray-200 max-w-[120px] truncate">
                                                             {cellMap.has(colKey) ? String(cellMap.get(colKey) ?? "-") : "-"}
                                                         </td>
                                                     ))}
@@ -846,7 +846,7 @@ export default function ChatPanel({
                         <button
                             key={s.label}
                             onClick={() => handleSuggestion(s.cmd)}
-                            className="px-3 py-1.5 rounded-lg text-[11px] bg-white/5 border border-white/5 text-zinc-400 hover:border-emerald-500/30 hover:text-emerald-400 transition-colors"
+                            className="px-3 py-1.5 rounded-lg text-[11px] bg-gray-100 border border-gray-200 text-gray-600 hover:border-emerald-500/30 hover:text-emerald-400 transition-colors"
                         >
                             + {s.label}
                         </button>
@@ -859,7 +859,7 @@ export default function ChatPanel({
                         onClick={() => cuaderno && onSelectSheetFromChat && setSheetSelectorOpen((o) => !o)}
                         disabled={!cuaderno || !onSelectSheetFromChat}
                         title="Seleccionar hoja para editar"
-                        className="w-11 h-11 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-400 hover:text-emerald-400 flex items-center justify-center transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+                        className="w-11 h-11 rounded-xl bg-gray-100 hover:bg-gray-200 border border-gray-300 text-gray-600 hover:text-emerald-400 flex items-center justify-center transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
                     >
                         <Plus size={20} />
                     </button>
@@ -871,7 +871,7 @@ export default function ChatPanel({
                         placeholder={'Instrucción, /find "texto", /replace "A" with "B", /sheet...'}
                         rows={1}
                         disabled={isProcessing}
-                        className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-zinc-200 placeholder-zinc-500 resize-none focus:outline-none focus:border-emerald-500/40 focus:ring-1 focus:ring-emerald-500/20 transition-colors disabled:opacity-50"
+                        className="flex-1 bg-gray-100 border border-gray-300 rounded-xl px-4 py-2.5 text-sm text-gray-800 placeholder-gray-500 resize-none focus:outline-none focus:border-emerald-500/40 focus:ring-1 focus:ring-emerald-500/20 transition-colors disabled:opacity-50"
                     />
                     <button
                         onClick={handleSend}
@@ -883,31 +883,31 @@ export default function ChatPanel({
 
                     {/* Dropdown selector de hojas */}
                     {sheetSelectorOpen && cuaderno && (
-                        <div className="absolute left-0 bottom-full mb-2 w-80 max-h-72 rounded-xl bg-[var(--bg-dark)] border border-white/10 shadow-xl overflow-hidden z-50">
-                            <div className="p-2 border-b border-white/5">
+                        <div className="absolute left-0 bottom-full mb-2 w-80 max-h-72 rounded-xl bg-[var(--bg-dark)] border border-gray-300 shadow-xl overflow-hidden z-50">
+                            <div className="p-2 border-b border-gray-200">
                                 <input
                                     type="text"
                                     value={sheetSearch}
                                     onChange={(e) => setSheetSearch(e.target.value)}
                                     placeholder="Buscar hoja..."
-                                    className="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-sm text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-emerald-500/40"
+                                    className="w-full px-3 py-2 rounded-lg bg-gray-100 border border-gray-300 text-sm text-gray-800 placeholder-gray-500 focus:outline-none focus:border-emerald-500/40"
                                 />
                             </div>
                             <div className="max-h-56 overflow-y-auto py-1">
                                 {filteredSheets.length === 0 ? (
-                                    <div className="px-4 py-6 text-center text-zinc-500 text-sm">Sin resultados</div>
+                                    <div className="px-4 py-6 text-center text-gray-500 text-sm">Sin resultados</div>
                                 ) : (
                                     filteredSheets.map((s) => (
                                         <button
                                             key={s.sheetId}
                                             type="button"
                                             onClick={() => handleSelectSheet(s.sheetId)}
-                                            className="w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-white/5 transition-colors"
+                                            className="w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-gray-100 transition-colors"
                                         >
                                             <Table2 size={16} className={s.tipo === "importada" ? "text-purple-400" : "text-emerald-400"} />
                                             <div className="flex-1 min-w-0">
-                                                <div className="text-sm text-zinc-200 truncate">{s.nombre}</div>
-                                                <div className="flex items-center gap-2 text-[11px] text-zinc-500">
+                                                <div className="text-sm text-gray-800 truncate">{s.nombre}</div>
+                                                <div className="flex items-center gap-2 text-[11px] text-gray-500">
                                                     <span className={s.tipo === "base" ? "text-emerald-500/80" : "text-purple-500/80"}>
                                                         {s.tipo === "base" ? "Base" : "Importada"}
                                                     </span>
@@ -924,7 +924,7 @@ export default function ChatPanel({
                     )}
                 </div>
 
-                <div className="mt-2 text-center text-[10px] text-zinc-500">
+                <div className="mt-2 text-center text-[10px] text-gray-500">
                     Enter enviar · Shift+Enter nueva línea
                 </div>
             </div>

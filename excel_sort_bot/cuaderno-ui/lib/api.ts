@@ -238,6 +238,18 @@ export const api = {
             body: JSON.stringify(data),
         }),
 
+    createFertilizacion: (cuadernoId: string, data: any) =>
+        request<{ fertilizacion: any }>(`/${cuadernoId}/fertilizaciones`, {
+            method: "POST",
+            body: JSON.stringify(data),
+        }),
+
+    createCosecha: (cuadernoId: string, data: any) =>
+        request<{ cosecha: any }>(`/${cuadernoId}/cosechas`, {
+            method: "POST",
+            body: JSON.stringify(data),
+        }),
+
     getTratamiento: (cuadernoId: string, tratamientoId: string) =>
         request<{ tratamiento: any }>(`/${cuadernoId}/tratamientos/${tratamientoId}`),
 
@@ -257,6 +269,12 @@ export const api = {
             method: "POST",
         }),
 
+    copiarTratamientoAParcelas: (cuadernoId: string, tratamientoId: string, parcelaIds: string[]) =>
+        request<{ tratamientos: any[]; message: string }>(`/${cuadernoId}/tratamientos/${tratamientoId}/copiar-a-parcelas`, {
+            method: "POST",
+            body: JSON.stringify({ parcela_ids: parcelaIds }),
+        }),
+
     // Histórico canónico (filtros: parcela, fechas, producto, lote)
     getHistorico: (
         cuadernoId: string,
@@ -274,24 +292,30 @@ export const api = {
         );
     },
 
-    // Export PDF (opcional: periodo desde/hasta y check flags)
-    getExportPDFUrl: (cuadernoId: string, params?: { desde?: string; hasta?: string; check_hojas_editadas?: boolean; incluir_hojas?: string }) => {
+    // Export PDF (opcional: periodo, orden, check flags)
+    getExportPDFUrl: (cuadernoId: string, params?: { desde?: string; hasta?: string; check_hojas_editadas?: boolean; incluir_hojas?: string; orden_parcelas?: string; orden_tratamientos?: string; orden_parcelas_modo?: string }) => {
         const search = new URLSearchParams();
         if (params?.desde) search.set("desde", params.desde);
         if (params?.hasta) search.set("hasta", params.hasta);
         if (params?.check_hojas_editadas) search.set("check_hojas_editadas", "true");
-        if (params?.incluir_hojas) search.set("incluir_hojas", params.incluir_hojas);
+        if (params?.incluir_hojas !== undefined) search.set("incluir_hojas", params.incluir_hojas);
+        if (params?.orden_parcelas) search.set("orden_parcelas", params.orden_parcelas);
+        if (params?.orden_tratamientos) search.set("orden_tratamientos", params.orden_tratamientos);
+        if (params?.orden_parcelas_modo) search.set("orden_parcelas_modo", params.orden_parcelas_modo);
         const q = search.toString();
         return `${API_BASE}/${cuadernoId}/export/pdf${q ? `?${q}` : ""}`;
     },
 
-    // Export Excel (opcional: periodo desde/hasta y check flags)
-    getExportExcelUrl: (cuadernoId: string, params?: { desde?: string; hasta?: string; check_hojas_editadas?: boolean; incluir_hojas?: string }) => {
+    // Export Excel (opcional: periodo, orden, check flags)
+    getExportExcelUrl: (cuadernoId: string, params?: { desde?: string; hasta?: string; check_hojas_editadas?: boolean; incluir_hojas?: string; orden_parcelas?: string; orden_tratamientos?: string; orden_parcelas_modo?: string }) => {
         const search = new URLSearchParams();
         if (params?.desde) search.set("desde", params.desde);
         if (params?.hasta) search.set("hasta", params.hasta);
         if (params?.check_hojas_editadas) search.set("check_hojas_editadas", "true");
-        if (params?.incluir_hojas) search.set("incluir_hojas", params.incluir_hojas);
+        if (params?.incluir_hojas !== undefined) search.set("incluir_hojas", params.incluir_hojas);
+        if (params?.orden_parcelas) search.set("orden_parcelas", params.orden_parcelas);
+        if (params?.orden_tratamientos) search.set("orden_tratamientos", params.orden_tratamientos);
+        if (params?.orden_parcelas_modo) search.set("orden_parcelas_modo", params.orden_parcelas_modo);
         const q = search.toString();
         return `${API_BASE}/${cuadernoId}/export/excel${q ? `?${q}` : ""}`;
     },

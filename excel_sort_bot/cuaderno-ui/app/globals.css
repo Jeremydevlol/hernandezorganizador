@@ -1,27 +1,27 @@
 @import "tailwindcss";
 
 :root {
-  /* Dark theme — limpio y moderno */
-  --bg-darker: #09090b;
-  --bg-dark: #0f0f11;
-  --bg-main: #18181b;
-  --bg-lighter: #1f1f23;
-  --bg-hover: #27272a;
-  --bg-active: rgba(34, 197, 94, 0.08);
+  /* Light theme — limpio y moderno */
+  --bg-darker: #f8fafc;
+  --bg-dark: #f1f5f9;
+  --bg-main: #ffffff;
+  --bg-lighter: #e2e8f0;
+  --bg-hover: #e2e8f0;
+  --bg-active: rgba(34, 197, 94, 0.12);
 
   /* Bordes suaves */
-  --border: #27272a;
-  --border-subtle: #1c1c1e;
+  --border: #e2e8f0;
+  --border-subtle: #cbd5e1;
 
   /* Texto */
-  --text-primary: #fafafa;
-  --text-secondary: #a1a1aa;
-  --text-muted: #71717a;
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #64748b;
 
   /* Acento verde */
-  --accent: #22c55e;
-  --accent-hover: #16a34a;
-  --accent-subtle: rgba(34, 197, 94, 0.12);
+  --accent: #16a34a;
+  --accent-hover: #15803d;
+  --accent-subtle: rgba(34, 197, 94, 0.15);
 
   /* Estados */
   --success: #22c55e;

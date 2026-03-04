@@ -35,7 +35,7 @@ export default function Home() {
   const [focusSheetId, setFocusSheetId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const editorActionsRef = useRef<EditorActions | null>(null);
-  const [chatOpen, setChatOpen] = useState(true);
+  const [chatOpen, setChatOpen] = useState(false);
   const [leftSidebarOpen, setLeftSidebarOpen] = useState(true);
   const [highlight, setHighlight] = useState<{ sheet: SheetType; id: string } | null>(null);
   const [leftWidth, setLeftWidth] = useState<number>(260);
@@ -235,7 +235,7 @@ export default function Home() {
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-[var(--bg-darker)]">
       {/* Header — barra superior limpia */}
-      <header className="app-header h-12 shrink-0 flex items-center gap-0.5 pl-[72px] pr-4 border-b border-white/5 bg-[var(--bg-dark)]/80 backdrop-blur-sm electron-drag">
+      <header className="app-header h-12 shrink-0 flex items-center gap-0.5 pl-[72px] pr-4 border-b border-gray-200 bg-[var(--bg-dark)]/80 backdrop-blur-sm electron-drag">
         {/* Desktop toggle buttons */}
         <button
           type="button"

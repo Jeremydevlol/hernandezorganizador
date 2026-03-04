@@ -267,6 +267,78 @@ class Tratamiento:
 
 
 @dataclass
+class Fertilizacion:
+    """Registro de fertilización (abonos, enmiendas)."""
+    id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    fecha_inicio: str = ""
+    fecha_fin: str = ""
+    num_orden_parcelas: str = ""       # Nº orden parcelas (ej: "7,8,9")
+    cultivo_especie: str = ""
+    cultivo_variedad: str = ""
+    tipo_abono: str = ""
+    num_albaran: str = ""
+    riqueza_npk: str = ""               # N/P/K (ej: "20-10-10")
+    dosis: str = ""
+    tipo_fertilizacion: str = ""
+    observaciones: str = ""
+
+    def to_dict(self) -> Dict:
+        return {
+            "id": self.id,
+            "fecha_inicio": self.fecha_inicio,
+            "fecha_fin": self.fecha_fin,
+            "num_orden_parcelas": self.num_orden_parcelas,
+            "cultivo_especie": self.cultivo_especie,
+            "cultivo_variedad": self.cultivo_variedad,
+            "tipo_abono": self.tipo_abono,
+            "num_albaran": self.num_albaran,
+            "riqueza_npk": self.riqueza_npk,
+            "dosis": self.dosis,
+            "tipo_fertilizacion": self.tipo_fertilizacion,
+            "observaciones": self.observaciones,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict) -> 'Fertilizacion':
+        return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
+
+
+@dataclass
+class Cosecha:
+    """Registro de cosecha/venta de producto."""
+    id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    fecha: str = ""
+    producto: str = ""
+    cantidad_kg: float = 0.0
+    num_orden_parcelas: str = ""
+    num_albaran: str = ""
+    num_lote: str = ""
+    cliente_nombre: str = ""
+    cliente_nif: str = ""
+    cliente_direccion: str = ""
+    cliente_rgseaa: str = ""
+
+    def to_dict(self) -> Dict:
+        return {
+            "id": self.id,
+            "fecha": self.fecha,
+            "producto": self.producto,
+            "cantidad_kg": self.cantidad_kg,
+            "num_orden_parcelas": self.num_orden_parcelas,
+            "num_albaran": self.num_albaran,
+            "num_lote": self.num_lote,
+            "cliente_nombre": self.cliente_nombre,
+            "cliente_nif": self.cliente_nif,
+            "cliente_direccion": self.cliente_direccion,
+            "cliente_rgseaa": self.cliente_rgseaa,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict) -> 'Cosecha':
+        return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
+
+
+@dataclass
 class HojaExcel:
     """Representa una hoja de Excel importada. Toda hoja entra, se ve, se edita y se conserva."""
     sheet_id: str = field(default_factory=lambda: str(uuid.uuid4()))
@@ -307,6 +379,8 @@ class CuadernoExplotacion:
     parcelas: List[Parcela] = field(default_factory=list)
     productos: List[ProductoFitosanitario] = field(default_factory=list)
     tratamientos: List[Tratamiento] = field(default_factory=list)
+    fertilizaciones: List['Fertilizacion'] = field(default_factory=list)
+    cosechas: List['Cosecha'] = field(default_factory=list)
     hojas_originales: List[HojaExcel] = field(default_factory=list)  # Hojas Excel importadas
     fecha_creacion: str = field(default_factory=lambda: datetime.now().isoformat())
     fecha_modificacion: str = field(default_factory=lambda: datetime.now().isoformat())
@@ -323,6 +397,8 @@ class CuadernoExplotacion:
             "parcelas": [p.to_dict() for p in self.parcelas],
             "productos": [p.to_dict() for p in self.productos],
             "tratamientos": [t.to_dict() for t in self.tratamientos],
+            "fertilizaciones": [f.to_dict() for f in self.fertilizaciones],
+            "cosechas": [c.to_dict() for c in self.cosechas],
             "hojas_originales": [h.to_dict() for h in self.hojas_originales],
             "fecha_creacion": self.fecha_creacion,
             "fecha_modificacion": self.fecha_modificacion
@@ -340,6 +416,12 @@ class CuadernoExplotacion:
         if 'tratamientos' in d:
             d['tratamientos'] = [Tratamiento.from_dict(t) if isinstance(t, dict) else t 
                                for t in d['tratamientos']]
+        if 'fertilizaciones' in d:
+            raw = d.get('fertilizaciones') or []
+            d['fertilizaciones'] = [Fertilizacion.from_dict(f) if isinstance(f, dict) else f for f in raw]
+        if 'cosechas' in d:
+            raw = d.get('cosechas') or []
+            d['cosechas'] = [Cosecha.from_dict(c) if isinstance(c, dict) else c for c in raw]
         if 'hojas_originales' in d:
             d['hojas_originales'] = [HojaExcel.from_dict(h) if isinstance(h, dict) else h 
                                     for h in d['hojas_originales']]
@@ -401,10 +483,25 @@ class CuadernoExplotacion:
         self._actualizar_modificacion()
         return True
 
+    def obtener_fertilizacion(self, fertilizacion_id: str) -> Optional['Fertilizacion']:
+        """Obtiene una fertilización por ID."""
+        for f in self.fertilizaciones:
+            if f.id == fertilizacion_id:
+                return f
+        return None
+
+    def obtener_cosecha(self, cosecha_id: str) -> Optional['Cosecha']:
+        """Obtiene una cosecha por ID."""
+        for c in self.cosechas:
+            if c.id == cosecha_id:
+                return c
+        return None
+
     def aplicar_celda_estructural(self, sheet_type: str, entity_id: str, column: str, value: Any) -> bool:
         """
-        Edición atómica de un campo en hoja base (parcelas, productos, tratamientos).
+        Edición atómica de un campo en hoja base (parcelas, productos, tratamientos, fertilizantes, cosecha).
         column = clave del campo (ej. nombre, superficie_ha).
+        Para tratamientos, soporta campos de producto: nombre_comercial, numero_registro, dosis, unidad_dosis, numero_lote.
         """
         if sheet_type == "parcelas":
             ent = self.obtener_parcela(entity_id)
@@ -412,11 +509,31 @@ class CuadernoExplotacion:
             ent = self.obtener_producto(entity_id)
         elif sheet_type == "tratamientos":
             ent = self.obtener_tratamiento(entity_id)
+        elif sheet_type == "fertilizantes":
+            ent = self.obtener_fertilizacion(entity_id)
+        elif sheet_type == "cosecha":
+            ent = self.obtener_cosecha(entity_id)
         else:
             return False
-        if not ent or not hasattr(ent, column):
+        if not ent:
             return False
-        # Coerción suave según tipo del campo
+
+        PRODUCT_FIELDS = {"nombre_comercial", "numero_registro", "dosis", "unidad_dosis", "numero_lote"}
+        if sheet_type == "tratamientos" and column in PRODUCT_FIELDS and hasattr(ent, "productos"):
+            if ent.productos:
+                prod = ent.productos[0]
+                if column == "dosis":
+                    try:
+                        value = float(value)
+                    except (TypeError, ValueError):
+                        pass
+                setattr(prod, column, value)
+                self._actualizar_modificacion()
+                return True
+            return False
+
+        if not hasattr(ent, column):
+            return False
         current = getattr(ent, column)
         if isinstance(current, (int, float)) and not isinstance(current, bool):
             try:
@@ -452,12 +569,81 @@ class CuadernoExplotacion:
     
     def agregar_tratamiento(self, tratamiento: Tratamiento) -> Tratamiento:
         """
-        Añade un tratamiento.
-        El tratamiento queda vinculado a las parcelas especificadas.
+        Añade un tratamiento (registro único, sin desglose).
+        Para el flujo normal usar agregar_tratamiento_desglosado.
         """
         self._sincronizar_campos_tratamiento(tratamiento)
-        
-        # Snapshot de producto: si hay producto_id en inventario, rellenar; si no, mantener lo enviado (trazabilidad inspección)
+        self._enriquecer_productos(tratamiento)
+        self.tratamientos.append(tratamiento)
+        self.ordenar_tratamientos()
+        self._actualizar_modificacion()
+        return tratamiento
+
+    def agregar_tratamiento_desglosado(self, tratamiento: Tratamiento) -> List[Tratamiento]:
+        """
+        Desglosa un tratamiento en líneas individuales:
+        1 línea por parcela × 1 línea por producto.
+        Si tiene 3 parcelas y 2 productos → 6 registros.
+        """
+        parcela_ids = tratamiento.parcela_ids or []
+        productos = tratamiento.productos or []
+
+        if not parcela_ids:
+            parcela_ids = [""]
+        if not productos:
+            productos = [ProductoAplicado()]
+
+        creados: List[Tratamiento] = []
+        for pid in parcela_ids:
+            parcela = self.obtener_parcela(pid) if pid else None
+            sup = float(parcela.superficie_cultivada or parcela.superficie_ha or parcela.superficie_sigpac or 0) if parcela else 0.0
+            cultivo = (parcela.especie or parcela.cultivo or "").strip().upper() if parcela else ""
+            nombre = parcela.nombre if parcela else ""
+            orden = str(parcela.num_orden) if parcela and isinstance(parcela.num_orden, int) and parcela.num_orden > 0 else ""
+
+            for prod in productos:
+                prod_copy = ProductoAplicado(
+                    producto_id=prod.producto_id,
+                    nombre_comercial=prod.nombre_comercial,
+                    numero_registro=prod.numero_registro,
+                    numero_lote=getattr(prod, "numero_lote", "") or "",
+                    dosis=prod.dosis,
+                    unidad_dosis=prod.unidad_dosis,
+                    caldo_hectarea=prod.caldo_hectarea,
+                    notas=prod.notas,
+                )
+                t = Tratamiento(
+                    parcela_ids=[pid] if pid else [],
+                    parcela_nombres=[nombre] if nombre else [],
+                    num_orden_parcelas=orden,
+                    cultivo_especie=cultivo or tratamiento.cultivo_especie,
+                    superficie_tratada=round(sup, 2) if sup else tratamiento.superficie_tratada,
+                    fecha_aplicacion=tratamiento.fecha_aplicacion,
+                    problema_fitosanitario=tratamiento.problema_fitosanitario or tratamiento.plaga_enfermedad,
+                    plaga_enfermedad=tratamiento.plaga_enfermedad or tratamiento.problema_fitosanitario,
+                    aplicador=tratamiento.aplicador or tratamiento.operador,
+                    operador=tratamiento.operador or tratamiento.aplicador,
+                    equipo=tratamiento.equipo,
+                    productos=[prod_copy],
+                    eficacia=tratamiento.eficacia,
+                    observaciones=tratamiento.observaciones,
+                    justificacion=tratamiento.justificacion,
+                    metodo_aplicacion=tratamiento.metodo_aplicacion,
+                    condiciones_climaticas=tratamiento.condiciones_climaticas,
+                    hora_inicio=tratamiento.hora_inicio,
+                    hora_fin=tratamiento.hora_fin,
+                    estado=tratamiento.estado,
+                )
+                self._enriquecer_productos(t)
+                self.tratamientos.append(t)
+                creados.append(t)
+
+        self.ordenar_tratamientos()
+        self._actualizar_modificacion()
+        return creados
+
+    def _enriquecer_productos(self, tratamiento: Tratamiento) -> None:
+        """Snapshot de producto desde inventario si hay producto_id."""
         for prod_aplicado in tratamiento.productos:
             if prod_aplicado.producto_id:
                 producto = self.obtener_producto(prod_aplicado.producto_id)
@@ -465,10 +651,42 @@ class CuadernoExplotacion:
                     prod_aplicado.nombre_comercial = prod_aplicado.nombre_comercial or producto.nombre_comercial
                     prod_aplicado.numero_registro = prod_aplicado.numero_registro or producto.numero_registro
                     prod_aplicado.numero_lote = prod_aplicado.numero_lote or producto.numero_lote
-        
-        self.tratamientos.append(tratamiento)
-        self._actualizar_modificacion()
-        return tratamiento
+
+    def ordenar_tratamientos(self) -> None:
+        """Ordena tratamientos por parcela (num_orden) y luego por fecha."""
+        def sort_key(t: Tratamiento):
+            try:
+                orden = int(t.num_orden_parcelas.split(",")[0]) if t.num_orden_parcelas else 9999
+            except (ValueError, IndexError):
+                orden = 9999
+            fecha = t.fecha_aplicacion or "9999-99-99"
+            return (orden, fecha)
+        self.tratamientos.sort(key=sort_key)
+
+    def copiar_tratamiento_a_parcelas(self, tratamiento_id: str, parcela_ids: List[str]) -> List[Tratamiento]:
+        """Copia un tratamiento existente a otras parcelas (1 línea por parcela por producto)."""
+        t_orig = self.obtener_tratamiento(tratamiento_id)
+        if not t_orig:
+            return []
+        plantilla = Tratamiento(
+            parcela_ids=parcela_ids,
+            fecha_aplicacion=t_orig.fecha_aplicacion,
+            problema_fitosanitario=t_orig.problema_fitosanitario or t_orig.plaga_enfermedad,
+            plaga_enfermedad=t_orig.plaga_enfermedad or t_orig.problema_fitosanitario,
+            aplicador=t_orig.aplicador or t_orig.operador,
+            operador=t_orig.operador or t_orig.aplicador,
+            equipo=t_orig.equipo,
+            productos=t_orig.productos,
+            eficacia=t_orig.eficacia,
+            observaciones=t_orig.observaciones,
+            justificacion=t_orig.justificacion,
+            metodo_aplicacion=t_orig.metodo_aplicacion,
+            condiciones_climaticas=t_orig.condiciones_climaticas,
+            hora_inicio=t_orig.hora_inicio,
+            hora_fin=t_orig.hora_fin,
+            estado=t_orig.estado,
+        )
+        return self.agregar_tratamiento_desglosado(plantilla)
     
     def obtener_parcela(self, parcela_id: str) -> Optional[Parcela]:
         """Obtiene una parcela por ID"""
@@ -630,6 +848,18 @@ class CuadernoExplotacion:
             )
             tratamiento.superficie_tratada = round(total_sup, 2)
     
+    def agregar_fertilizacion(self, fertilizacion: 'Fertilizacion') -> 'Fertilizacion':
+        """Añade un registro de fertilización."""
+        self.fertilizaciones.append(fertilizacion)
+        self._actualizar_modificacion()
+        return fertilizacion
+
+    def agregar_cosecha(self, cosecha: 'Cosecha') -> 'Cosecha':
+        """Añade un registro de cosecha."""
+        self.cosechas.append(cosecha)
+        self._actualizar_modificacion()
+        return cosecha
+
     def eliminar_parcela(self, parcela_id: str) -> bool:
         """Elimina una parcela por ID (la quita de la lista)."""
         for i, p in enumerate(self.parcelas):

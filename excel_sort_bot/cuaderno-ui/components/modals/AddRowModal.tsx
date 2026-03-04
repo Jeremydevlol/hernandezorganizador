@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { X } from "lucide-react";
 import { Cuaderno, SheetType } from "@/lib/types";
 import { api } from "@/lib/api";
@@ -18,6 +18,9 @@ interface AddRowModalProps {
 export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSuccess, editTratamientoId, initialParcelaIds = [] }: AddRowModalProps) {
     const [loading, setLoading] = useState(false);
     const [formData, setFormData] = useState<Record<string, any>>({});
+    const [productInputValue, setProductInputValue] = useState("");
+    const [productDropdownOpen, setProductDropdownOpen] = useState(false);
+    const productInputRef = useRef<HTMLInputElement>(null);
 
     const suggestionFromSelectedParcelas = useMemo(() => {
         if (!initialParcelaIds.length || sheet !== "tratamientos") {
@@ -70,17 +73,62 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
             }).catch(() => setFormData({}));
         } else if (isOpen && !editTratamientoId) {
             const suggestedProd = (cuaderno.productos || []).find((p) => p.id === suggestionFromSelectedParcelas.productoId);
-            setFormData({
+            const base: Record<string, any> = {
                 fecha_aplicacion: new Date().toISOString().split("T")[0],
-                parcela_ids: sheet === "tratamientos" ? initialParcelaIds : [],
+                parcela_ids: sheet === "tratamientos" || sheet === "fertilizantes" || sheet === "cosecha" ? initialParcelaIds : [],
                 producto_id: sheet === "tratamientos" ? (suggestionFromSelectedParcelas.productoId || "") : "",
                 nombre_comercial: suggestedProd?.nombre_comercial || "",
                 numero_registro: suggestedProd?.numero_registro || "",
                 numero_lote: suggestedProd?.numero_lote || "",
                 plaga_enfermedad: sheet === "tratamientos" ? (suggestionFromSelectedParcelas.plaga || "") : "",
-            });
+            };
+            if (sheet === "fertilizantes") {
+                base.fecha_inicio = new Date().toISOString().split("T")[0];
+                base.fecha_fin = "";
+                base.cultivo_especie = "";
+                base.tipo_abono = "";
+                base.riqueza_npk = "";
+                base.dosis = "";
+                base.tipo_fertilizacion = "";
+            }
+            if (sheet === "cosecha") {
+                base.fecha = new Date().toISOString().split("T")[0];
+                base.producto = "";
+                base.cantidad_kg = "";
+            }
+            setFormData(base);
+            setProductInputValue(suggestedProd?.nombre_comercial || "");
         }
     }, [isOpen, sheet, cuaderno.id, editTratamientoId, initialParcelaIds, suggestionFromSelectedParcelas, cuaderno.productos]);
+
+    useEffect(() => {
+        if (isOpen && sheet === "tratamientos" && editTratamientoId) {
+            setProductInputValue(formData.nombre_comercial || "");
+        }
+    }, [isOpen, sheet, editTratamientoId, formData.nombre_comercial]);
+
+    const productosFiltrados = useMemo(() => {
+        if (!productInputValue.trim()) return cuaderno.productos || [];
+        const q = productInputValue.trim().toLowerCase();
+        return (cuaderno.productos || []).filter(
+            (p) => (p.nombre_comercial || "").toLowerCase().includes(q)
+        );
+    }, [cuaderno.productos, productInputValue]);
+
+    const parcelasOrdenadas = useMemo(() => {
+        const parcelas = [...(cuaderno.parcelas || [])];
+        return parcelas.sort((a, b) => {
+            const aOrden = Number(a.num_orden || 0);
+            const bOrden = Number(b.num_orden || 0);
+            if (aOrden !== bOrden) return aOrden - bOrden;
+            const aCultivo = (a.especie || a.cultivo || "").toLowerCase();
+            const bCultivo = (b.especie || b.cultivo || "").toLowerCase();
+            if (aCultivo !== bCultivo) return aCultivo.localeCompare(bCultivo, "es");
+            const aSup = Number(a.superficie_cultivada || a.superficie_ha || a.superficie_sigpac || 0);
+            const bSup = Number(b.superficie_cultivada || b.superficie_ha || b.superficie_sigpac || 0);
+            return bSup - aSup;
+        });
+    }, [cuaderno.parcelas]);
 
     if (!isOpen) return null;
 
@@ -113,21 +161,80 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                 await api.createParcela(cuaderno.id, formData);
             } else if (sheet === "productos") {
                 await api.createProducto(cuaderno.id, formData);
+            } else if (sheet === "fertilizantes") {
+                const parcelaIds = Array.isArray(formData.parcela_ids) ? formData.parcela_ids : [];
+                await api.createFertilizacion(cuaderno.id, {
+                    fecha_inicio: formData.fecha_inicio || "",
+                    fecha_fin: formData.fecha_fin || "",
+                    parcela_ids: parcelaIds,
+                    cultivo_especie: formData.cultivo_especie || "",
+                    cultivo_variedad: formData.cultivo_variedad || "",
+                    tipo_abono: formData.tipo_abono || "",
+                    num_albaran: formData.num_albaran || "",
+                    riqueza_npk: formData.riqueza_npk || "",
+                    dosis: formData.dosis || "",
+                    tipo_fertilizacion: formData.tipo_fertilizacion || "",
+                    observaciones: formData.observaciones || "",
+                });
+            } else if (sheet === "cosecha") {
+                const parcelaIds = Array.isArray(formData.parcela_ids) ? formData.parcela_ids : [];
+                await api.createCosecha(cuaderno.id, {
+                    fecha: formData.fecha || "",
+                    producto: formData.producto || "",
+                    cantidad_kg: Number(formData.cantidad_kg) || 0,
+                    parcela_ids: parcelaIds,
+                    num_albaran: formData.num_albaran || "",
+                    num_lote: formData.num_lote || "",
+                    cliente_nombre: formData.cliente_nombre || "",
+                    cliente_nif: formData.cliente_nif || "",
+                    cliente_direccion: formData.cliente_direccion || "",
+                    cliente_rgseaa: formData.cliente_rgseaa || "",
+                });
             } else if (sheet === "tratamientos") {
                 const parcelaIds = Array.isArray(formData.parcela_ids) ? formData.parcela_ids : [];
-                if (!formData.fecha_aplicacion || parcelaIds.length === 0 || !formData.producto_id || (formData.dosis ?? "") === "") {
+                const nombreProd = (formData.nombre_comercial || productInputValue || "").trim();
+                if (!formData.fecha_aplicacion || parcelaIds.length === 0 || !nombreProd || (formData.dosis ?? "") === "") {
                     alert("Completa: Fecha, al menos una parcela, producto y dosis.");
                     setLoading(false);
                     return;
+                }
+                let productoId = formData.producto_id || "";
+                let nombreComercial = formData.nombre_comercial || nombreProd;
+                let numeroRegistro = formData.numero_registro || "";
+                let numeroLote = formData.numero_lote || "";
+                if (!productoId) {
+                    const existente = (cuaderno.productos || []).find(
+                        (p) => (p.nombre_comercial || "").toLowerCase() === nombreProd.toLowerCase()
+                    );
+                    if (existente) {
+                        productoId = existente.id;
+                        nombreComercial = existente.nombre_comercial || "";
+                        numeroRegistro = existente.numero_registro || "";
+                        numeroLote = existente.numero_lote || "";
+                    } else {
+                        const nuevo = await api.createProducto(cuaderno.id, {
+                            nombre_comercial: nombreProd,
+                            numero_registro: (formData.numero_registro || numeroRegistro || "-").trim() || "-",
+                            materia_activa: "",
+                            numero_lote: formData.numero_lote || numeroLote || "",
+                            cantidad_adquirida: 0,
+                            unidad: "L",
+                            fecha_adquisicion: "",
+                        });
+                        productoId = nuevo.producto?.id || "";
+                        nombreComercial = nuevo.producto?.nombre_comercial || nombreProd;
+                        numeroRegistro = nuevo.producto?.numero_registro || "-";
+                        onSuccess();
+                    }
                 }
                 const payload = {
                     fecha_aplicacion: (formData.fecha_aplicacion || new Date().toISOString().split("T")[0]).trim(),
                     parcela_ids: parcelaIds,
                     productos: [{
-                        producto_id: formData.producto_id || "",
-                        nombre_comercial: formData.nombre_comercial || "",
-                        numero_registro: formData.numero_registro || "",
-                        numero_lote: formData.numero_lote || "",
+                        producto_id: productoId,
+                        nombre_comercial: nombreComercial,
+                        numero_registro: numeroRegistro,
+                        numero_lote: numeroLote,
                         dosis: Number(formData.dosis) || 0,
                         unidad_dosis: formData.unidad_dosis || "L/Ha",
                     }],
@@ -151,40 +258,27 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
         }
     };
 
-    const parcelasOrdenadas = useMemo(() => {
-        const parcelas = [...(cuaderno.parcelas || [])];
-        return parcelas.sort((a, b) => {
-            const aOrden = Number(a.num_orden || 0);
-            const bOrden = Number(b.num_orden || 0);
-            if (aOrden !== bOrden) return aOrden - bOrden;
-            const aCultivo = (a.especie || a.cultivo || "").toLowerCase();
-            const bCultivo = (b.especie || b.cultivo || "").toLowerCase();
-            if (aCultivo !== bCultivo) return aCultivo.localeCompare(bCultivo, "es");
-            const aSup = Number(a.superficie_cultivada || a.superficie_ha || a.superficie_sigpac || 0);
-            const bSup = Number(b.superficie_cultivada || b.superficie_ha || b.superficie_sigpac || 0);
-            return bSup - aSup;
-        });
-    }, [cuaderno.parcelas]);
-
     const getTitle = () => {
         if (sheet === "tratamientos" && editTratamientoId) return "Editar tratamiento";
         switch (sheet) {
             case "parcelas": return "Nueva Parcela";
             case "productos": return "Nuevo Producto Fitosanitario";
             case "tratamientos": return "Nuevo Tratamiento";
+            case "fertilizantes": return "Nueva Fertilización";
+            case "cosecha": return "Nueva Cosecha";
             default: return "Nuevo Registro";
         }
     };
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-            <div className="w-full max-w-xl bg-[#18181b] border border-zinc-800 rounded-xl shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+            <div className="w-full max-w-xl bg-white border border-gray-200 rounded-xl shadow-2xl animate-in fade-in zoom-in-95 duration-200">
                 {/* Header */}
-                <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-800">
-                    <h2 className="text-lg font-semibold text-zinc-100">{getTitle()}</h2>
+                <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+                    <h2 className="text-lg font-semibold text-gray-900">{getTitle()}</h2>
                     <button
                         onClick={onClose}
-                        className="p-1.5 rounded-lg hover:bg-zinc-800 text-zinc-500 hover:text-zinc-300 transition-colors"
+                        className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500 hover:text-gray-700 transition-colors"
                     >
                         <X size={18} />
                     </button>
@@ -196,7 +290,7 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                         <>
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
-                                    <label className="block text-xs font-medium text-zinc-400 mb-1.5">
+                                    <label className="block text-xs font-medium text-gray-600 mb-1.5">
                                         Nombre *
                                     </label>
                                     <input
@@ -206,11 +300,11 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                         onChange={handleChange}
                                         required
                                         placeholder="Nombre de la parcela"
-                                        className="w-full px-3 py-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-100 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                        className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
                                     />
                                 </div>
                                 <div>
-                                    <label className="block text-xs font-medium text-zinc-400 mb-1.5">
+                                    <label className="block text-xs font-medium text-gray-600 mb-1.5">
                                         Ref. Catastral *
                                     </label>
                                     <input
@@ -220,13 +314,13 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                         onChange={handleChange}
                                         required
                                         placeholder="00-000-00000"
-                                        className="w-full px-3 py-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-100 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                        className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
                                     />
                                 </div>
                             </div>
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
-                                    <label className="block text-xs font-medium text-zinc-400 mb-1.5">
+                                    <label className="block text-xs font-medium text-gray-600 mb-1.5">
                                         Superficie (Ha)
                                     </label>
                                     <input
@@ -236,11 +330,11 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                         onChange={handleChange}
                                         step="0.01"
                                         placeholder="0.00"
-                                        className="w-full px-3 py-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-100 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                        className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
                                     />
                                 </div>
                                 <div>
-                                    <label className="block text-xs font-medium text-zinc-400 mb-1.5">
+                                    <label className="block text-xs font-medium text-gray-600 mb-1.5">
                                         Cultivo
                                     </label>
                                     <input
@@ -249,13 +343,13 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                         value={formData.cultivo || ""}
                                         onChange={handleChange}
                                         placeholder="Tipo de cultivo"
-                                        className="w-full px-3 py-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-100 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                        className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
                                     />
                                 </div>
                             </div>
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
-                                    <label className="block text-xs font-medium text-zinc-400 mb-1.5">
+                                    <label className="block text-xs font-medium text-gray-600 mb-1.5">
                                         Variedad
                                     </label>
                                     <input
@@ -264,11 +358,11 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                         value={formData.variedad || ""}
                                         onChange={handleChange}
                                         placeholder="Variedad"
-                                        className="w-full px-3 py-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-100 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                        className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
                                     />
                                 </div>
                                 <div>
-                                    <label className="block text-xs font-medium text-zinc-400 mb-1.5">
+                                    <label className="block text-xs font-medium text-gray-600 mb-1.5">
                                         Municipio
                                     </label>
                                     <input
@@ -277,12 +371,12 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                         value={formData.municipio || ""}
                                         onChange={handleChange}
                                         placeholder="Municipio"
-                                        className="w-full px-3 py-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-100 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                        className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
                                     />
                                 </div>
                             </div>
                             <div>
-                                <label className="block text-xs font-medium text-zinc-400 mb-1.5">
+                                <label className="block text-xs font-medium text-gray-600 mb-1.5">
                                     Provincia
                                 </label>
                                 <input
@@ -291,7 +385,7 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                     value={formData.provincia || ""}
                                     onChange={handleChange}
                                     placeholder="Provincia"
-                                    className="w-full px-3 py-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-100 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                    className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
                                 />
                             </div>
                         </>
@@ -301,7 +395,7 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                         <>
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
-                                    <label className="block text-xs font-medium text-zinc-400 mb-1.5">
+                                    <label className="block text-xs font-medium text-gray-600 mb-1.5">
                                         Nombre Comercial *
                                     </label>
                                     <input
@@ -311,11 +405,11 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                         onChange={handleChange}
                                         required
                                         placeholder="Nombre del producto"
-                                        className="w-full px-3 py-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-100 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                        className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
                                     />
                                 </div>
                                 <div>
-                                    <label className="block text-xs font-medium text-zinc-400 mb-1.5">
+                                    <label className="block text-xs font-medium text-gray-600 mb-1.5">
                                         Nº Registro *
                                     </label>
                                     <input
@@ -325,13 +419,13 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                         onChange={handleChange}
                                         required
                                         placeholder="ES-00000"
-                                        className="w-full px-3 py-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-100 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                        className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
                                     />
                                 </div>
                             </div>
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
-                                    <label className="block text-xs font-medium text-zinc-400 mb-1.5">
+                                    <label className="block text-xs font-medium text-gray-600 mb-1.5">
                                         Materia Activa
                                     </label>
                                     <input
@@ -340,11 +434,11 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                         value={formData.materia_activa || ""}
                                         onChange={handleChange}
                                         placeholder="Sustancia activa"
-                                        className="w-full px-3 py-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-100 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                        className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
                                     />
                                 </div>
                                 <div>
-                                    <label className="block text-xs font-medium text-zinc-400 mb-1.5">
+                                    <label className="block text-xs font-medium text-gray-600 mb-1.5">
                                         Nº Lote *
                                     </label>
                                     <input
@@ -354,13 +448,13 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                         onChange={handleChange}
                                         required
                                         placeholder="Lote"
-                                        className="w-full px-3 py-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-100 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                        className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
                                     />
                                 </div>
                             </div>
                             <div className="grid grid-cols-3 gap-4">
                                 <div>
-                                    <label className="block text-xs font-medium text-zinc-400 mb-1.5">
+                                    <label className="block text-xs font-medium text-gray-600 mb-1.5">
                                         Cantidad *
                                     </label>
                                     <input
@@ -371,18 +465,18 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                         required
                                         step="0.01"
                                         placeholder="0"
-                                        className="w-full px-3 py-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-100 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                        className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
                                     />
                                 </div>
                                 <div>
-                                    <label className="block text-xs font-medium text-zinc-400 mb-1.5">
+                                    <label className="block text-xs font-medium text-gray-600 mb-1.5">
                                         Unidad
                                     </label>
                                     <select
                                         name="unidad"
                                         value={formData.unidad || "L"}
                                         onChange={handleChange}
-                                        className="w-full px-3 py-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-100 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                        className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 text-sm focus:outline-none focus:border-green-500 transition-colors"
                                     >
                                         <option value="L">L</option>
                                         <option value="Kg">Kg</option>
@@ -390,7 +484,7 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                     </select>
                                 </div>
                                 <div>
-                                    <label className="block text-xs font-medium text-zinc-400 mb-1.5">
+                                    <label className="block text-xs font-medium text-gray-600 mb-1.5">
                                         F. Adquisición
                                     </label>
                                     <input
@@ -398,12 +492,12 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                         name="fecha_adquisicion"
                                         value={formData.fecha_adquisicion || ""}
                                         onChange={handleChange}
-                                        className="w-full px-3 py-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-100 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                        className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 text-sm focus:outline-none focus:border-green-500 transition-colors"
                                     />
                                 </div>
                             </div>
                             <div>
-                                <label className="block text-xs font-medium text-zinc-400 mb-1.5">
+                                <label className="block text-xs font-medium text-gray-600 mb-1.5">
                                     Proveedor
                                 </label>
                                 <input
@@ -412,7 +506,7 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                     value={formData.proveedor || ""}
                                     onChange={handleChange}
                                     placeholder="Nombre del proveedor"
-                                    className="w-full px-3 py-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-100 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                    className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
                                 />
                             </div>
                         </>
@@ -421,15 +515,15 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                     {sheet === "tratamientos" && (
                         <>
                             <div>
-                                <label className="block text-xs font-medium text-zinc-400 mb-1.5">
+                                <label className="block text-xs font-medium text-gray-600 mb-1.5">
                                     Parcelas *
                                 </label>
-                                <div className="grid grid-cols-2 gap-2 p-3 rounded-lg bg-zinc-900 border border-zinc-700 max-h-32 overflow-y-auto">
+                                <div className="grid grid-cols-2 gap-2 p-3 rounded-lg bg-white border border-gray-300 max-h-32 overflow-y-auto">
                                     {parcelasOrdenadas.length > 0 ? (
                                         parcelasOrdenadas.map((p) => (
                                             <label
                                                 key={p.id}
-                                                className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-zinc-800 cursor-pointer"
+                                                className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-gray-100 cursor-pointer"
                                             >
                                     <input
                                         type="checkbox"
@@ -437,22 +531,22 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                                     value={p.id}
                                                     checked={Array.isArray(formData.parcela_ids) && formData.parcela_ids.includes(p.id)}
                                                     onChange={handleCheckbox}
-                                                    className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-green-500 focus:ring-green-500"
+                                                    className="w-4 h-4 rounded border-gray-400 bg-gray-100 text-green-500 focus:ring-green-500"
                                                 />
-                                                <span className="text-sm text-zinc-300">
+                                                <span className="text-sm text-gray-700">
                                                     {p.nombre}
-                                                    {!!p.num_orden && <span className="text-zinc-500"> · #{p.num_orden}</span>}
+                                                    {!!p.num_orden && <span className="text-gray-500"> · #{p.num_orden}</span>}
                                                 </span>
                                             </label>
                                         ))
                                     ) : (
-                                        <p className="text-zinc-500 text-sm col-span-2">No hay parcelas</p>
+                                        <p className="text-gray-500 text-sm col-span-2">No hay parcelas</p>
                                     )}
                                 </div>
                             </div>
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
-                                    <label className="block text-xs font-medium text-zinc-400 mb-1.5">
+                                    <label className="block text-xs font-medium text-gray-600 mb-1.5">
                                         Fecha *
                                     </label>
                                     <input
@@ -461,11 +555,11 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                         value={formData.fecha_aplicacion || new Date().toISOString().split("T")[0]}
                                         onChange={handleChange}
                                         required
-                                        className="w-full px-3 py-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-100 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                        className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 text-sm focus:outline-none focus:border-green-500 transition-colors"
                                     />
                                 </div>
                                 <div>
-                                    <label className="block text-xs font-medium text-zinc-400 mb-1.5">
+                                    <label className="block text-xs font-medium text-gray-600 mb-1.5">
                                         Plaga/Enfermedad
                                     </label>
                                     <input
@@ -474,54 +568,94 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                         value={formData.plaga_enfermedad || ""}
                                         onChange={handleChange}
                                         placeholder="Motivo del tratamiento"
-                                        className="w-full px-3 py-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-100 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                        className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
                                     />
                                 </div>
                             </div>
-                            <div>
-                                <label className="block text-xs font-medium text-zinc-400 mb-1.5">
+                            <div className="relative">
+                                <label className="block text-xs font-medium text-gray-600 mb-1.5">
                                     Producto *
                                 </label>
-                                <select
-                                    name="producto_id"
-                                    value={formData.producto_id || ""}
+                                <input
+                                    ref={productInputRef}
+                                    type="text"
+                                    value={productInputValue}
                                     onChange={(e) => {
-                                        const id = e.target.value;
-                                        const prod = cuaderno.productos?.find((p) => p.id === id);
+                                        const v = e.target.value;
+                                        setProductInputValue(v);
+                                        setProductDropdownOpen(true);
                                         setFormData((prev) => ({
                                             ...prev,
-                                            producto_id: id,
-                                            nombre_comercial: prod?.nombre_comercial ?? prev.nombre_comercial,
-                                            numero_registro: prod?.numero_registro ?? prev.numero_registro,
-                                            numero_lote: prod?.numero_lote ?? prev.numero_lote,
+                                            producto_id: "",
+                                            nombre_comercial: v,
+                                            numero_registro: prev.producto_id ? "" : prev.numero_registro,
+                                            numero_lote: prev.producto_id ? "" : prev.numero_lote,
                                         }));
                                     }}
-                                    required
-                                    className="w-full px-3 py-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-100 text-sm focus:outline-none focus:border-green-500 transition-colors"
-                                >
-                                    <option value="">Seleccionar...</option>
-                                    {cuaderno.productos?.map((p) => (
-                                        <option key={p.id} value={p.id}>
-                                            {p.nombre_comercial} ({p.numero_registro})
-                                        </option>
-                                    ))}
-                                </select>
+                                    onFocus={() => setProductDropdownOpen(true)}
+                                    onBlur={() => setTimeout(() => setProductDropdownOpen(false), 150)}
+                                    placeholder="Seleccionar producto existente o escribir para crear uno nuevo"
+                                    className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                />
+                                {productDropdownOpen && (
+                                    <div className="absolute z-10 mt-1 w-full max-h-48 overflow-y-auto rounded-lg bg-white border border-gray-300 shadow-xl">
+                                        {productosFiltrados.length > 0 ? (
+                                            <>
+                                                {!productInputValue.trim() && (
+                                                    <div className="px-3 py-1.5 text-[11px] text-gray-500 border-b border-gray-300">
+                                                        {productosFiltrados.length} producto(s) en la hoja — selecciona o escribe para crear
+                                                    </div>
+                                                )}
+                                                {productosFiltrados.map((p) => (
+                                                    <button
+                                                    key={p.id}
+                                                    type="button"
+                                                    onMouseDown={(e) => {
+                                                        e.preventDefault();
+                                                        setProductInputValue(p.nombre_comercial || "");
+                                                        setFormData((prev) => ({
+                                                            ...prev,
+                                                            producto_id: p.id,
+                                                            nombre_comercial: p.nombre_comercial,
+                                                            numero_registro: p.numero_registro,
+                                                            numero_lote: p.numero_lote,
+                                                        }));
+                                                        setProductDropdownOpen(false);
+                                                    }}
+                                                    className="w-full px-3 py-2 text-left text-sm text-gray-800 hover:bg-gray-100 transition-colors"
+                                                >
+                                                    {p.nombre_comercial}
+                                                    {p.numero_registro && (
+                                                        <span className="text-gray-500 ml-1">({p.numero_registro})</span>
+                                                    )}
+                                                    </button>
+                                                ))}
+                                            </>
+                                        ) : (
+                                            <div className="px-3 py-2 text-sm text-gray-500">
+                                                No hay coincidencias. Guarda el tratamiento para crear &quot;{productInputValue || "..."}&quot; en la hoja de Productos
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
                             </div>
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
-                                    <label className="block text-xs font-medium text-zinc-400 mb-1.5">
-                                        Nº Registro (snapshot)
+                                    <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                                        Nº Registro {formData.producto_id ? "(snapshot)" : "(obligatorio si producto nuevo)"}
                                     </label>
                                     <input
                                         type="text"
-                                        readOnly
+                                        name="numero_registro"
                                         value={formData.numero_registro || ""}
-                                        className="w-full px-3 py-2.5 rounded-lg bg-zinc-800 border border-zinc-700 text-zinc-300 text-sm"
-                                        placeholder="Se rellena al elegir producto"
+                                        onChange={handleChange}
+                                        readOnly={!!formData.producto_id}
+                                        className={`w-full px-3 py-2.5 rounded-lg border text-sm ${formData.producto_id ? "bg-gray-100 border-gray-300 text-gray-700" : "bg-white border-gray-300 text-gray-900 focus:outline-none focus:border-green-500"}`}
+                                        placeholder={formData.producto_id ? "Se rellena al elegir producto" : "Ej: ES-12345 o -"}
                                     />
                                 </div>
                                 <div>
-                                    <label className="block text-xs font-medium text-zinc-400 mb-1.5">
+                                    <label className="block text-xs font-medium text-gray-600 mb-1.5">
                                         Nº Lote (snapshot)
                                     </label>
                                     <input
@@ -529,14 +663,14 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                         value={formData.numero_lote ?? ""}
                                         onChange={handleChange}
                                         name="numero_lote"
-                                        className="w-full px-3 py-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-100 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                        className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 text-sm focus:outline-none focus:border-green-500 transition-colors"
                                         placeholder="Se rellena al elegir producto"
                                     />
                                 </div>
                             </div>
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
-                                    <label className="block text-xs font-medium text-zinc-400 mb-1.5">
+                                    <label className="block text-xs font-medium text-gray-600 mb-1.5">
                                         Dosis *
                                     </label>
                                     <input
@@ -547,18 +681,18 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                         required
                                         step="0.01"
                                         placeholder="0.00"
-                                        className="w-full px-3 py-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-100 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                        className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
                                     />
                                 </div>
                                 <div>
-                                    <label className="block text-xs font-medium text-zinc-400 mb-1.5">
+                                    <label className="block text-xs font-medium text-gray-600 mb-1.5">
                                         Unidad
                                     </label>
                                     <select
                                         name="unidad_dosis"
                                         value={formData.unidad_dosis || "L/Ha"}
                                         onChange={handleChange}
-                                        className="w-full px-3 py-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-100 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                        className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 text-sm focus:outline-none focus:border-green-500 transition-colors"
                                     >
                                         <option value="L/Ha">L/Ha</option>
                                         <option value="Kg/Ha">Kg/Ha</option>
@@ -568,7 +702,7 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                 </div>
                             </div>
                             <div>
-                                <label className="block text-xs font-medium text-zinc-400 mb-1.5">
+                                <label className="block text-xs font-medium text-gray-600 mb-1.5">
                                     Operador
                                 </label>
                                 <input
@@ -577,7 +711,297 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                     value={formData.operador || ""}
                                     onChange={handleChange}
                                     placeholder="Nombre del aplicador"
-                                    className="w-full px-3 py-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-100 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                    className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                />
+                            </div>
+                        </>
+                    )}
+
+                    {sheet === "fertilizantes" && (
+                        <>
+                            <div>
+                                <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                                    Parcelas
+                                </label>
+                                <div className="grid grid-cols-2 gap-2 p-3 rounded-lg bg-white border border-gray-300 max-h-32 overflow-y-auto">
+                                    {parcelasOrdenadas.length > 0 ? (
+                                        parcelasOrdenadas.map((p) => (
+                                            <label
+                                                key={p.id}
+                                                className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-gray-100 cursor-pointer"
+                                            >
+                                                <input
+                                                    type="checkbox"
+                                                    name="parcela_ids"
+                                                    value={p.id}
+                                                    checked={Array.isArray(formData.parcela_ids) && formData.parcela_ids.includes(p.id)}
+                                                    onChange={handleCheckbox}
+                                                    className="w-4 h-4 rounded border-gray-400 bg-gray-100 text-green-500 focus:ring-green-500"
+                                                />
+                                                <span className="text-sm text-gray-700">
+                                                    {p.nombre}
+                                                    {!!p.num_orden && <span className="text-gray-500"> · #{p.num_orden}</span>}
+                                                </span>
+                                            </label>
+                                        ))
+                                    ) : (
+                                        <p className="text-gray-500 text-sm col-span-2">No hay parcelas</p>
+                                    )}
+                                </div>
+                            </div>
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                                        Fecha Inicio
+                                    </label>
+                                    <input
+                                        type="date"
+                                        name="fecha_inicio"
+                                        value={formData.fecha_inicio || ""}
+                                        onChange={handleChange}
+                                        className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                                        Fecha Fin
+                                    </label>
+                                    <input
+                                        type="date"
+                                        name="fecha_fin"
+                                        value={formData.fecha_fin || ""}
+                                        onChange={handleChange}
+                                        className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                    />
+                                </div>
+                            </div>
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                                        Cultivo/Especie
+                                    </label>
+                                    <input
+                                        type="text"
+                                        name="cultivo_especie"
+                                        value={formData.cultivo_especie || ""}
+                                        onChange={handleChange}
+                                        placeholder="Ej: Trigo, Olivo"
+                                        className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                                        Tipo Abono
+                                    </label>
+                                    <input
+                                        type="text"
+                                        name="tipo_abono"
+                                        value={formData.tipo_abono || ""}
+                                        onChange={handleChange}
+                                        placeholder="Nombre del abono"
+                                        className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                    />
+                                </div>
+                            </div>
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                                        Riqueza N/P/K
+                                    </label>
+                                    <input
+                                        type="text"
+                                        name="riqueza_npk"
+                                        value={formData.riqueza_npk || ""}
+                                        onChange={handleChange}
+                                        placeholder="Ej: 20-10-10"
+                                        className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                                        Dosis
+                                    </label>
+                                    <input
+                                        type="text"
+                                        name="dosis"
+                                        value={formData.dosis || ""}
+                                        onChange={handleChange}
+                                        placeholder="kg/ha, m³/ha"
+                                        className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                    />
+                                </div>
+                            </div>
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                                        Nº Albarán
+                                    </label>
+                                    <input
+                                        type="text"
+                                        name="num_albaran"
+                                        value={formData.num_albaran || ""}
+                                        onChange={handleChange}
+                                        placeholder="Nº albarán"
+                                        className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                                        Tipo Fertilización
+                                    </label>
+                                    <input
+                                        type="text"
+                                        name="tipo_fertilizacion"
+                                        value={formData.tipo_fertilizacion || ""}
+                                        onChange={handleChange}
+                                        placeholder="Fondo, cobertera..."
+                                        className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                    />
+                                </div>
+                            </div>
+                            <div>
+                                <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                                    Observaciones
+                                </label>
+                                <input
+                                    type="text"
+                                    name="observaciones"
+                                    value={formData.observaciones || ""}
+                                    onChange={handleChange}
+                                    placeholder="Observaciones"
+                                    className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                />
+                            </div>
+                        </>
+                    )}
+
+                    {sheet === "cosecha" && (
+                        <>
+                            <div>
+                                <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                                    Parcelas
+                                </label>
+                                <div className="grid grid-cols-2 gap-2 p-3 rounded-lg bg-white border border-gray-300 max-h-32 overflow-y-auto">
+                                    {parcelasOrdenadas.length > 0 ? (
+                                        parcelasOrdenadas.map((p) => (
+                                            <label
+                                                key={p.id}
+                                                className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-gray-100 cursor-pointer"
+                                            >
+                                                <input
+                                                    type="checkbox"
+                                                    name="parcela_ids"
+                                                    value={p.id}
+                                                    checked={Array.isArray(formData.parcela_ids) && formData.parcela_ids.includes(p.id)}
+                                                    onChange={handleCheckbox}
+                                                    className="w-4 h-4 rounded border-gray-400 bg-gray-100 text-green-500 focus:ring-green-500"
+                                                />
+                                                <span className="text-sm text-gray-700">
+                                                    {p.nombre}
+                                                    {!!p.num_orden && <span className="text-gray-500"> · #{p.num_orden}</span>}
+                                                </span>
+                                            </label>
+                                        ))
+                                    ) : (
+                                        <p className="text-gray-500 text-sm col-span-2">No hay parcelas</p>
+                                    )}
+                                </div>
+                            </div>
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                                        Fecha
+                                    </label>
+                                    <input
+                                        type="date"
+                                        name="fecha"
+                                        value={formData.fecha || ""}
+                                        onChange={handleChange}
+                                        className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                                        Producto
+                                    </label>
+                                    <input
+                                        type="text"
+                                        name="producto"
+                                        value={formData.producto || ""}
+                                        onChange={handleChange}
+                                        placeholder="Producto cosechado"
+                                        className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                    />
+                                </div>
+                            </div>
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                                        Cantidad (kg)
+                                    </label>
+                                    <input
+                                        type="number"
+                                        name="cantidad_kg"
+                                        value={formData.cantidad_kg || ""}
+                                        onChange={handleChange}
+                                        step="0.01"
+                                        placeholder="0"
+                                        className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                                        Nº Albarán
+                                    </label>
+                                    <input
+                                        type="text"
+                                        name="num_albaran"
+                                        value={formData.num_albaran || ""}
+                                        onChange={handleChange}
+                                        placeholder="Nº albarán"
+                                        className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                    />
+                                </div>
+                            </div>
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                                        Nº Lote
+                                    </label>
+                                    <input
+                                        type="text"
+                                        name="num_lote"
+                                        value={formData.num_lote || ""}
+                                        onChange={handleChange}
+                                        placeholder="Lote"
+                                        className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                                        Cliente
+                                    </label>
+                                    <input
+                                        type="text"
+                                        name="cliente_nombre"
+                                        value={formData.cliente_nombre || ""}
+                                        onChange={handleChange}
+                                        placeholder="Nombre del cliente"
+                                        className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                    />
+                                </div>
+                            </div>
+                            <div>
+                                <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                                    Dirección cliente
+                                </label>
+                                <input
+                                    type="text"
+                                    name="cliente_direccion"
+                                    value={formData.cliente_direccion || ""}
+                                    onChange={handleChange}
+                                    placeholder="Dirección"
+                                    className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
                                 />
                             </div>
                         </>
@@ -585,11 +1009,11 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                 </form>
 
                 {/* Footer */}
-                <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-zinc-800 bg-zinc-900/30">
+                <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-gray-200 bg-gray-50">
                     <button
                         type="button"
                         onClick={onClose}
-                        className="px-4 py-2 rounded-lg text-sm font-medium text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
+                        className="px-4 py-2 rounded-lg text-sm font-medium text-gray-600 hover:text-gray-800 hover:bg-gray-100 transition-colors"
                     >
                         Cancelar
                     </button>

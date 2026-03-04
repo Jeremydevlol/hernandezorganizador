@@ -16,6 +16,32 @@ import tempfile
 
 # Ruta al workbook_dictionary (columnas y filas predeterminadas SIGPAC)
 _WORKBOOK_DICT_PATH = Path(__file__).resolve().parent.parent / "src" / "workbook_dictionary.json"
+_MAPPING_PATH = Path(__file__).resolve().parent.parent / "config" / "mapping.json"
+
+# Hojas tipo formulario (inf.gral 1, inf.gral 2): se extraen como Campo | Valor ordenado
+INF_GRAL_SHEET_NAMES = ("inf.gral 1", "inf.gral 2", "inf.gral")
+
+# Mapeo celda -> etiqueta para inf.gral 1 (estructura RTE)
+INF_GRAL_1_CELLS = [
+    ("E6", "Fecha apertura"), ("M6", "Año"),
+    ("D9", "Nombre titular"), ("L9", "NIF/CIF"), ("L10", "Registro autonómico"),
+    ("B11", "Dirección"), ("G11", "Localidad"), ("J11", "Código postal"), ("M11", "Provincia"),
+    ("B12", "Teléfono fijo"), ("F12", "Teléfono móvil"), ("I12", "Email"),
+]
+
+# inf.gral 2: secciones con celdas (formato RTE)
+INF_GRAL_2_HEADER = [("C1", "Explotación / Titular"), ("I1", "Año")]
+INF_GRAL_2_PERSONAS = [  # fila 10
+    ("A10", "Nº orden"), ("B10", "Nombre"), ("C10", "NIF"), ("D10", "Nº ROPO"),
+    ("E10", "Básico"), ("F10", "Cualificado"), ("G10", "Fumigador"), ("H10", "Piloto"), ("I10", "Asesor"),
+]
+INF_GRAL_2_EQUIPOS = [  # fila 17
+    ("A17", "Nº orden"), ("B17", "Descripción equipo"), ("D17", "Nº ROMA"),
+    ("E17", "Fecha adquisición"), ("G17", "Fecha inspección"),
+]
+INF_GRAL_2_ASESOR = [  # fila 24
+    ("A24", "Nombre o razón social"), ("C24", "NIF"), ("E24", "Nº identificación"), ("G24", "Tipo explotación"),
+]
 
 # Excel processing
 try:
@@ -289,8 +315,23 @@ Responde SOLO con el JSON, sin markdown, sin explicaciones."""
             for sheet_name in wb.sheetnames:
                 ws = wb[sheet_name]
                 
+                # Hojas inf.gral 1 / inf.gral 2: extraer como formulario ordenado (Campo | Valor)
+                form_extracted = self._extract_form_sheet(ws, sheet_name)
+                if form_extracted:
+                    sheets_data.append(form_extracted)
+                    for row in form_extracted.get("datos", []):
+                        if len(row) >= 2:
+                            all_data.append({"sheet": sheet_name, "Campo": row[0], "Valor": row[1]})
+                    continue
+
                 # Si la hoja coincide con el workbook_dictionary, usar títulos oficiales y fila 1
+                # Matching exacto primero, luego por prefijo (e.g. "2.1. DATOS PARCELAS (2)")
                 sheet_config = sheets_config.get(sheet_name)
+                if not sheet_config:
+                    for cfg_name, cfg_val in sheets_config.items():
+                        if sheet_name.startswith(cfg_name) and cfg_val.get("type") == "table":
+                            sheet_config = cfg_val
+                            break
                 if sheet_config:
                     parsed = self._apply_sheet_config(ws, sheet_name, sheet_config, doc_name)
                     if parsed:
@@ -748,6 +789,194 @@ Responde SOLO con el JSON, sin markdown, sin explicaciones."""
         except Exception as e:
             return {"error": str(e)}
     
+    def _cell_ref_to_coord(self, cell_ref: str) -> Tuple[int, int]:
+        """Convierte 'E6' -> (6, 5), 'B11' -> (11, 2). openpyxl usa 1-based."""
+        col_str = ""
+        row_str = ""
+        for c in cell_ref.upper():
+            if c.isalpha():
+                col_str += c
+            else:
+                row_str += c
+        col = 0
+        for c in col_str:
+            col = col * 26 + (ord(c) - ord("A") + 1)
+        row = int(row_str) if row_str else 1
+        return (row, col)
+
+    def _extract_form_sheet(self, ws, sheet_name: str) -> Optional[Dict[str, Any]]:
+        """
+        Extrae hojas tipo formulario (inf.gral 1, inf.gral 2) como tabla ordenada Campo | Valor.
+        Así se ven bien en el editor en lugar del grid desordenado original.
+        """
+        sheet_lower = sheet_name.lower().strip()
+        is_inf_gral_1 = "inf.gral 1" in sheet_lower or (sheet_lower.startswith("inf.gral") and "2" not in sheet_lower)
+        is_inf_gral_2 = "inf.gral 2" in sheet_lower
+
+        if is_inf_gral_1:
+            # inf.gral 1: mapeo conocido de celdas
+            pairs = []
+            for cell_ref, label in INF_GRAL_1_CELLS:
+                try:
+                    row, col = self._cell_ref_to_coord(cell_ref)
+                    val = ws.cell(row=row, column=col).value
+                    val_fmt = self._format_cell(val)
+                    if val_fmt is not None and str(val_fmt).strip():
+                        pairs.append([label, str(val_fmt).strip()])
+                except Exception:
+                    pass
+            if pairs:
+                return {
+                    "nombre": sheet_name,
+                    "columnas": ["Campo", "Valor"],
+                    "datos": pairs,
+                    "num_filas": len(pairs),
+                    "num_columnas": 2,
+                }
+
+        if is_inf_gral_2:
+            return self._extract_inf_gral_2(ws, sheet_name)
+
+        # Cualquier hoja que empiece por inf.gral: intentar escaneo genérico
+        if "inf.gral" in sheet_lower:
+            return self._extract_form_by_scan(ws, sheet_name)
+        return None
+
+    def _extract_inf_gral_2(self, ws, sheet_name: str) -> Optional[Dict[str, Any]]:
+        """
+        Extrae inf.gral 2 como tabla ordenada Campo | Valor.
+        Secciones: 1) Cabecera | 2) Personas | 3) Equipos | 4) Asesor
+        """
+        pairs: List[List[str]] = []
+
+        def _add_cell(cell_ref: str, label: str) -> None:
+            row, col = self._cell_ref_to_coord(cell_ref)
+            val = ws.cell(row=row, column=col).value
+            val_fmt = self._format_cell(val)
+            if val_fmt is not None and str(val_fmt).strip():
+                pairs.append([label, str(val_fmt).strip()])
+
+        for cell_ref, label in INF_GRAL_2_HEADER:
+            _add_cell(cell_ref, label)
+
+        pairs.append(["--- 1.2 PERSONAS ---", ""])
+        # Personas (1.2): fila 10
+        for cell_ref, label in INF_GRAL_2_PERSONAS:
+            row, col = self._cell_ref_to_coord(cell_ref)
+            val = ws.cell(row=row, column=col).value
+            val_fmt = self._format_cell(val)
+            if val_fmt is not None and str(val_fmt).strip():
+                pairs.append([label, str(val_fmt).strip()])
+        # Más filas de personas (11, 12, 13, 14)
+        for extra_row in range(11, 15):
+            a_val = ws.cell(row=extra_row, column=1).value
+            if a_val is None or not str(a_val).strip():
+                continue
+            pairs.append([f"--- Persona {extra_row - 9} ---", ""])
+            for cell_ref, label in INF_GRAL_2_PERSONAS:
+                _, c = self._cell_ref_to_coord(cell_ref)
+                val = ws.cell(row=extra_row, column=c).value
+                val_fmt = self._format_cell(val)
+                if val_fmt is not None and str(val_fmt).strip():
+                    pairs.append([label, str(val_fmt).strip()])
+
+        pairs.append(["--- 1.3 EQUIPOS ---", ""])
+        # Equipos (1.3): fila 17 + posibles filas 18+
+        for cell_ref, label in INF_GRAL_2_EQUIPOS:
+            row, col = self._cell_ref_to_coord(cell_ref)
+            val = ws.cell(row=row, column=col).value
+            val_fmt = self._format_cell(val)
+            if val_fmt is not None and str(val_fmt).strip():
+                pairs.append([label, str(val_fmt).strip()])
+        for extra_row in range(18, 22):
+            a_val = ws.cell(row=extra_row, column=1).value
+            if a_val is None or not str(a_val).strip():
+                continue
+            pairs.append([f"--- Equipo {extra_row - 16} ---", ""])
+            for cell_ref, label in INF_GRAL_2_EQUIPOS:
+                _, c = self._cell_ref_to_coord(cell_ref)
+                val = ws.cell(row=extra_row, column=c).value
+                val_fmt = self._format_cell(val)
+                if val_fmt is not None and str(val_fmt).strip():
+                    pairs.append([label, str(val_fmt).strip()])
+
+        pairs.append(["--- 1.4 ASESOR ---", ""])
+        # Asesor (1.4): fila 24
+        for cell_ref, label in INF_GRAL_2_ASESOR:
+            _add_cell(cell_ref, label)
+
+        if pairs:
+            return {
+                "nombre": sheet_name,
+                "columnas": ["Campo", "Valor"],
+                "datos": pairs,
+                "num_filas": len(pairs),
+                "num_columnas": 2,
+            }
+        return self._extract_form_by_scan(ws, sheet_name)
+
+    def _extract_form_by_scan(self, ws, sheet_name: str) -> Optional[Dict[str, Any]]:
+        """
+        Escanea la hoja buscando patrones label: valor.
+        Labels: texto que termina en : o coincide con etiquetas conocidas.
+        Valor: celda a la derecha o en la misma celda tras ':'.
+        """
+        rows = []
+        for row in ws.iter_rows(values_only=True):
+            rows.append([self._format_cell(c) for c in row])
+
+        pairs = []
+        seen_labels = set()
+        label_patterns = (
+            "dirección", "direccion", "teléfono", "telefono", "titular", "nif", "nombre",
+            "localidad", "c. postal", "codigo postal", "provincia", "e-mail", "email",
+            "fecha", "año", "ano", "registro", "representante", "firma", "fecha"
+        )
+
+        for r_idx, row in enumerate(rows):
+            for c_idx, cell in enumerate(row):
+                if cell is None or not str(cell).strip():
+                    continue
+                s = str(cell).strip()
+                if len(s) < 3:
+                    continue
+                s_lower = s.lower()
+
+                # Caso 1: "Label: Valor" en la misma celda
+                if ":" in s and not s.strip().endswith(":"):
+                    parts = s.split(":", 1)
+                    label = parts[0].strip()
+                    value = parts[1].strip() if len(parts) > 1 else ""
+                    if label and len(label) > 1 and label.lower() not in seen_labels:
+                        seen_labels.add(label.lower())
+                        if value or any(x in label.lower() for x in label_patterns):
+                            pairs.append([label, value or "-"])
+
+                # Caso 2: Celda parece label (termina en : o es etiqueta conocida)
+                elif s.endswith(":") or any(p in s_lower for p in label_patterns):
+                    label = s.rstrip(":").strip()
+                    if not label or label.lower() in seen_labels:
+                        continue
+                    value = ""
+                    for dc in range(1, 6):
+                        if c_idx + dc < len(row):
+                            v = row[c_idx + dc]
+                            if v is not None and str(v).strip():
+                                value = str(v).strip()
+                                break
+                    seen_labels.add(label.lower())
+                    pairs.append([label, value or "-"])
+
+        if pairs:
+            return {
+                "nombre": sheet_name,
+                "columnas": ["Campo", "Valor"],
+                "datos": pairs,
+                "num_filas": len(pairs),
+                "num_columnas": 2,
+            }
+        return None
+
     def _format_cell(self, value: Any) -> Any:
         """Formatea valores de celda para JSON"""
         if value is None:

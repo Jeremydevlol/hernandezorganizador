@@ -18,10 +18,11 @@ from pydantic import BaseModel, Field
 
 from .models import (
     CuadernoExplotacion, Parcela, ProductoFitosanitario,
-    ProductoAplicado, Tratamiento, EstadoTratamiento, TipoProducto, HojaExcel
+    ProductoAplicado, Tratamiento, EstadoTratamiento, TipoProducto, HojaExcel,
+    Fertilizacion, Cosecha
 )
 from .storage import get_storage
-from .pdf_generator import PDFGenerator
+from .pdf_generator import PDFGenerator, _sort_key_parcela
 from .file_processor import FileProcessor, get_processor
 
 
@@ -98,6 +99,33 @@ class TratamientoCreate(BaseModel):
     hora_inicio: str = ""
     hora_fin: str = ""
     observaciones: str = ""
+
+
+class FertilizacionCreate(BaseModel):
+    fecha_inicio: str = ""
+    fecha_fin: str = ""
+    parcela_ids: List[str] = Field(default_factory=list)  # Se convierte a num_orden_parcelas
+    cultivo_especie: str = ""
+    cultivo_variedad: str = ""
+    tipo_abono: str = ""
+    num_albaran: str = ""
+    riqueza_npk: str = ""
+    dosis: str = ""
+    tipo_fertilizacion: str = ""
+    observaciones: str = ""
+
+
+class CosechaCreate(BaseModel):
+    fecha: str = ""
+    producto: str = ""
+    cantidad_kg: float = 0.0
+    parcela_ids: List[str] = Field(default_factory=list)  # Se convierte a num_orden_parcelas
+    num_albaran: str = ""
+    num_lote: str = ""
+    cliente_nombre: str = ""
+    cliente_nif: str = ""
+    cliente_direccion: str = ""
+    cliente_rgseaa: str = ""
 
 
 class TratamientoUpdate(BaseModel):
@@ -280,7 +308,7 @@ async def actualizar_celda(cuaderno_id: str, data: CellPatch):
     if not cuaderno:
         raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
     sheet_id = data.sheet_id
-    if sheet_id in ("parcelas", "productos", "tratamientos"):
+    if sheet_id in ("parcelas", "productos", "tratamientos", "fertilizantes", "cosecha"):
         raw_row = data.row
         entity_id = str(raw_row)
         column = str(data.column).strip()
@@ -290,8 +318,12 @@ async def actualizar_celda(cuaderno_id: str, data: CellPatch):
             items = cuaderno.parcelas
         elif sheet_id == "productos":
             items = cuaderno.productos
-        else:
+        elif sheet_id == "tratamientos":
             items = cuaderno.tratamientos
+        elif sheet_id == "fertilizantes":
+            items = getattr(cuaderno, "fertilizaciones", [])
+        else:  # cosecha
+            items = getattr(cuaderno, "cosechas", [])
         if items and entity_id and not any(getattr(it, "id", None) == entity_id for it in items):
             try:
                 idx = int(raw_row)
@@ -312,8 +344,6 @@ async def actualizar_celda(cuaderno_id: str, data: CellPatch):
             # tratamientos (campos mostrados en tabla)
             "parcela_nombres": "num_orden_parcelas",
             "parcelas": "num_orden_parcelas",
-            "productos_display": "observaciones",
-            "dosis_display": "observaciones",
         }
         col_norm = column.lower()
         mapped_column = aliases.get(col_norm, column)
@@ -574,8 +604,7 @@ def _validar_tratamiento_create(data: TratamientoCreate, cuaderno: CuadernoExplo
 @router.post("/{cuaderno_id}/tratamientos")
 async def crear_tratamiento(cuaderno_id: str, data: TratamientoCreate):
     """
-    Registra un nuevo tratamiento.
-    Validaciones: fecha obligatoria, al menos una parcela, al menos un producto con dosis.
+    Registra un nuevo tratamiento desglosado: 1 línea por parcela × 1 línea por producto.
     """
     storage = get_storage()
     cuaderno = storage.cargar(cuaderno_id)
@@ -599,7 +628,7 @@ async def crear_tratamiento(cuaderno_id: str, data: TratamientoCreate):
         )
         productos_aplicados.append(prod)
     
-    tratamiento = Tratamiento(
+    plantilla = Tratamiento(
         fecha_aplicacion=data.fecha_aplicacion.strip(),
         parcela_ids=data.parcela_ids,
         productos=productos_aplicados,
@@ -613,13 +642,13 @@ async def crear_tratamiento(cuaderno_id: str, data: TratamientoCreate):
         observaciones=data.observaciones
     )
     
-    cuaderno.agregar_tratamiento(tratamiento)
+    creados = cuaderno.agregar_tratamiento_desglosado(plantilla)
     storage.guardar(cuaderno)
     
     return {
         "success": True,
-        "tratamiento": tratamiento.to_dict(),
-        "message": f"Tratamiento registrado en {len(data.parcela_ids)} parcela(s)"
+        "tratamientos": [t.to_dict() for t in creados],
+        "message": f"{len(creados)} línea(s) creada(s) ({len(data.parcela_ids)} parcela(s) × {len(productos_aplicados)} producto(s))"
     }
 
 
@@ -684,6 +713,85 @@ async def eliminar_tratamiento(cuaderno_id: str, tratamiento_id: str):
     return {"success": True, "message": "Tratamiento eliminado"}
 
 
+# ============================================
+# FERTILIZACIONES
+# ============================================
+
+@router.post("/{cuaderno_id}/fertilizaciones")
+async def crear_fertilizacion(cuaderno_id: str, data: FertilizacionCreate):
+    """Añade un registro de fertilización."""
+    storage = get_storage()
+    cuaderno = storage.cargar(cuaderno_id)
+    if not cuaderno:
+        raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
+
+    # Convertir parcela_ids a num_orden_parcelas
+    num_orden_parcelas = ""
+    if data.parcela_ids:
+        ordenes = []
+        for pid in data.parcela_ids:
+            p = cuaderno.obtener_parcela(pid)
+            if p and p.num_orden:
+                ordenes.append(str(p.num_orden))
+        num_orden_parcelas = ",".join(ordenes) if ordenes else ",".join(data.parcela_ids)
+
+    fertilizacion = Fertilizacion(
+        fecha_inicio=data.fecha_inicio,
+        fecha_fin=data.fecha_fin,
+        num_orden_parcelas=num_orden_parcelas,
+        cultivo_especie=data.cultivo_especie,
+        cultivo_variedad=data.cultivo_variedad,
+        tipo_abono=data.tipo_abono,
+        num_albaran=data.num_albaran,
+        riqueza_npk=data.riqueza_npk,
+        dosis=data.dosis,
+        tipo_fertilizacion=data.tipo_fertilizacion,
+        observaciones=data.observaciones,
+    )
+    cuaderno.agregar_fertilizacion(fertilizacion)
+    storage.guardar(cuaderno)
+    return {"fertilizacion": fertilizacion.to_dict()}
+
+
+# ============================================
+# COSECHAS
+# ============================================
+
+@router.post("/{cuaderno_id}/cosechas")
+async def crear_cosecha(cuaderno_id: str, data: CosechaCreate):
+    """Añade un registro de cosecha."""
+    storage = get_storage()
+    cuaderno = storage.cargar(cuaderno_id)
+    if not cuaderno:
+        raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
+
+    # Convertir parcela_ids a num_orden_parcelas
+    num_orden_parcelas = ""
+    if data.parcela_ids:
+        ordenes = []
+        for pid in data.parcela_ids:
+            p = cuaderno.obtener_parcela(pid)
+            if p and p.num_orden:
+                ordenes.append(str(p.num_orden))
+        num_orden_parcelas = ",".join(ordenes) if ordenes else ",".join(data.parcela_ids)
+
+    cosecha = Cosecha(
+        fecha=data.fecha,
+        producto=data.producto,
+        cantidad_kg=data.cantidad_kg,
+        num_orden_parcelas=num_orden_parcelas,
+        num_albaran=data.num_albaran,
+        num_lote=data.num_lote,
+        cliente_nombre=data.cliente_nombre,
+        cliente_nif=data.cliente_nif,
+        cliente_direccion=data.cliente_direccion,
+        cliente_rgseaa=data.cliente_rgseaa,
+    )
+    cuaderno.agregar_cosecha(cosecha)
+    storage.guardar(cuaderno)
+    return {"cosecha": cosecha.to_dict()}
+
+
 @router.post("/{cuaderno_id}/tratamientos/{tratamiento_id}/duplicar")
 async def duplicar_tratamiento(cuaderno_id: str, tratamiento_id: str):
     """Duplica un tratamiento (nuevo ID, mismo resto de datos)."""
@@ -723,6 +831,32 @@ async def duplicar_tratamiento(cuaderno_id: str, tratamiento_id: str):
     cuaderno.agregar_tratamiento(nuevo)
     storage.guardar(cuaderno)
     return {"success": True, "tratamiento": nuevo.to_dict(), "message": "Tratamiento duplicado"}
+
+
+class CopiarAParcelas(BaseModel):
+    parcela_ids: List[str]
+
+@router.post("/{cuaderno_id}/tratamientos/{tratamiento_id}/copiar-a-parcelas")
+async def copiar_tratamiento_a_parcelas(cuaderno_id: str, tratamiento_id: str, data: CopiarAParcelas):
+    """Copia un tratamiento existente a otras parcelas (1 línea por parcela por producto)."""
+    storage = get_storage()
+    cuaderno = storage.cargar(cuaderno_id)
+    if not cuaderno:
+        raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
+    if not data.parcela_ids:
+        raise HTTPException(status_code=400, detail="Debes seleccionar al menos una parcela destino")
+    for pid in data.parcela_ids:
+        if not cuaderno.obtener_parcela(pid):
+            raise HTTPException(status_code=400, detail=f"Parcela no encontrada: {pid}")
+    creados = cuaderno.copiar_tratamiento_a_parcelas(tratamiento_id, data.parcela_ids)
+    if not creados:
+        raise HTTPException(status_code=404, detail="Tratamiento origen no encontrado")
+    storage.guardar(cuaderno)
+    return {
+        "success": True,
+        "tratamientos": [t.to_dict() for t in creados],
+        "message": f"Tratamiento copiado a {len(data.parcela_ids)} parcela(s) ({len(creados)} línea(s))"
+    }
 
 
 @router.get("/{cuaderno_id}/historico")
@@ -781,6 +915,9 @@ async def exportar_pdf_cuaderno(
     desde: Optional[str] = Query(None, description="Solo tratamientos desde (YYYY-MM-DD)"),
     hasta: Optional[str] = Query(None, description="Solo tratamientos hasta (YYYY-MM-DD)"),
     incluir_hojas: Optional[str] = Query(None, description="IDs de hojas a incluir separados por coma (ej: 'uuid1,uuid2')"),
+    orden_parcelas: Optional[str] = Query(None, description="IDs de parcelas en el orden deseado (separados por coma)"),
+    orden_tratamientos: Optional[str] = Query(None, description="IDs de tratamientos en el orden deseado (separados por coma)"),
+    orden_parcelas_modo: Optional[str] = Query(None, description="Modo de orden: num_orden, cultivo, alfabetico, etc."),
     check_hojas_editadas: Optional[bool] = Query(False, description="Solo verificar si hay hojas editadas sin exportar"),
 ):
     """
@@ -826,9 +963,10 @@ async def exportar_pdf_cuaderno(
         })
     
     # Procesar lista de hojas a incluir.
-    # Si el usuario no especifica incluir_hojas, incluir automáticamente todas las hojas editadas.
-    sheet_ids_a_incluir = []
-    if incluir_hojas:
+    # incluir_hojas presente (aunque vacío) = usuario eligió explícitamente; "" = ninguna.
+    # incluir_hojas ausente = incluir todas las editadas por defecto.
+    sheet_ids_a_incluir: List[str] = []
+    if incluir_hojas is not None:
         sheet_ids_a_incluir = [s.strip() for s in incluir_hojas.split(",") if s.strip()]
     elif hojas_editadas:
         sheet_ids_a_incluir = [h["sheet_id"] for h in hojas_editadas]
@@ -847,10 +985,15 @@ async def exportar_pdf_cuaderno(
     
     try:
         generator = PDFGenerator()
+        orden_parcelas_list = [s.strip() for s in orden_parcelas.split(",")] if orden_parcelas else None
+        orden_tratamientos_list = [s.strip() for s in orden_tratamientos.split(",")] if orden_tratamientos else None
         generator.generar_cuaderno_completo(
             cuaderno, str(output_path),
             date_desde=desde, date_hasta=hasta,
-            hojas_a_incluir=sheet_ids_a_incluir if sheet_ids_a_incluir else None
+            hojas_a_incluir=sheet_ids_a_incluir if sheet_ids_a_incluir else None,
+            orden_parcelas=orden_parcelas_list,
+            orden_tratamientos=orden_tratamientos_list,
+            orden_parcelas_modo=orden_parcelas_modo,
         )
         
         return FileResponse(
@@ -912,6 +1055,10 @@ async def exportar_excel_cuaderno(
     cuaderno_id: str,
     desde: Optional[str] = Query(None, description="Solo tratamientos desde (YYYY-MM-DD)"),
     hasta: Optional[str] = Query(None, description="Solo tratamientos hasta (YYYY-MM-DD)"),
+    incluir_hojas: Optional[str] = Query(None, description="IDs de hojas a incluir separados por coma; '' = ninguna"),
+    orden_parcelas: Optional[str] = Query(None, description="IDs de parcelas en el orden deseado (separados por coma)"),
+    orden_tratamientos: Optional[str] = Query(None, description="IDs de tratamientos en el orden deseado (separados por coma)"),
+    orden_parcelas_modo: Optional[str] = Query(None, description="Modo de orden: num_orden, cultivo, alfabetico, etc."),
 ):
     """
     Exporta el cuaderno completo a un archivo Excel (.xlsx).
@@ -922,6 +1069,32 @@ async def exportar_excel_cuaderno(
     
     if not cuaderno:
         raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
+
+    # Ordenar parcelas y tratamientos según el orden del editor
+    parcelas_ordenadas = list(cuaderno.parcelas)
+    if orden_parcelas_modo:
+        parcelas_ordenadas = sorted(
+            parcelas_ordenadas,
+            key=lambda p: _sort_key_parcela(p, orden_parcelas_modo)
+        )
+    elif orden_parcelas:
+        orden_ids = [s.strip() for s in orden_parcelas.split(",") if s.strip()]
+        if orden_ids:
+            id_to_idx = {pid: i for i, pid in enumerate(orden_ids)}
+            parcelas_ordenadas = sorted(
+                parcelas_ordenadas,
+                key=lambda p: (id_to_idx.get(p.id, 99999), p.num_orden or 0)
+            )
+
+    tratamientos_ordenados = list(cuaderno.tratamientos)
+    if orden_tratamientos:
+        orden_ids = [s.strip() for s in orden_tratamientos.split(",") if s.strip()]
+        if orden_ids:
+            id_to_idx = {tid: i for i, tid in enumerate(orden_ids)}
+            tratamientos_ordenados = sorted(
+                tratamientos_ordenados,
+                key=lambda t: (id_to_idx.get(t.id, 99999), t.fecha_aplicacion or "")
+            )
     
     try:
         from openpyxl import Workbook
@@ -984,7 +1157,7 @@ async def exportar_excel_cuaderno(
     for c, col_name in enumerate(parc_cols, 1):
         ws_parc.cell(row=1, column=c, value=col_name)
     _style_header(ws_parc, 1, len(parc_cols))
-    for r, p in enumerate(cuaderno.parcelas, 2):
+    for r, p in enumerate(parcelas_ordenadas, 2):
         vals = [p.num_orden, p.nombre, p.codigo_provincia, p.termino_municipal,
                 p.num_poligono, p.num_parcela, p.num_recinto, p.uso_sigpac,
                 p.superficie_sigpac, p.superficie_cultivada, p.especie, p.variedad,
@@ -996,10 +1169,10 @@ async def exportar_excel_cuaderno(
     for c in range(1, len(parc_cols) + 1):
         ws_parc.column_dimensions[ws_parc.cell(row=1, column=c).column_letter].width = max(12, len(parc_cols[c-1]) + 4)
     # Totalizar hectáreas
-    total_row = len(cuaderno.parcelas) + 2
+    total_row = len(parcelas_ordenadas) + 2
     ws_parc.cell(row=total_row, column=9, value="TOTAL:").font = Font(bold=True)
     ws_parc.cell(row=total_row, column=10, value=sum(
-        p.superficie_cultivada or p.superficie_ha or p.superficie_sigpac or 0 for p in cuaderno.parcelas
+        p.superficie_cultivada or p.superficie_ha or p.superficie_sigpac or 0 for p in parcelas_ordenadas
     )).font = Font(bold=True, color="2E7D32")
     
     # ---- Hoja Productos ----
@@ -1027,7 +1200,7 @@ async def exportar_excel_cuaderno(
         ws_trat.cell(row=1, column=c, value=col_name)
     _style_header(ws_trat, 1, len(trat_cols))
     
-    tratamientos = cuaderno.tratamientos
+    tratamientos = tratamientos_ordenados
     if desde or hasta:
         if desde:
             tratamientos = [t for t in tratamientos if (t.fecha_aplicacion or "") >= desde]
@@ -1035,7 +1208,7 @@ async def exportar_excel_cuaderno(
             tratamientos = [t for t in tratamientos if (t.fecha_aplicacion or "") <= hasta]
     
     row = 2
-    for t in sorted(tratamientos, key=lambda x: x.fecha_aplicacion or "", reverse=True):
+    for t in tratamientos:
         parcela_names = ", ".join(t.parcela_nombres) if t.parcela_nombres else t.num_orden_parcelas
         productos_str = ", ".join(p.nombre_comercial for p in t.productos) if t.productos else ""
         registros_str = ", ".join(p.numero_registro for p in t.productos) if t.productos else ""
@@ -1086,7 +1259,13 @@ async def exportar_excel_cuaderno(
             ws_cos.column_dimensions[ws_cos.cell(row=1, column=c).column_letter].width = max(12, len(cos_cols[c-1]) + 4)
     
     # ---- Hojas importadas ----
-    for hoja in cuaderno.hojas_originales:
+    sheet_ids_a_incluir: List[str] = []
+    if incluir_hojas is not None:
+        sheet_ids_a_incluir = [s.strip() for s in incluir_hojas.split(",") if s.strip()]
+    hojas_a_exportar = cuaderno.hojas_originales
+    if incluir_hojas is not None:
+        hojas_a_exportar = [h for h in cuaderno.hojas_originales if h.sheet_id in sheet_ids_a_incluir]
+    for hoja in hojas_a_exportar:
         if not hoja.datos:
             continue
         safe_name = re.sub(r'[\[\]:*?/\\]', '', hoja.nombre)[:31]
@@ -1172,6 +1351,263 @@ async def analizar_archivo(file: UploadFile = File(...)):
         )
 
 
+# ============================================
+# MAPEO DIRECTO: Hojas conocidas → Modelos
+# Sin depender de GPT para datos estructurados
+# ============================================
+
+_PARCELAS_COLUMN_MAP = {
+    # From workbook_dictionary (formatted keys)
+    "Nro Orden": "num_orden",
+    "Codigo Provincia": "codigo_provincia",
+    "Municipio": "termino_municipal",
+    "Codigo Agregado": "codigo_agregado",
+    "Zona": "zona",
+    "Polygon": "num_poligono",
+    "Parcel": "num_parcela",
+    "Recinto": "num_recinto",
+    "Uso Sigpac": "uso_sigpac",
+    "Superficie Sigpac": "superficie_sigpac",
+    "Superficie Cultivada": "superficie_cultivada",
+    "Crop": "especie",
+    "Ecoregimen": "ecoregimen",
+    "Secano Regadio": "secano_regadio",
+}
+
+_TRATAMIENTOS_COLUMN_MAP = {
+    "Id Parcelas": "id_parcelas",
+    "Especie": "especie",
+    "Variedad": "variedad",
+    "Superficie Tratada": "superficie_tratada",
+    "Fecha": "fecha",
+    "Problema Fito": "problema_fito",
+    "Aplicador": "aplicador",
+    "Equipo": "equipo",
+    "Producto": "producto",
+    "Nro Registro": "nro_registro",
+    "Dosis": "dosis",
+    "Eficacia": "eficacia",
+    "Observaciones": "observaciones",
+}
+
+_FERTILIZANTES_COLUMN_MAP = {
+    "Fecha Inicio": "fecha_inicio",
+    "Fecha Fin": "fecha_fin",
+    "Parcelas": "parcelas",
+    "Especie": "especie",
+    "Variedad": "variedad",
+    "Tipo Abono": "tipo_abono",
+    "Albaran": "albaran",
+    "Riqueza N": "riqueza_n",
+    "Riqueza P": "riqueza_p",
+    "Riqueza K": "riqueza_k",
+    "Dosis": "dosis",
+    "Tipo Fertilizacion": "tipo_fertilizacion",
+    "Observaciones": "observaciones",
+}
+
+_COSECHA_COLUMN_MAP = {
+    "Fecha": "fecha",
+    "Producto": "producto",
+    "Cantidad Kg": "cantidad_kg",
+    "Parcelas Origen": "parcelas_origen",
+    "Albaran": "albaran",
+    "Lote": "lote",
+    "Cliente Nombre": "cliente_nombre",
+    "Cliente Nif": "cliente_nif",
+    "Cliente Direccion": "cliente_direccion",
+    "Rgseaa": "rgseaa",
+}
+
+_KNOWN_PARCELAS_SHEETS = {"2.1. DATOS PARCELAS", "2.1. DATOS PARCELAS (2)"}
+_KNOWN_TRATAMIENTOS_SHEETS = {"inf.trat 1"}
+_KNOWN_FERTILIZANTES_SHEETS = {"reg.fert."}
+_KNOWN_COSECHA_SHEETS = {"reg. cosecha"}
+
+
+_PARCELAS_RAW_ALIASES = {
+    "nº de\norden": "num_orden",
+    "código\nprovincia": "codigo_provincia",
+    "término municipal": "termino_municipal",
+    "término municipal\n(código y nombre)": "termino_municipal",
+    "código\nagregado": "codigo_agregado",
+    "nº de\npolígono": "num_poligono",
+    "nº de\nparcela": "num_parcela",
+    "nº de\nrecinto": "num_recinto",
+    "uso sigpac": "uso_sigpac",
+    "superficie\nsigpac (ha)": "superficie_sigpac",
+    "superficie\ncultivada\n(ha)": "superficie_cultivada",
+    "especie/\nvariedad": "especie",
+    "ecoregimen/\npráctica\n(4)": "ecoregimen",
+    "secano/\nregadío": "secano_regadio",
+}
+
+
+def _row_to_dict(columnas: List[str], row: list, col_map: dict, raw_aliases: dict = None) -> dict:
+    """Convierte una fila de hoja con sus columnas a un dict usando el col_map y aliases opcionales."""
+    d = {}
+    for i, col_name in enumerate(columnas):
+        field = col_map.get(col_name)
+        if not field and raw_aliases:
+            norm = col_name.lower().strip()
+            field = raw_aliases.get(norm)
+        if field and i < len(row):
+            val = row[i]
+            if val is not None and str(val).strip():
+                d[field] = val
+    return d
+
+
+def _extraer_parcelas_directas(hojas: List[dict]) -> List[Parcela]:
+    """Extrae parcelas directamente de hojas conocidas sin GPT. Evita duplicados por clave única."""
+    parcelas = []
+    vistos: set = set()  # (termino, poligono, parcela, recinto) para evitar duplicados entre hojas
+    for hoja in hojas:
+        nombre_hoja = hoja.get("nombre", "")
+        es_parcelas = any(known in nombre_hoja for known in _KNOWN_PARCELAS_SHEETS)
+        if not es_parcelas:
+            continue
+        columnas = hoja.get("columnas", [])
+        for row in hoja.get("datos", []):
+            d = _row_to_dict(columnas, row, _PARCELAS_COLUMN_MAP, _PARCELAS_RAW_ALIASES)
+            if not d:
+                continue
+            num_orden_raw = d.get("num_orden")
+            try:
+                num_orden = int(float(str(num_orden_raw))) if num_orden_raw else 0
+            except (ValueError, TypeError):
+                num_orden = 0
+            if num_orden == 0:
+                continue
+            sup_sigpac = 0.0
+            try:
+                sup_sigpac = float(str(d.get("superficie_sigpac", 0)).replace(",", "."))
+            except (ValueError, TypeError):
+                pass
+            sup_cultivada = 0.0
+            try:
+                sup_cultivada = float(str(d.get("superficie_cultivada", 0)).replace(",", "."))
+            except (ValueError, TypeError):
+                pass
+            especie = str(d.get("especie", "")).strip()
+            termino = str(d.get("termino_municipal", "")).strip()
+            nombre_gen = f"Parcela {num_orden}"
+            if termino:
+                nombre_gen = f"{termino} P{d.get('num_poligono', '')}-{d.get('num_parcela', '')}-{d.get('num_recinto', '')}"
+
+            parcela = Parcela(
+                num_orden=num_orden,
+                nombre=nombre_gen,
+                codigo_provincia=str(d.get("codigo_provincia", "")).strip(),
+                termino_municipal=termino,
+                codigo_agregado=str(d.get("codigo_agregado", "")).strip(),
+                zona=str(d.get("zona", "")).strip(),
+                num_poligono=str(d.get("num_poligono", "")).strip(),
+                num_parcela=str(d.get("num_parcela", "")).strip(),
+                num_recinto=str(d.get("num_recinto", "")).strip(),
+                uso_sigpac=str(d.get("uso_sigpac", "")).strip(),
+                superficie_sigpac=sup_sigpac,
+                superficie_cultivada=sup_cultivada,
+                superficie_ha=sup_cultivada or sup_sigpac,
+                especie=especie,
+                cultivo=especie,
+                ecoregimen=str(d.get("ecoregimen", "")).strip(),
+                secano_regadio=str(d.get("secano_regadio", "")).strip(),
+            )
+            clave = (termino, str(d.get("num_poligono", "")).strip(), str(d.get("num_parcela", "")).strip(), str(d.get("num_recinto", "")).strip())
+            if clave in vistos:
+                continue
+            vistos.add(clave)
+            parcelas.append(parcela)
+    return parcelas
+
+
+def _extraer_tratamientos_directos(hojas: List[dict], parcelas: List[Parcela]) -> List[Tratamiento]:
+    """Extrae tratamientos directamente de hojas conocidas sin GPT. 1 línea = 1 registro."""
+    tratamientos = []
+    for hoja in hojas:
+        nombre_hoja = hoja.get("nombre", "")
+        es_trat = any(known in nombre_hoja for known in _KNOWN_TRATAMIENTOS_SHEETS)
+        if not es_trat:
+            continue
+        columnas = hoja.get("columnas", [])
+        for row in hoja.get("datos", []):
+            d = _row_to_dict(columnas, row, _TRATAMIENTOS_COLUMN_MAP)
+            if not d:
+                continue
+            fecha_raw = str(d.get("fecha", "")).strip()
+            producto = str(d.get("producto", "")).strip()
+            if not fecha_raw and not producto:
+                continue
+            fecha = ""
+            if fecha_raw:
+                try:
+                    if "/" in fecha_raw:
+                        parts = fecha_raw.split("/")
+                        if len(parts) == 3:
+                            dd, mm, yy = parts
+                            if len(yy) == 2:
+                                yy = "20" + yy
+                            fecha = f"{yy}-{mm.zfill(2)}-{dd.zfill(2)}"
+                    elif "-" in fecha_raw and len(fecha_raw) >= 10:
+                        fecha = fecha_raw[:10]
+                    else:
+                        fecha = fecha_raw
+                except Exception:
+                    fecha = fecha_raw
+
+            id_parcelas_str = str(d.get("id_parcelas", "")).strip()
+            parcela_ids = []
+            parcela_nombres = []
+            if id_parcelas_str:
+                ordenes = [x.strip() for x in id_parcelas_str.replace(";", ",").split(",") if x.strip()]
+                for o in ordenes:
+                    try:
+                        orden_num = int(float(o))
+                    except (ValueError, TypeError):
+                        continue
+                    for p in parcelas:
+                        if p.num_orden == orden_num:
+                            parcela_ids.append(p.id)
+                            parcela_nombres.append(p.nombre)
+                            break
+
+            sup = 0.0
+            try:
+                sup = float(str(d.get("superficie_tratada", 0)).replace(",", "."))
+            except (ValueError, TypeError):
+                pass
+            dosis = 0.0
+            try:
+                dosis = float(str(d.get("dosis", 0)).replace(",", "."))
+            except (ValueError, TypeError):
+                pass
+
+            prod_aplicado = ProductoAplicado(
+                nombre_comercial=producto,
+                numero_registro=str(d.get("nro_registro", "")).strip(),
+                dosis=dosis,
+                unidad_dosis="L/Ha",
+            )
+            t = Tratamiento(
+                fecha_aplicacion=fecha,
+                parcela_ids=parcela_ids,
+                parcela_nombres=parcela_nombres,
+                num_orden_parcelas=id_parcelas_str,
+                cultivo_especie=str(d.get("especie", "")).strip(),
+                superficie_tratada=sup,
+                problema_fitosanitario=str(d.get("problema_fito", "")).strip(),
+                aplicador=str(d.get("aplicador", "")).strip(),
+                equipo=str(d.get("equipo", "")).strip(),
+                productos=[prod_aplicado],
+                eficacia=str(d.get("eficacia", "")).strip(),
+                observaciones=str(d.get("observaciones", "")).strip(),
+                estado=EstadoTratamiento.APLICADO,
+            )
+            tratamientos.append(t)
+    return tratamientos
+
+
 @router.post("/upload/create-from-file")
 async def crear_cuaderno_desde_archivo(
     file: UploadFile = File(...),
@@ -1219,22 +1655,29 @@ async def crear_cuaderno_desde_archivo(
             año=datetime.now().year
         )
         
-        # Añadir parcelas extraídas
-        parcelas_data = analisis.get("parcelas", [])
-        for p in parcelas_data:
-            if p.get("nombre"):
-                parcela = Parcela(
-                    nombre=p.get("nombre", ""),
-                    referencia_catastral=p.get("referencia_catastral", ""),
-                    superficie_ha=float(p.get("superficie_ha", 0) or 0),
-                    cultivo=p.get("cultivo", ""),
-                    variedad=p.get("variedad", ""),
-                    municipio=p.get("municipio", ""),
-                    provincia=p.get("provincia", "")
-                )
-                cuaderno.agregar_parcela(parcela)
-        
-        # Añadir productos extraídos
+        # === MAPEO DIRECTO: hojas conocidas → modelos (prioridad sobre GPT) ===
+        hojas_procesadas = result.get("hojas", [])
+
+        parcelas_directas = _extraer_parcelas_directas(hojas_procesadas)
+        if parcelas_directas:
+            for p in parcelas_directas:
+                cuaderno.agregar_parcela(p)
+        else:
+            parcelas_data = analisis.get("parcelas", [])
+            for p in parcelas_data:
+                if p.get("nombre"):
+                    parcela = Parcela(
+                        nombre=p.get("nombre", ""),
+                        referencia_catastral=p.get("referencia_catastral", ""),
+                        superficie_ha=float(p.get("superficie_ha", 0) or 0),
+                        cultivo=p.get("cultivo", ""),
+                        variedad=p.get("variedad", ""),
+                        municipio=p.get("municipio", ""),
+                        provincia=p.get("provincia", "")
+                    )
+                    cuaderno.agregar_parcela(parcela)
+
+        # Productos: GPT (no hay hoja estándar de inventario en el cuaderno oficial)
         productos_data = analisis.get("productos", [])
         for prod in productos_data:
             if prod.get("nombre_comercial"):
@@ -1250,46 +1693,52 @@ async def crear_cuaderno_desde_archivo(
                     proveedor=prod.get("proveedor", "")
                 )
                 cuaderno.agregar_producto(producto)
-        
-        # Añadir tratamientos extraídos (asociación parcela por ID, ref catastral o nombre)
-        tratamientos_data = analisis.get("tratamientos", [])
-        for t in tratamientos_data:
-            if t.get("fecha") or t.get("producto"):
-                parcela_ids = []
-                parcela_nombre = t.get("parcela", "")
-                ref_cat = (t.get("referencia_catastral") or t.get("ref_catastral") or "").strip()
-                parcela_id_directo = t.get("parcela_id", "").strip()
-                if parcela_id_directo and cuaderno.obtener_parcela(parcela_id_directo):
-                    parcela_ids.append(parcela_id_directo)
-                    parcela_nombre = cuaderno.obtener_parcela(parcela_id_directo).nombre
-                elif ref_cat:
-                    for p in cuaderno.parcelas:
-                        if (p.referencia_catastral or "").strip() and (p.referencia_catastral or "").strip().lower() == ref_cat.lower():
-                            parcela_ids.append(p.id)
-                            parcela_nombre = p.nombre
-                            break
-                if not parcela_ids and parcela_nombre:
-                    for p in cuaderno.parcelas:
-                        if (p.nombre or "").lower() == parcela_nombre.lower():
-                            parcela_ids.append(p.id)
-                            break
-                producto_aplicado = ProductoAplicado(
-                    nombre_comercial=t.get("producto", ""),
-                    numero_registro=t.get("numero_registro", "") or t.get("nro_registro", ""),
-                    numero_lote=t.get("lote", "") or t.get("numero_lote", ""),
-                    dosis=float(t.get("dosis", 0) or 0),
-                    unidad_dosis=t.get("unidad_dosis", "L/Ha")
-                )
-                tratamiento = Tratamiento(
-                    fecha_aplicacion=t.get("fecha", ""),
-                    parcela_ids=parcela_ids,
-                    parcela_nombres=[parcela_nombre] if parcela_nombre else [],
-                    productos=[producto_aplicado],
-                    plaga_enfermedad=t.get("plaga_enfermedad", ""),
-                    metodo_aplicacion=t.get("metodo_aplicacion", ""),
-                    operador=t.get("operador", "")
-                )
-                cuaderno.tratamientos.append(tratamiento)
+
+        # Tratamientos: mapeo directo de inf.trat 1
+        tratamientos_directos = _extraer_tratamientos_directos(hojas_procesadas, cuaderno.parcelas)
+        if tratamientos_directos:
+            for t in tratamientos_directos:
+                cuaderno.tratamientos.append(t)
+            cuaderno.ordenar_tratamientos()
+        else:
+            tratamientos_data = analisis.get("tratamientos", [])
+            for t in tratamientos_data:
+                if t.get("fecha") or t.get("producto"):
+                    parcela_ids = []
+                    parcela_nombre = t.get("parcela", "")
+                    ref_cat = (t.get("referencia_catastral") or t.get("ref_catastral") or "").strip()
+                    parcela_id_directo = t.get("parcela_id", "").strip()
+                    if parcela_id_directo and cuaderno.obtener_parcela(parcela_id_directo):
+                        parcela_ids.append(parcela_id_directo)
+                        parcela_nombre = cuaderno.obtener_parcela(parcela_id_directo).nombre
+                    elif ref_cat:
+                        for p in cuaderno.parcelas:
+                            if (p.referencia_catastral or "").strip() and (p.referencia_catastral or "").strip().lower() == ref_cat.lower():
+                                parcela_ids.append(p.id)
+                                parcela_nombre = p.nombre
+                                break
+                    if not parcela_ids and parcela_nombre:
+                        for p in cuaderno.parcelas:
+                            if (p.nombre or "").lower() == parcela_nombre.lower():
+                                parcela_ids.append(p.id)
+                                break
+                    producto_aplicado = ProductoAplicado(
+                        nombre_comercial=t.get("producto", ""),
+                        numero_registro=t.get("numero_registro", "") or t.get("nro_registro", ""),
+                        numero_lote=t.get("lote", "") or t.get("numero_lote", ""),
+                        dosis=float(t.get("dosis", 0) or 0),
+                        unidad_dosis=t.get("unidad_dosis", "L/Ha")
+                    )
+                    tratamiento = Tratamiento(
+                        fecha_aplicacion=t.get("fecha", ""),
+                        parcela_ids=parcela_ids,
+                        parcela_nombres=[parcela_nombre] if parcela_nombre else [],
+                        productos=[producto_aplicado],
+                        plaga_enfermedad=t.get("plaga_enfermedad", ""),
+                        metodo_aplicacion=t.get("metodo_aplicacion", ""),
+                        operador=t.get("operador", "")
+                    )
+                    cuaderno.tratamientos.append(tratamiento)
         
         # Hojas originales: omitir si solo_datos, o filtrar por índices si hojas_seleccionadas
         if (solo_datos or "").lower() != "true":
@@ -1384,32 +1833,86 @@ async def importar_datos_archivo(cuaderno_id: str, file: UploadFile = File(...))
         productos_añadidos = 0
         hojas_añadidas = 0
 
-        # Añadir todas las hojas del archivo (nada se descarta)
+        # Añadir hojas del archivo. Si ya existe inf.gral 1 o inf.gral 2, REEMPLAZAR con la nueva versión ordenada
         for hoja in result.get("hojas", []):
+            nombre = hoja.get("nombre", "").strip()
             hoja_original = HojaExcel(
-                nombre=hoja.get("nombre", ""),
+                nombre=nombre,
                 columnas=list(hoja.get("columnas", [])),
                 datos=[list(fila) for fila in hoja.get("datos", [])],
                 tipo="custom",
                 origen="importado",
             )
-            cuaderno.hojas_originales.append(hoja_original)
-            hojas_añadidas += 1
+            # Reemplazar inf.gral 1/2 existentes (nueva extracción ordenada)
+            nombre_norm = nombre.lower().strip()
+            if nombre_norm in {"inf.gral 1", "inf.gral 2"}:
+                for i, h in enumerate(cuaderno.hojas_originales):
+                    if (h.nombre or "").strip().lower() == nombre_norm:
+                        cuaderno.hojas_originales[i] = hoja_original
+                        hojas_añadidas += 1
+                        break
+                else:
+                    cuaderno.hojas_originales.append(hoja_original)
+                    hojas_añadidas += 1
+            else:
+                cuaderno.hojas_originales.append(hoja_original)
+                hojas_añadidas += 1
         
-        # Importar parcelas
-        for p in analisis.get("parcelas", []):
-            if p.get("nombre"):
-                parcela = Parcela(
-                    nombre=p.get("nombre", ""),
-                    referencia_catastral=p.get("referencia_catastral", ""),
-                    superficie_ha=float(p.get("superficie_ha", 0) or 0),
-                    cultivo=p.get("cultivo", ""),
-                    variedad=p.get("variedad", "")
-                )
-                cuaderno.agregar_parcela(parcela)
+        # Importar parcelas: mapeo directo primero, GPT como fallback. Evitar duplicados.
+        hojas_procesadas = result.get("hojas", [])
+        parcelas_directas = _extraer_parcelas_directas(hojas_procesadas)
+        def _norm_tm(tm):
+            t = (tm or "").strip()
+            if "-" in t:
+                parts = t.split("-", 1)
+                if parts[0].strip().isdigit():
+                    return parts[1].strip()
+            return t
+        def _clave_parcela(p) -> tuple:
+            tm = getattr(p, "termino_municipal", "") or getattr(p, "municipio", "")
+            return (
+                _norm_tm(tm),
+                str(getattr(p, "num_poligono", "") or "").strip(),
+                str(getattr(p, "num_parcela", "") or "").strip(),
+                str(getattr(p, "num_recinto", "") or "").strip(),
+            )
+        claves_existentes = {_clave_parcela(p) for p in cuaderno.parcelas}
+        nombres_existentes = {(getattr(p, "nombre", "") or "").strip() for p in cuaderno.parcelas}
+        if parcelas_directas:
+            for p in parcelas_directas:
+                clave = _clave_parcela(p)
+                if clave in claves_existentes:
+                    continue
+                cuaderno.agregar_parcela(p)
+                claves_existentes.add(clave)
                 parcelas_añadidas += 1
-        
-        # Importar productos
+        else:
+            for p in analisis.get("parcelas", []):
+                if p.get("nombre"):
+                    parcela = Parcela(
+                        nombre=p.get("nombre", ""),
+                        referencia_catastral=p.get("referencia_catastral", ""),
+                        superficie_ha=float(p.get("superficie_ha", 0) or 0),
+                        cultivo=p.get("cultivo", ""),
+                        variedad=p.get("variedad", ""),
+                        municipio=p.get("municipio", ""),
+                        provincia=p.get("provincia", "")
+                    )
+                    nombre = (p.get("nombre", "") or "").strip()
+                    if not nombre or nombre in nombres_existentes:
+                        continue
+                    cuaderno.agregar_parcela(parcela)
+                    nombres_existentes.add(nombre)
+                    parcelas_añadidas += 1
+
+        # Importar tratamientos: mapeo directo
+        tratamientos_directos = _extraer_tratamientos_directos(hojas_procesadas, cuaderno.parcelas)
+        for t in tratamientos_directos:
+            cuaderno.tratamientos.append(t)
+        if tratamientos_directos:
+            cuaderno.ordenar_tratamientos()
+
+        # Importar productos (GPT)
         for prod in analisis.get("productos", []):
             if prod.get("nombre_comercial"):
                 producto = ProductoFitosanitario(
@@ -2891,23 +3394,23 @@ async def ejecutar_comando_chat(cuaderno_id: str, comando: ChatCommand):
                 except Exception:
                     fecha_val = (date.today() - timedelta(days=i)).isoformat()
                 
-                tratamiento = Tratamiento(
+                plantilla_chat = Tratamiento(
                     fecha_aplicacion=fecha_val,
                     parcela_ids=[p.id for p in parcelas_usar],
-                    parcela_nombres=[p.nombre for p in parcelas_usar],
                     productos=[producto_aplicado],
                     problema_fitosanitario=item.get("problema", item.get("problema_fitosanitario", item.get("plaga", "Mantenimiento"))),
                     operador=item.get("operador", item.get("aplicador", "Operario")),
                     aplicador=item.get("aplicador", "Propietario"),
                     estado=EstadoTratamiento.APLICADO
                 )
-                cuaderno.agregar_tratamiento(tratamiento)
-                elementos_creados.append({
-                    "tipo": "tratamiento", 
-                    "parcelas": [p.nombre for p in parcelas_usar],
-                    "producto": producto.nombre_comercial,
-                    "id": tratamiento.id
-                })
+                creados_desgl = cuaderno.agregar_tratamiento_desglosado(plantilla_chat)
+                for td in creados_desgl:
+                    elementos_creados.append({
+                        "tipo": "tratamiento",
+                        "parcelas": td.parcela_nombres,
+                        "producto": td.productos[0].nombre_comercial if td.productos else "",
+                        "id": td.id
+                    })
             
             storage.guardar(cuaderno)
             mensaje_respuesta = f"✅ {len(elementos_creados)} tratamiento(s) registrado(s)"
@@ -2979,6 +3482,18 @@ async def ejecutar_comando_chat(cuaderno_id: str, comando: ChatCommand):
             
             if destino == "parcelas":
                 from cuaderno.models import Parcela as ParcelaModel
+                def _norm_tm(tm):
+                    t = (tm or "").strip()
+                    if "-" in t:
+                        parts = t.split("-", 1)
+                        if parts[0].strip().isdigit():
+                            return parts[1].strip()
+                    return t
+                def _clave_p(tm, pol, par, rec):
+                    return (_norm_tm(tm), str(pol or "").strip(), str(par or "").strip(), str(rec or "").strip())
+                claves_parcelas = {_clave_p(getattr(p, "termino_municipal", "") or getattr(p, "municipio", ""),
+                    getattr(p, "num_poligono", ""), getattr(p, "num_parcela", ""), getattr(p, "num_recinto", ""))
+                    for p in cuaderno.parcelas}
                 for fila in filas:
                     # Saltar filas vacías
                     vals = [v for v in fila if v is not None and str(v).strip() and str(v).strip().upper() != "NONE"]
@@ -3027,7 +3542,12 @@ async def ejecutar_comando_chat(cuaderno_id: str, comando: ChatCommand):
                             superficie_ha=kwargs.get("superficie_ha", 0),
                             especie=kwargs.get("especie", ""),
                         )
+                    clave = _clave_p(getattr(p, "termino_municipal", ""), getattr(p, "num_poligono", ""),
+                        getattr(p, "num_parcela", ""), getattr(p, "num_recinto", ""))
+                    if clave in claves_parcelas:
+                        continue
                     cuaderno.agregar_parcela(p)
+                    claves_parcelas.add(clave)
                     importados += 1
                 
                 storage.guardar(cuaderno)

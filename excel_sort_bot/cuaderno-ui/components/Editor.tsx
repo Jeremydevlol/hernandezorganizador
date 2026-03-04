@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef, Fragment } from "react";
 import {
     Plus,
     FileText,
@@ -33,6 +33,7 @@ import {
 import { Cuaderno, SheetType, SHEET_CONFIG, HistoricoRow, HojaExcel, CellSelection } from "@/lib/types";
 import { api } from "@/lib/api";
 import AddRowModal from "./modals/AddRowModal";
+import AddBulkModal from "./modals/AddBulkModal";
 import ImportedSheet from "./ImportedSheet";
 
 // Tipo extendido para incluir hojas importadas
@@ -72,13 +73,16 @@ const SHEET_ICONS: Record<SheetType, React.ReactNode> = {
 };
 
 const BASE_EDITABLE_SHEETS: SheetType[] = ["parcelas", "productos", "tratamientos"];
+const BULK_EDIT_SHEETS: SheetType[] = ["parcelas", "productos", "tratamientos", "fertilizantes", "cosecha"];
 
 const BASE_SHEET_IDS: SheetType[] = ["parcelas", "productos", "tratamientos", "fertilizantes", "cosecha", "historico"];
-type ParcelSortMode = "num_orden" | "cultivo_superficie";
+type ParcelSortMode = "num_orden" | "cultivo_superficie" | "cultivo" | "alfabetico" | "superficie_desc" | "superficie_asc" | "termino_municipal" | "todo_az";
+type TratSortMode = "fecha_desc" | "fecha_asc" | "cultivo" | "parcela" | "producto";
 
 export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh, highlight, onRequestHighlight, focusSheetId = null, onFocusModeExit, editorActionsRef, onSendSelectionToChat }: EditorProps) {
     const [historico, setHistorico] = useState<HistoricoRow[]>([]);
     const [showAddModal, setShowAddModal] = useState(false);
+    const [showBulkModal, setShowBulkModal] = useState(false);
     const [activeImportedSheet, setActiveImportedSheet] = useState<number | null>(null);
     const [editTratamientoId, setEditTratamientoId] = useState<string | null>(null);
     const [historicoFilters, setHistoricoFilters] = useState<{ parcela_id?: string; date_from?: string; date_to?: string; product_id?: string; num_lote?: string }>({});
@@ -91,19 +95,31 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
     const [searchActiveIndex, setSearchActiveIndex] = useState(0);
     // ---- Nuevas funcionalidades ----
     const [selectedParcelas, setSelectedParcelas] = useState<Set<string>>(new Set());
+    const [selectedTratamientos, setSelectedTratamientos] = useState<Set<string>>(new Set());
     const [cultivoFilter, setCultivoFilter] = useState<string>("");
+    const [tratCultivoFilter, setTratCultivoFilter] = useState<string>("");
     const [parcelSortMode, setParcelSortMode] = useState<ParcelSortMode>("num_orden");
+    const [tratSortMode, setTratSortMode] = useState<TratSortMode>("fecha_desc");
     const [targetHectareas, setTargetHectareas] = useState<string>("");
     const [showTratamientosParcelaId, setShowTratamientosParcelaId] = useState<string | null>(null);
     const [showTratamientoDetalleId, setShowTratamientoDetalleId] = useState<string | null>(null);
     const [parcelaTratamientos, setParcelaTratamientos] = useState<any[]>([]);
     const [loadingTratamientos, setLoadingTratamientos] = useState(false);
     const [openTreatFromSelection, setOpenTreatFromSelection] = useState(false);
+    const [openTreatFromTratSelection, setOpenTreatFromTratSelection] = useState(false);
     // ---- Selección de celdas para Chat ----
     const [selectedCells, setSelectedCells] = useState<Set<string>>(new Set()); // "rowIdx:colKey"
     const [selectionAnchor, setSelectionAnchor] = useState<{ rowIdx: number; colIdx: number } | null>(null);
     const [bulkEditValue, setBulkEditValue] = useState("");
+    const [pasteValues, setPasteValues] = useState("");
+    const [buscarValue, setBuscarValue] = useState("");
+    const [reemplazarValue, setReemplazarValue] = useState("");
     const [bulkApplying, setBulkApplying] = useState(false);
+    const [copyToParcelsId, setCopyToParcelsId] = useState<string | null>(null);
+    const [copyTargetParcelas, setCopyTargetParcelas] = useState<Set<string>>(new Set());
+    const [copyingToParcels, setCopyingToParcels] = useState(false);
+    const [exportHojasModal, setExportHojasModal] = useState<{ hojas: { sheet_id: string; nombre: string; num_filas: number }[]; type: "pdf" | "excel"; params: Record<string, any> } | null>(null);
+    const [selectedExportHojas, setSelectedExportHojas] = useState<Set<string>>(new Set());
     const searchInputRef = useRef<HTMLInputElement | null>(null);
 
     const hojas = cuaderno.hojas_originales || [];
@@ -142,12 +158,17 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
             case "productos":
                 return cuaderno.productos || [];
             case "tratamientos":
-                return (cuaderno.tratamientos || []).map(t => ({
-                    ...t,
-                    parcela_nombres: t.parcela_nombres?.join(", ") || "",
-                    productos_display: t.productos?.map(p => p.nombre_comercial).join(", ") || "",
-                    dosis_display: t.productos?.map(p => `${p.dosis} ${p.unidad_dosis}`).join(", ") || "",
-                }));
+                return (cuaderno.tratamientos || []).map(t => {
+                    const prod = t.productos?.[0] || {};
+                    return {
+                        ...t,
+                        parcela_nombres: t.parcela_nombres?.join(", ") || "",
+                        nombre_comercial: (prod as any).nombre_comercial || "",
+                        numero_registro: (prod as any).numero_registro || "",
+                        dosis: (prod as any).dosis ?? "",
+                        unidad_dosis: (prod as any).unidad_dosis || "",
+                    };
+                });
             case "fertilizantes":
                 return cuaderno.fertilizaciones || [];
             case "cosecha":
@@ -169,8 +190,50 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
         return cultivos.sort();
     }, [effectiveSheet, cuaderno.parcelas]);
 
-    // ---- Data filtrada por cultivo ----
+    const uniqueCultivosTrat = useMemo(() => {
+        const tratamientos = cuaderno.tratamientos || [];
+        const cultivos = [...new Set(tratamientos.map((t: any) => t.cultivo_especie || "").filter(Boolean))];
+        return cultivos.sort();
+    }, [cuaderno.tratamientos]);
+
+    // ---- Data filtrada por cultivo y orden ----
     const displayData = useMemo(() => {
+        if (effectiveSheet === "tratamientos") {
+            const tratamientos = (data as any[]).filter((t: any) => {
+                if (!tratCultivoFilter) return true;
+                const cultivo = t.cultivo_especie || "";
+                return cultivo.toLowerCase().includes(tratCultivoFilter.toLowerCase());
+            });
+            const sorted = [...tratamientos].sort((a: any, b: any) => {
+                const aFecha = String(a.fecha_aplicacion || "").toLowerCase();
+                const bFecha = String(b.fecha_aplicacion || "").toLowerCase();
+                const aCultivo = String(a.cultivo_especie || "").toLowerCase();
+                const bCultivo = String(b.cultivo_especie || "").toLowerCase();
+                const aParcela = String(a.parcela_nombres || a.num_orden_parcelas || "").toLowerCase();
+                const bParcela = String(b.parcela_nombres || b.num_orden_parcelas || "").toLowerCase();
+                const aProd = String((a.productos?.[0] as any)?.nombre_comercial || "").toLowerCase();
+                const bProd = String((b.productos?.[0] as any)?.nombre_comercial || "").toLowerCase();
+                switch (tratSortMode) {
+                    case "fecha_asc":
+                        if (aFecha !== bFecha) return aFecha.localeCompare(bFecha, "es");
+                        return (a.id || "").localeCompare(b.id || "");
+                    case "cultivo":
+                        if (aCultivo !== bCultivo) return aCultivo.localeCompare(bCultivo, "es");
+                        return bFecha.localeCompare(aFecha, "es");
+                    case "parcela":
+                        if (aParcela !== bParcela) return aParcela.localeCompare(bParcela, "es");
+                        return aFecha.localeCompare(bFecha, "es");
+                    case "producto":
+                        if (aProd !== bProd) return aProd.localeCompare(bProd, "es");
+                        return bFecha.localeCompare(aFecha, "es");
+                    case "fecha_desc":
+                    default:
+                        if (bFecha !== aFecha) return bFecha.localeCompare(aFecha, "es");
+                        return (a.id || "").localeCompare(b.id || "");
+                }
+            });
+            return sorted;
+        }
         if (effectiveSheet !== "parcelas") return data;
         const filtered = (data as any[]).filter((row: any) => {
             if (!cultivoFilter) return true;
@@ -185,18 +248,124 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
             const bCultivo = String(b.especie || b.cultivo || "").toLowerCase();
             const aSup = Number(a.superficie_cultivada || a.superficie_ha || a.superficie_sigpac || 0);
             const bSup = Number(b.superficie_cultivada || b.superficie_ha || b.superficie_sigpac || 0);
+            const aNombre = String(a.nombre || "").toLowerCase();
+            const bNombre = String(b.nombre || "").toLowerCase();
+            const aTermino = String(a.termino_municipal || "").toLowerCase();
+            const bTermino = String(b.termino_municipal || "").toLowerCase();
 
-            if (parcelSortMode === "cultivo_superficie") {
-                if (aCultivo !== bCultivo) return aCultivo.localeCompare(bCultivo, "es");
-                if (bSup !== aSup) return bSup - aSup;
-                return aOrden - bOrden;
+            switch (parcelSortMode) {
+                case "todo_az":
+                    if (aCultivo !== bCultivo) return aCultivo.localeCompare(bCultivo, "es", { sensitivity: "base" });
+                    if (aTermino !== bTermino) return aTermino.localeCompare(bTermino, "es", { sensitivity: "base" });
+                    if (aNombre !== bNombre) return aNombre.localeCompare(bNombre, "es", { sensitivity: "base" });
+                    return aOrden - bOrden;
+                case "cultivo":
+                    if (aCultivo !== bCultivo) return aCultivo.localeCompare(bCultivo, "es", { sensitivity: "base" });
+                    return aOrden - bOrden;
+                case "alfabetico":
+                    if (aNombre !== bNombre) return aNombre.localeCompare(bNombre, "es", { sensitivity: "base" });
+                    return aOrden - bOrden;
+                case "superficie_desc":
+                    if (bSup !== aSup) return bSup - aSup;
+                    return aOrden - bOrden;
+                case "superficie_asc":
+                    if (aSup !== bSup) return aSup - bSup;
+                    return aOrden - bOrden;
+                case "termino_municipal":
+                    if (aTermino !== bTermino) return aTermino.localeCompare(bTermino, "es", { sensitivity: "base" });
+                    return aOrden - bOrden;
+                case "cultivo_superficie":
+                    if (aCultivo !== bCultivo) return aCultivo.localeCompare(bCultivo, "es", { sensitivity: "base" });
+                    if (bSup !== aSup) return bSup - aSup;
+                    return aOrden - bOrden;
+                case "num_orden":
+                default:
+                    if (aOrden !== bOrden) return aOrden - bOrden;
+                    if (aCultivo !== bCultivo) return aCultivo.localeCompare(bCultivo, "es", { sensitivity: "base" });
+                    return bSup - aSup;
             }
-            if (aOrden !== bOrden) return aOrden - bOrden;
-            if (aCultivo !== bCultivo) return aCultivo.localeCompare(bCultivo, "es");
-            return bSup - aSup;
         });
         return sorted;
-    }, [data, effectiveSheet, cultivoFilter, parcelSortMode]);
+    }, [data, effectiveSheet, cultivoFilter, parcelSortMode, tratCultivoFilter, tratSortMode]);
+
+    // ---- Orden para exportar (parcelas con el orden actual del editor) ----
+    const sortedParcelasForExport = useMemo(() => {
+        const parcelas = (cuaderno.parcelas || []) as any[];
+        return [...parcelas].sort((a: any, b: any) => {
+            const aOrden = Number(a.num_orden || 0);
+            const bOrden = Number(b.num_orden || 0);
+            const aCultivo = String(a.especie || a.cultivo || "").toLowerCase();
+            const bCultivo = String(b.especie || b.cultivo || "").toLowerCase();
+            const aSup = Number(a.superficie_cultivada || a.superficie_ha || a.superficie_sigpac || 0);
+            const bSup = Number(b.superficie_cultivada || b.superficie_ha || b.superficie_sigpac || 0);
+            const aNombre = String(a.nombre || "").toLowerCase();
+            const bNombre = String(b.nombre || "").toLowerCase();
+            const aTermino = String(a.termino_municipal || "").toLowerCase();
+            const bTermino = String(b.termino_municipal || "").toLowerCase();
+            switch (parcelSortMode) {
+                case "todo_az":
+                    if (aCultivo !== bCultivo) return aCultivo.localeCompare(bCultivo, "es", { sensitivity: "base" });
+                    if (aTermino !== bTermino) return aTermino.localeCompare(bTermino, "es", { sensitivity: "base" });
+                    if (aNombre !== bNombre) return aNombre.localeCompare(bNombre, "es", { sensitivity: "base" });
+                    return aOrden - bOrden;
+                case "cultivo":
+                    if (aCultivo !== bCultivo) return aCultivo.localeCompare(bCultivo, "es", { sensitivity: "base" });
+                    return aOrden - bOrden;
+                case "alfabetico":
+                    if (aNombre !== bNombre) return aNombre.localeCompare(bNombre, "es", { sensitivity: "base" });
+                    return aOrden - bOrden;
+                case "superficie_desc":
+                    if (bSup !== aSup) return bSup - aSup;
+                    return aOrden - bOrden;
+                case "superficie_asc":
+                    if (aSup !== bSup) return aSup - bSup;
+                    return aOrden - bOrden;
+                case "termino_municipal":
+                    if (aTermino !== bTermino) return aTermino.localeCompare(bTermino, "es", { sensitivity: "base" });
+                    return aOrden - bOrden;
+                case "cultivo_superficie":
+                    if (aCultivo !== bCultivo) return aCultivo.localeCompare(bCultivo, "es", { sensitivity: "base" });
+                    if (bSup !== aSup) return bSup - aSup;
+                    return aOrden - bOrden;
+                case "num_orden":
+                default:
+                    if (aOrden !== bOrden) return aOrden - bOrden;
+                    if (aCultivo !== bCultivo) return aCultivo.localeCompare(bCultivo, "es", { sensitivity: "base" });
+                    return bSup - aSup;
+            }
+        });
+    }, [cuaderno.parcelas, parcelSortMode]);
+
+    const sortedTratamientosForExport = useMemo(() => {
+        return (cuaderno.tratamientos || []) as any[];
+    }, [cuaderno.tratamientos]);
+
+    const parcelasFromSelectedTratamientos = useMemo(() => {
+        if (selectedTratamientos.size === 0) return [];
+        const tratamientos = (cuaderno.tratamientos || []) as any[];
+        const ids = new Set<string>();
+        for (const t of tratamientos) {
+            if (t.id && selectedTratamientos.has(t.id) && Array.isArray(t.parcela_ids)) {
+                for (const pid of t.parcela_ids) ids.add(pid);
+            }
+        }
+        return Array.from(ids);
+    }, [selectedTratamientos, cuaderno.tratamientos]);
+
+    const tratamientosSummary = useMemo(() => {
+        if (effectiveSheet !== "tratamientos") return null;
+        const tratamientos = displayData as any[];
+        const parseHa = (t: any) => parseFloat(t.superficie_tratada) || 0;
+        const totalHa = tratamientos.reduce((sum: number, t: any) => sum + parseHa(t), 0);
+        const selectedArr = tratamientos.filter((t: any) => t.id && selectedTratamientos.has(t.id));
+        const selectedHa = selectedArr.reduce((sum: number, t: any) => sum + parseHa(t), 0);
+        return {
+            total: tratamientos.length,
+            totalHa,
+            selected: selectedArr.length,
+            selectedHa,
+        };
+    }, [effectiveSheet, displayData, selectedTratamientos]);
 
     // ---- Sumatorio de hectáreas ----
     const hectareasSummary = useMemo(() => {
@@ -225,6 +394,22 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
 
     const toggleSelectAll = useCallback(() => {
         setSelectedParcelas(prev => {
+            const allIds = (displayData as any[]).map((r: any) => r.id).filter(Boolean);
+            if (prev.size === allIds.length) return new Set();
+            return new Set(allIds);
+        });
+    }, [displayData]);
+
+    const toggleTratamientoSelection = useCallback((id: string) => {
+        setSelectedTratamientos(prev => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id); else next.add(id);
+            return next;
+        });
+    }, []);
+
+    const toggleSelectAllTratamientos = useCallback(() => {
+        setSelectedTratamientos(prev => {
             const allIds = (displayData as any[]).map((r: any) => r.id).filter(Boolean);
             if (prev.size === allIds.length) return new Set();
             return new Set(allIds);
@@ -312,8 +497,8 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
 
     const applyBulkEditToSelection = useCallback(async () => {
         if (selectedCells.size === 0) return;
-        if (!BASE_EDITABLE_SHEETS.includes(effectiveSheet)) {
-            alert("La edición masiva solo está disponible en Parcelas, Productos y Tratamientos.");
+        if (!BULK_EDIT_SHEETS.includes(effectiveSheet)) {
+            alert("La edición masiva no está disponible en esta hoja.");
             return;
         }
 
@@ -354,6 +539,108 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
             setSaving(false);
         }
     }, [selectedCells, effectiveSheet, displayData, data, config.columns, cuaderno.id, bulkEditValue, onRefresh]);
+
+    const applyReplaceInSelection = useCallback(async () => {
+        if (selectedCells.size === 0 || !buscarValue.trim()) return;
+        if (!BULK_EDIT_SHEETS.includes(effectiveSheet)) return;
+        const dataToUse = effectiveSheet === "parcelas" ? (displayData as any[]) : (data as any[]);
+        setBulkApplying(true);
+        setSaving(true);
+        try {
+            const updates: { rowId: string; colKey: string; newValue: string }[] = [];
+            for (const key of selectedCells) {
+                const [rStr, colKey] = key.split(":");
+                const rowIndex = parseInt(rStr, 10);
+                const row = dataToUse[rowIndex];
+                const colCfg = config.columns.find((c) => c.key === colKey);
+                if (!row?.id || !colKey || colCfg?.editable === false) continue;
+                const currentVal = String((row as any)[colKey] ?? "").trim();
+                if (!currentVal.includes(buscarValue)) continue;
+                const newVal = currentVal.split(buscarValue).join(reemplazarValue);
+                updates.push({ rowId: row.id, colKey, newValue: newVal });
+            }
+            for (const u of updates) {
+                await api.patchCell(cuaderno.id, {
+                    sheet_id: effectiveSheet,
+                    row: u.rowId,
+                    column: u.colKey,
+                    value: u.newValue,
+                });
+            }
+            if (updates.length > 0) {
+                setLastSavedAt(Date.now());
+                onRefresh();
+                setSelectedCells(new Set());
+                setSelectionAnchor(null);
+                setBuscarValue("");
+                setReemplazarValue("");
+            }
+        } catch (e) {
+            console.error("Error en buscar/reemplazar:", e);
+            alert("No se pudo aplicar.");
+        } finally {
+            setBulkApplying(false);
+            setSaving(false);
+        }
+    }, [selectedCells, effectiveSheet, displayData, data, config.columns, cuaderno.id, buscarValue, reemplazarValue, onRefresh]);
+
+    /** Pegar texto y asignar cada valor a su celda correspondiente (orden: fila por fila, columna por columna). */
+    const applyPasteToSelection = useCallback(async () => {
+        if (selectedCells.size === 0 || !pasteValues.trim() || !BULK_EDIT_SHEETS.includes(effectiveSheet)) return;
+        const dataToUse = effectiveSheet === "parcelas" ? (displayData as any[]) : (data as any[]);
+        const colOrder = config.columns.map((c) => c.key);
+
+        // Ordenar celdas: por fila, luego por orden de columna
+        const sorted = Array.from(selectedCells)
+            .map((key) => {
+                const [rStr, colKey] = key.split(":");
+                const rowIndex = parseInt(rStr, 10);
+                const colIdx = colOrder.indexOf(colKey);
+                const colCfg = config.columns.find((c) => c.key === colKey);
+                return { key, rowIndex, colIdx, colKey, editable: colCfg?.editable !== false };
+            })
+            .filter((x) => x.colIdx >= 0)
+            .sort((a, b) => (a.rowIndex !== b.rowIndex ? a.rowIndex - b.rowIndex : a.colIdx - b.colIdx));
+
+        // Parsear: líneas por filas, tab o coma por columnas
+        const delim = pasteValues.includes("\t") ? "\t" : ",";
+        const lines = pasteValues.trim().split(/\r?\n/).map((l) => l.split(delim).map((v) => v.trim()));
+        const values = lines.flat();
+
+        if (values.length === 0 || values.length !== sorted.length) {
+            alert(`Has pegado ${values.length} valor(es) pero hay ${sorted.length} celda(s) seleccionadas. Deben coincidir.`);
+            return;
+        }
+
+        setBulkApplying(true);
+        setSaving(true);
+        try {
+            for (let i = 0; i < sorted.length; i++) {
+                const { colKey, editable } = sorted[i];
+                if (!editable) continue;
+                const rowIndex = sorted[i].rowIndex;
+                const row = dataToUse[rowIndex];
+                if (!row?.id) continue;
+                await api.patchCell(cuaderno.id, {
+                    sheet_id: effectiveSheet,
+                    row: row.id,
+                    column: colKey,
+                    value: values[i],
+                });
+            }
+            setLastSavedAt(Date.now());
+            onRefresh();
+            setSelectedCells(new Set());
+            setSelectionAnchor(null);
+            setPasteValues("");
+        } catch (e) {
+            console.error("Error al aplicar pegada:", e);
+            alert("No se pudo aplicar.");
+        } finally {
+            setBulkApplying(false);
+            setSaving(false);
+        }
+    }, [selectedCells, effectiveSheet, displayData, data, config.columns, cuaderno.id, pasteValues, onRefresh]);
 
     // ---- Cargar tratamientos de una parcela ----
     const loadParcelaTratamientos = useCallback(async (parcelaId: string) => {
@@ -518,12 +805,22 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
 
     const formatCellValue = useCallback((value: any, type?: string) => {
         if (value === null || value === undefined) return "-";
-        if (type === "date" && value) {
-            try {
-                return new Date(value).toLocaleDateString("es-ES");
-            } catch {
-                return value;
+        if (type === "date" && value !== "") {
+            let d: Date;
+            if (typeof value === "number" && value > 0 && value < 100000) {
+                d = new Date((value - 25569) * 86400 * 1000);
+            } else {
+                const str = String(value).trim();
+                if (!str) return "-";
+                d = new Date(str);
+                if (isNaN(d.getTime())) {
+                    const m = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+                    if (m) d = new Date(parseInt(m[3], 10), parseInt(m[2], 10) - 1, parseInt(m[1], 10));
+                    else if (/^\d{4}-\d{2}-\d{2}/.test(str)) d = new Date(str.slice(0, 10));
+                }
             }
+            if (!isNaN(d.getTime())) return d.toLocaleDateString("es-ES");
+            return String(value);
         }
         if (Array.isArray(value)) return value.join(", ");
         return String(value);
@@ -675,50 +972,98 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
         };
     }, [editorActionsRef, openSearch, replacePreview, replaceApply]);
 
+    const buildExportParams = useCallback((params?: { desde?: string; hasta?: string }) => {
+        const base = { ...params };
+        base.orden_parcelas_modo = parcelSortMode;
+        base.orden_parcelas = sortedParcelasForExport.map((p: any) => p.id).join(",");
+        base.orden_tratamientos = sortedTratamientosForExport.map((t: any) => t.id).join(",");
+        return base;
+    }, [parcelSortMode, sortedParcelasForExport, sortedTratamientosForExport]);
+
     const exportPDF = async (params?: { desde?: string; hasta?: string }) => {
+        const baseParams = buildExportParams(params);
         try {
-            const checkUrl = api.getExportPDFUrl(cuaderno.id, { check_hojas_editadas: true, ...params });
+            const checkUrl = api.getExportPDFUrl(cuaderno.id, { check_hojas_editadas: true, ...baseParams });
             const checkRes = await fetch(checkUrl);
             const data = await checkRes.json();
 
-            let queryParams: any = { ...params };
+            let queryParams: any = { ...baseParams };
             const checkParams = new URL(checkUrl).searchParams;
             checkParams.forEach((val, key) => queryParams[key] = val);
-            delete queryParams.check_hojas_editadas; // remove check flag for final export
+            delete queryParams.check_hojas_editadas;
 
             if (data?.tiene_hojas_editadas && data?.hojas_editadas?.length > 0) {
-                if (window.confirm(`Hay ${data.hojas_editadas.length} hoja(s) importada(s) editada(s) libre(s). ¿Quieres incluirlas en el PDF?\n\nSi aceptas, se anexarán al final del documento.`)) {
-                    queryParams.incluir_hojas = data.hojas_editadas.map((h: any) => h.sheet_id).join(",");
-                }
+                setExportHojasModal({
+                    hojas: data.hojas_editadas,
+                    type: "pdf",
+                    params: queryParams,
+                });
+                setSelectedExportHojas(new Set(data.hojas_editadas.map((h: any) => h.sheet_id)));
+                return;
             }
             window.open(api.getExportPDFUrl(cuaderno.id, queryParams), "_blank");
         } catch (e) {
             console.error("Error checking pdf export:", e);
-            window.open(api.getExportPDFUrl(cuaderno.id, params), "_blank"); // Fallback
+            window.open(api.getExportPDFUrl(cuaderno.id, baseParams), "_blank");
         }
     };
 
     const exportExcel = async (params?: { desde?: string; hasta?: string }) => {
+        const baseParams = buildExportParams(params);
         try {
-            const checkUrl = api.getExportExcelUrl(cuaderno.id, { check_hojas_editadas: true, ...params });
+            const checkUrl = api.getExportPDFUrl(cuaderno.id, { check_hojas_editadas: true, ...baseParams });
             const checkRes = await fetch(checkUrl);
             const data = await checkRes.json();
 
-            let queryParams: any = { ...params };
+            let queryParams: any = { ...baseParams };
             const checkParams = new URL(checkUrl).searchParams;
             checkParams.forEach((val, key) => queryParams[key] = val);
-            delete queryParams.check_hojas_editadas; // remove check flag for final export
+            delete queryParams.check_hojas_editadas;
 
             if (data?.tiene_hojas_editadas && data?.hojas_editadas?.length > 0) {
-                if (window.confirm(`Hay ${data.hojas_editadas.length} hoja(s) importada(s) editada(s) libre(s). ¿Quieres incluirlas en el Excel?\n\nSi aceptas, se anexarán como pestañas nuevas.`)) {
-                    queryParams.incluir_hojas = data.hojas_editadas.map((h: any) => h.sheet_id).join(",");
-                }
+                setExportHojasModal({
+                    hojas: data.hojas_editadas,
+                    type: "excel",
+                    params: queryParams,
+                });
+                setSelectedExportHojas(new Set(data.hojas_editadas.map((h: any) => h.sheet_id)));
+                return;
             }
             window.open(api.getExportExcelUrl(cuaderno.id, queryParams), "_blank");
         } catch (e) {
             console.error("Error checking excel export:", e);
-            window.open(api.getExportExcelUrl(cuaderno.id, params), "_blank"); // Fallback
+            window.open(api.getExportExcelUrl(cuaderno.id, baseParams), "_blank");
         }
+    };
+
+    const confirmExportHojas = () => {
+        if (!exportHojasModal) return;
+        const { type, params } = exportHojasModal;
+        // Usar siempre el orden ACTUAL del editor (no el congelado al abrir el modal)
+        const freshOrder = buildExportParams({ desde: params.desde, hasta: params.hasta });
+        const queryParams = { ...params, orden_parcelas_modo: freshOrder.orden_parcelas_modo, orden_parcelas: freshOrder.orden_parcelas, orden_tratamientos: freshOrder.orden_tratamientos };
+        if (selectedExportHojas.size > 0) {
+            queryParams.incluir_hojas = Array.from(selectedExportHojas).join(",");
+        }
+        if (type === "pdf") {
+            window.open(api.getExportPDFUrl(cuaderno.id, queryParams), "_blank");
+        } else {
+            window.open(api.getExportExcelUrl(cuaderno.id, queryParams), "_blank");
+        }
+        setExportHojasModal(null);
+    };
+
+    const exportSinHojas = () => {
+        if (!exportHojasModal) return;
+        const { type, params } = exportHojasModal;
+        const freshOrder = buildExportParams({ desde: params.desde, hasta: params.hasta });
+        const queryParams = { ...params, incluir_hojas: "", orden_parcelas_modo: freshOrder.orden_parcelas_modo, orden_parcelas: freshOrder.orden_parcelas, orden_tratamientos: freshOrder.orden_tratamientos };
+        if (type === "pdf") {
+            window.open(api.getExportPDFUrl(cuaderno.id, queryParams), "_blank");
+        } else {
+            window.open(api.getExportExcelUrl(cuaderno.id, queryParams), "_blank");
+        }
+        setExportHojasModal(null);
     };
 
     const handleSaveCell = async (rowId: string, colKey: string, newValue: string) => {
@@ -782,6 +1127,23 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
         }
     };
 
+    const handleCopiarAParcelas = async () => {
+        if (!copyToParcelsId || copyTargetParcelas.size === 0) return;
+        setCopyingToParcels(true);
+        try {
+            const result = await api.copiarTratamientoAParcelas(cuaderno.id, copyToParcelsId, Array.from(copyTargetParcelas));
+            setCopyToParcelsId(null);
+            setCopyTargetParcelas(new Set());
+            onRefresh();
+            alert(result.message);
+        } catch (e: any) {
+            console.error(e);
+            alert(e.message || "No se pudo copiar.");
+        } finally {
+            setCopyingToParcels(false);
+        }
+    };
+
     const handleSheetTabClick = (sheet: SheetType) => {
         setActiveImportedSheet(null);
         onSheetChange(sheet);
@@ -803,14 +1165,14 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                         <div className="flex items-center gap-2">
                             <button
                                 onClick={onFocusModeExit}
-                                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-white/5 hover:bg-white/10 text-zinc-300 hover:text-zinc-100 text-xs transition-colors"
+                                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-gray-100 hover:bg-gray-200 text-gray-700 hover:text-gray-900 text-xs transition-colors"
                             >
                                 <ArrowLeft size={14} />
                                 Volver al cuaderno
                             </button>
                             <button
                                 onClick={onFocusModeExit}
-                                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-white/5 hover:bg-white/10 text-zinc-300 hover:text-zinc-100 text-xs transition-colors"
+                                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-gray-100 hover:bg-gray-200 text-gray-700 hover:text-gray-900 text-xs transition-colors"
                             >
                                 <RefreshCw size={14} />
                                 Cambiar hoja
@@ -820,7 +1182,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                 )}
                 {/* Barra de búsqueda - hoja importada */}
                 {searchOpen && (
-                    <div className="h-12 px-4 flex items-center gap-3 border-b border-white/5 bg-[var(--bg-dark)] shrink-0">
+                    <div className="h-12 px-4 flex items-center gap-3 border-b border-gray-200 bg-[var(--bg-dark)] shrink-0">
                         <input
                             ref={searchInputRef}
                             type="text"
@@ -831,52 +1193,52 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                 if (e.key === "Escape") { setSearchOpen(false); }
                             }}
                             placeholder="Buscar en la hoja..."
-                            className="flex-1 min-w-[160px] px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-sm text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-emerald-500/40"
+                            className="flex-1 min-w-[160px] px-3 py-2 rounded-lg bg-gray-100 border border-gray-300 text-sm text-gray-800 placeholder-gray-500 focus:outline-none focus:border-emerald-500/40"
                         />
-                        <span className="text-xs text-zinc-500 tabular-nums shrink-0">
+                        <span className="text-xs text-gray-500 tabular-nums shrink-0">
                             {searchQuery.trim() ? (searchResults.length > 0 ? `${searchActiveIndex + 1} / ${searchResults.length}` : "0 / 0") : "0 / 0"}
                         </span>
                         <div className="flex items-center gap-0.5">
-                            <button type="button" onClick={goSearchPrev} disabled={searchResults.length === 0} className="p-2 rounded-md hover:bg-white/5 text-zinc-400 disabled:opacity-40"><ChevronUp size={16} /></button>
-                            <button type="button" onClick={goSearchNext} disabled={searchResults.length === 0} className="p-2 rounded-md hover:bg-white/5 text-zinc-400 disabled:opacity-40"><ChevronDown size={16} /></button>
+                            <button type="button" onClick={goSearchPrev} disabled={searchResults.length === 0} className="p-2 rounded-md hover:bg-gray-100 text-gray-600 disabled:opacity-40"><ChevronUp size={16} /></button>
+                            <button type="button" onClick={goSearchNext} disabled={searchResults.length === 0} className="p-2 rounded-md hover:bg-gray-100 text-gray-600 disabled:opacity-40"><ChevronDown size={16} /></button>
                         </div>
-                        <button type="button" onClick={() => { setSearchOpen(false); setSearchQuery(""); }} className="p-2 rounded-md hover:bg-white/5 text-zinc-400"><X size={16} /></button>
+                        <button type="button" onClick={() => { setSearchOpen(false); setSearchQuery(""); }} className="p-2 rounded-md hover:bg-gray-100 text-gray-600"><X size={16} /></button>
                     </div>
                 )}
                 {/* Toolbar */}
-                <div className="min-h-[48px] py-2 bg-[var(--bg-dark)] border-b border-white/5 flex flex-wrap items-center justify-between px-4 gap-3 shrink-0 electron-drag">
+                <div className="min-h-[48px] py-2 bg-[var(--bg-dark)] border-b border-gray-200 flex flex-wrap items-center justify-between px-4 gap-3 shrink-0 electron-drag">
                     <div className="flex items-center gap-3">
                         <Table size={16} className="text-purple-400" />
-                        <span className="font-medium text-sm text-zinc-100">{hoja.nombre}</span>
+                        <span className="font-medium text-sm text-gray-900">{hoja.nombre}</span>
                         <span className="text-[10px] px-2 py-0.5 rounded-md bg-purple-500/15 text-purple-400">
                             Hoja importada (editable)
                         </span>
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2 electron-no-drag shrink-0 ml-auto justify-end">
-                        <span className="text-xs text-zinc-500">
+                        <span className="text-xs text-gray-500">
                             {hoja.datos?.length || 0} filas × {hoja.columnas?.length || 0} columnas
                         </span>
-                        <div className="w-px h-5 bg-white/10" />
+                        <div className="w-px h-5 bg-gray-200" />
                         <button
                             onClick={() => exportPDF()}
-                            className="flex items-center gap-1.5 px-3 py-2 rounded-md hover:bg-white/5 text-zinc-400 hover:text-zinc-200 text-xs transition-colors"
+                            className="flex items-center gap-1.5 px-3 py-2 rounded-md hover:bg-gray-100 text-gray-600 hover:text-gray-800 text-xs transition-colors"
                         >
                             <FileText size={14} />
                             <span className="hidden sm:inline">PDF</span>
                         </button>
                         <button
                             onClick={() => exportExcel()}
-                            className="flex items-center gap-1.5 px-3 py-2 rounded-md hover:bg-white/5 text-zinc-400 hover:text-zinc-200 text-xs transition-colors"
+                            className="flex items-center gap-1.5 px-3 py-2 rounded-md hover:bg-gray-100 text-gray-600 hover:text-gray-800 text-xs transition-colors"
                         >
                             <FileSpreadsheet size={14} />
                             <span className="hidden sm:inline">Excel</span>
                         </button>
-                        <div className="w-px h-5 bg-white/10" />
+                        <div className="w-px h-5 bg-gray-200" />
                         <button
                             type="button"
                             onClick={() => { setSearchOpen(true); setTimeout(() => searchInputRef.current?.focus(), 50); }}
-                            className="flex items-center gap-1.5 px-3 py-2 rounded-md hover:bg-white/5 text-zinc-400 hover:text-zinc-200 text-xs transition-colors"
+                            className="flex items-center gap-1.5 px-3 py-2 rounded-md hover:bg-gray-100 text-gray-600 hover:text-gray-800 text-xs transition-colors"
                             title="Buscar (⌘F / Ctrl+F)"
                         >
                             <Search size={14} />
@@ -920,7 +1282,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
 
     function renderTabs() {
         return (
-            <div className="h-10 bg-[var(--bg-dark)] border-t border-white/5 flex items-center justify-between px-3 shrink-0 overflow-x-auto">
+            <div className="h-10 bg-[var(--bg-dark)] border-t border-gray-200 flex items-center justify-between px-3 shrink-0 overflow-x-auto">
                 <div className="flex items-center gap-0.5">
                     {(["parcelas", "productos", "tratamientos", "fertilizantes", "cosecha", "historico"] as SheetType[]).map((sheet) => (
                         <button
@@ -928,7 +1290,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                             onClick={() => handleSheetTabClick(sheet)}
                             className={`flex items-center gap-1.5 px-3 py-2 rounded-md text-xs font-medium transition-colors ${effectiveImportedIndex === null && effectiveSheet === sheet
                                 ? "bg-emerald-500/10 text-emerald-400"
-                                : "text-zinc-500 hover:text-zinc-300 hover:bg-white/5"
+                                : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
                                 }`}
                         >
                             {SHEET_ICONS[sheet]}
@@ -937,7 +1299,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                     ))}
 
                     {hojas.length > 0 && (
-                        <div className="w-px h-4 bg-white/10 mx-2" />
+                        <div className="w-px h-4 bg-gray-200 mx-2" />
                     )}
 
                     {hojas.map((hoja, idx) => (
@@ -946,7 +1308,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                             onClick={() => handleImportedTabClick(idx)}
                             className={`flex items-center gap-1.5 px-3 py-2 rounded-md text-xs font-medium transition-colors ${effectiveImportedIndex === idx
                                 ? "bg-purple-500/10 text-purple-400"
-                                : "text-zinc-500 hover:text-zinc-300 hover:bg-white/5"
+                                : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
                                 }`}
                         >
                             <Table size={12} />
@@ -955,7 +1317,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                     ))}
                 </div>
 
-                <span className="text-[11px] text-zinc-500 shrink-0 ml-4">
+                <span className="text-[11px] text-gray-500 shrink-0 ml-4">
                     {effectiveImportedIndex !== null
                         ? `${hojas[effectiveImportedIndex]?.datos?.length || 0} filas`
                         : `${data.length} registro${data.length !== 1 ? "s" : ""}`
@@ -975,14 +1337,14 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                         <div className="flex items-center gap-2">
                             <button
                                 onClick={onFocusModeExit}
-                                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-white/5 hover:bg-white/10 text-zinc-300 hover:text-zinc-100 text-xs transition-colors"
+                                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-gray-100 hover:bg-gray-200 text-gray-700 hover:text-gray-900 text-xs transition-colors"
                             >
                                 <ArrowLeft size={14} />
                                 Volver al cuaderno
                             </button>
                             <button
                                 onClick={onFocusModeExit}
-                                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-white/5 hover:bg-white/10 text-zinc-300 hover:text-zinc-100 text-xs transition-colors"
+                                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-gray-100 hover:bg-gray-200 text-gray-700 hover:text-gray-900 text-xs transition-colors"
                             >
                                 <RefreshCw size={14} />
                                 Cambiar hoja
@@ -991,11 +1353,11 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                     </div>
                 )}
                 {/* Toolbar — IDE: cuaderno, hoja activa, hints */}
-                <div className="min-h-[48px] py-2 bg-[var(--bg-dark)] border-b border-white/5 flex flex-wrap items-center justify-between px-4 gap-3 shrink-0 electron-drag">
+                <div className="min-h-[48px] py-2 bg-[var(--bg-dark)] border-b border-gray-200 flex flex-wrap items-center justify-between px-4 gap-3 shrink-0 electron-drag">
                     <div className="flex items-center gap-3 min-w-0">
-                        <span className="font-medium text-sm text-zinc-100 truncate">{cuaderno.nombre_explotacion}</span>
-                        <span className="text-zinc-500 text-xs">·</span>
-                        <span className="text-xs text-zinc-400 truncate" title="Hoja activa">
+                        <span className="font-medium text-sm text-gray-900 truncate">{cuaderno.nombre_explotacion}</span>
+                        <span className="text-gray-500 text-xs">·</span>
+                        <span className="text-xs text-gray-600 truncate" title="Hoja activa">
                             {effectiveImportedIndex !== null
                                 ? (hojas[effectiveImportedIndex]?.nombre || "Hoja importada")
                                 : (SHEET_CONFIG[effectiveSheet]?.title ?? effectiveSheet)}
@@ -1008,9 +1370,9 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                 {hojas.length} hojas importadas
                             </span>
                         )}
-                        <span className="hidden sm:inline-flex items-center gap-2 text-[10px] text-zinc-500 ml-2">
-                            <kbd className="px-1.5 py-0.5 rounded bg-white/5 border border-white/10">⌘F</kbd> Buscar
-                            <kbd className="px-1.5 py-0.5 rounded bg-white/5 border border-white/10">⌘K</kbd> Comandos
+                        <span className="hidden sm:inline-flex items-center gap-2 text-[10px] text-gray-500 ml-2">
+                            <kbd className="px-1.5 py-0.5 rounded bg-gray-100 border border-gray-300">⌘F</kbd> Buscar
+                            <kbd className="px-1.5 py-0.5 rounded bg-gray-100 border border-gray-300">⌘K</kbd> Comandos
                         </span>
                     </div>
 
@@ -1018,11 +1380,11 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                         {/* Filtro por cultivo - solo en parcelas */}
                         {effectiveSheet === "parcelas" && uniqueCultivos.length > 0 && (
                             <div className="flex flex-wrap items-center gap-1.5">
-                                <Filter size={14} className="text-zinc-500 hidden sm:block" />
+                                <Filter size={14} className="text-gray-500 hidden sm:block" />
                                 <select
                                     value={cultivoFilter}
                                     onChange={(e) => { setCultivoFilter(e.target.value); setSelectedParcelas(new Set()); }}
-                                    className="rounded-md bg-white/5 border border-white/10 px-2 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-emerald-500/40 min-w-[100px]"
+                                    className="rounded-md bg-gray-100 border border-gray-300 px-2 py-1.5 text-xs text-gray-800 focus:outline-none focus:border-emerald-500/40 min-w-[100px]"
                                 >
                                     <option value="">Todos los cultivos</option>
                                     {uniqueCultivos.map(c => (
@@ -1032,10 +1394,16 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                 <select
                                     value={parcelSortMode}
                                     onChange={(e) => setParcelSortMode(e.target.value as ParcelSortMode)}
-                                    className="rounded-md bg-white/5 border border-white/10 px-2 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-emerald-500/40"
+                                    className="rounded-md bg-gray-100 border border-gray-300 px-2 py-1.5 text-xs text-gray-800 focus:outline-none focus:border-emerald-500/40 min-w-[180px]"
                                 >
-                                    <option value="cultivo_superficie">Orden: cultivo + superficie</option>
                                     <option value="num_orden">Orden: Original / IA</option>
+                                    <option value="todo_az">Orden: Todo A-Z</option>
+                                    <option value="cultivo_superficie">Orden: cultivo + superficie</option>
+                                    <option value="cultivo">Orden: por cultivo (A-Z)</option>
+                                    <option value="alfabetico">Orden: por nombre (A-Z)</option>
+                                    <option value="termino_municipal">Orden: por término municipal (A-Z)</option>
+                                    <option value="superficie_desc">Orden: por superficie (mayor primero)</option>
+                                    <option value="superficie_asc">Orden: por superficie (menor primero)</option>
                                 </select>
                                 <input
                                     type="number"
@@ -1044,7 +1412,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                     value={targetHectareas}
                                     onChange={(e) => setTargetHectareas(e.target.value)}
                                     placeholder="ha objetivo"
-                                    className="w-24 rounded-md bg-white/5 border border-white/10 px-2 py-1.5 text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-emerald-500/40"
+                                    className="w-24 rounded-md bg-gray-100 border border-gray-300 px-2 py-1.5 text-xs text-gray-800 placeholder-gray-500 focus:outline-none focus:border-emerald-500/40"
                                 />
                                 <button
                                     type="button"
@@ -1053,26 +1421,68 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                 >
                                     Auto-seleccionar ha
                                 </button>
-                                <div className="w-px h-5 bg-white/10" />
+                                <div className="w-px h-5 bg-gray-200" />
+                            </div>
+                        )}
+                        {effectiveSheet === "tratamientos" && uniqueCultivosTrat.length > 0 && (
+                            <div className="flex items-center gap-1.5">
+                                <Filter size={14} className="text-gray-500 hidden sm:block" />
+                                <select
+                                    value={tratCultivoFilter}
+                                    onChange={(e) => { setTratCultivoFilter(e.target.value); setSelectedTratamientos(new Set()); }}
+                                    className="rounded-md bg-gray-100 border border-gray-300 px-2 py-1.5 text-xs text-gray-800 focus:outline-none focus:border-emerald-500/40 min-w-[100px]"
+                                >
+                                    <option value="">Todos los cultivos</option>
+                                    {uniqueCultivosTrat.map(c => (
+                                        <option key={c} value={c}>{c}</option>
+                                    ))}
+                                </select>
+                                <select
+                                    value={tratSortMode}
+                                    onChange={(e) => setTratSortMode(e.target.value as TratSortMode)}
+                                    className="rounded-md bg-gray-100 border border-gray-300 px-2 py-1.5 text-xs text-gray-800 focus:outline-none focus:border-emerald-500/40 min-w-[160px]"
+                                >
+                                    <option value="fecha_desc">Orden: Fecha (reciente primero)</option>
+                                    <option value="fecha_asc">Orden: Fecha (antiguo primero)</option>
+                                    <option value="cultivo">Orden: por cultivo</option>
+                                    <option value="parcela">Orden: por parcela</option>
+                                    <option value="producto">Orden: por producto</option>
+                                </select>
+                                <div className="w-px h-5 bg-gray-200" />
                             </div>
                         )}
                         {effectiveSheet !== "historico" && (
-                            <button
-                                onClick={() => { setOpenTreatFromSelection(false); setShowAddModal(true); }}
-                                className="flex items-center gap-1.5 px-3 py-2 rounded-md bg-white/5 hover:bg-white/10 text-zinc-300 text-xs font-medium transition-colors ml-auto sm:ml-0"
-                            >
-                                <Plus size={14} />
-                                Añadir
-                            </button>
+                            <>
+                                <button
+                                    onClick={() => {
+                                        setOpenTreatFromSelection(false);
+                                        setOpenTreatFromTratSelection(false);
+                                        setShowAddModal(true);
+                                    }}
+                                    className="flex items-center gap-1.5 px-3 py-2 rounded-md bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-medium transition-colors ml-auto sm:ml-0"
+                                >
+                                    <Plus size={14} />
+                                    Añadir
+                                </button>
+                                {["productos", "fertilizantes", "cosecha"].includes(effectiveSheet) && (
+                                    <button
+                                        onClick={() => setShowBulkModal(true)}
+                                        className="flex items-center gap-1.5 px-3 py-2 rounded-md bg-violet-500/15 hover:bg-violet-500/25 text-violet-300 text-xs font-medium transition-colors"
+                                    >
+                                        <Table2 size={14} />
+                                        Añadir varios
+                                    </button>
+                                )}
+                            </>
                         )}
-                        <div className="w-px h-5 bg-white/10" />
+                        <div className="w-px h-5 bg-gray-200" />
                         <button
                             onClick={() => exportPDF(
                                 effectiveSheet === "historico"
                                     ? { desde: historicoFilters.date_from, hasta: historicoFilters.date_to }
                                     : undefined
                             )}
-                            className="flex items-center gap-1.5 px-3 py-2 rounded-md hover:bg-white/5 text-zinc-400 hover:text-zinc-200 text-xs transition-colors"
+                            className="flex items-center gap-1.5 px-3 py-2 rounded-md hover:bg-gray-100 text-gray-600 hover:text-gray-800 text-xs transition-colors"
                         >
                             <FileText size={14} />
                             <span className="hidden sm:inline">PDF</span>
@@ -1083,16 +1493,16 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                     ? { desde: historicoFilters.date_from, hasta: historicoFilters.date_to }
                                     : undefined
                             )}
-                            className="flex items-center gap-1.5 px-3 py-2 rounded-md hover:bg-white/5 text-zinc-400 hover:text-zinc-200 text-xs transition-colors"
+                            className="flex items-center gap-1.5 px-3 py-2 rounded-md hover:bg-gray-100 text-gray-600 hover:text-gray-800 text-xs transition-colors"
                         >
                             <FileSpreadsheet size={14} />
                             <span className="hidden sm:inline">Excel</span>
                         </button>
-                        <div className="w-px h-5 bg-white/10" />
+                        <div className="w-px h-5 bg-gray-200" />
                         <button
                             type="button"
                             onClick={() => { setSearchOpen(true); setTimeout(() => searchInputRef.current?.focus(), 50); }}
-                            className="flex items-center gap-1.5 px-3 py-2 rounded-md hover:bg-white/5 text-zinc-400 hover:text-zinc-200 text-xs transition-colors"
+                            className="flex items-center gap-1.5 px-3 py-2 rounded-md hover:bg-gray-100 text-gray-600 hover:text-gray-800 text-xs transition-colors"
                             title="Buscar en hoja (⌘F / Ctrl+F)"
                         >
                             <Search size={14} />
@@ -1102,7 +1512,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
 
                 {/* Barra de búsqueda */}
                 {searchOpen && (
-                    <div className="h-12 px-4 flex items-center gap-3 border-b border-white/5 bg-[var(--bg-dark)] shrink-0">
+                    <div className="h-12 px-4 flex items-center gap-3 border-b border-gray-200 bg-[var(--bg-dark)] shrink-0">
                         <input
                             ref={searchInputRef}
                             type="text"
@@ -1113,9 +1523,9 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                 if (e.key === "Escape") { setSearchOpen(false); }
                             }}
                             placeholder="Buscar en la hoja..."
-                            className="flex-1 min-w-[160px] px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-sm text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-emerald-500/40"
+                            className="flex-1 min-w-[160px] px-3 py-2 rounded-lg bg-gray-100 border border-gray-300 text-sm text-gray-800 placeholder-gray-500 focus:outline-none focus:border-emerald-500/40"
                         />
-                        <span className="text-xs text-zinc-500 tabular-nums shrink-0">
+                        <span className="text-xs text-gray-500 tabular-nums shrink-0">
                             {searchQuery.trim() ? (searchResults.length > 0 ? `${searchActiveIndex + 1} / ${searchResults.length}` : "0 / 0") : "0 / 0"}
                         </span>
                         <div className="flex items-center gap-0.5">
@@ -1123,7 +1533,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                 type="button"
                                 onClick={goSearchPrev}
                                 disabled={searchResults.length === 0}
-                                className="p-2 rounded-md hover:bg-white/5 text-zinc-400 hover:text-zinc-200 disabled:opacity-40 disabled:cursor-not-allowed"
+                                className="p-2 rounded-md hover:bg-gray-100 text-gray-600 hover:text-gray-800 disabled:opacity-40 disabled:cursor-not-allowed"
                                 title="Anterior (Shift+Enter)"
                             >
                                 <ChevronUp size={16} />
@@ -1132,7 +1542,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                 type="button"
                                 onClick={goSearchNext}
                                 disabled={searchResults.length === 0}
-                                className="p-2 rounded-md hover:bg-white/5 text-zinc-400 hover:text-zinc-200 disabled:opacity-40 disabled:cursor-not-allowed"
+                                className="p-2 rounded-md hover:bg-gray-100 text-gray-600 hover:text-gray-800 disabled:opacity-40 disabled:cursor-not-allowed"
                                 title="Siguiente (Enter)"
                             >
                                 <ChevronDown size={16} />
@@ -1141,7 +1551,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                         <button
                             type="button"
                             onClick={() => { setSearchOpen(false); setSearchQuery(""); }}
-                            className="p-2 rounded-md hover:bg-white/5 text-zinc-400 hover:text-zinc-200"
+                            className="p-2 rounded-md hover:bg-gray-100 text-gray-600 hover:text-gray-800"
                             title="Cerrar"
                         >
                             <X size={16} />
@@ -1151,12 +1561,12 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
 
                 {/* Filtros histórico */}
                 {effectiveSheet === "historico" && (
-                    <div className="px-4 py-2 border-b border-white/5 bg-[var(--bg-dark)] flex flex-wrap items-center gap-3">
-                        <span className="text-xs text-zinc-500">Filtros:</span>
+                    <div className="px-4 py-2 border-b border-gray-200 bg-[var(--bg-dark)] flex flex-wrap items-center gap-3">
+                        <span className="text-xs text-gray-500">Filtros:</span>
                         <select
                             value={historicoFilters.parcela_id || ""}
                             onChange={(e) => setHistoricoFilters((f) => ({ ...f, parcela_id: e.target.value || undefined }))}
-                            className="rounded-md bg-white/5 border border-white/10 px-2 py-1.5 text-xs text-zinc-200"
+                            className="rounded-md bg-gray-100 border border-gray-300 px-2 py-1.5 text-xs text-gray-800"
                         >
                             <option value="">Todas las parcelas</option>
                             {(cuaderno.parcelas || []).map((p) => (
@@ -1167,20 +1577,20 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                             type="date"
                             value={historicoFilters.date_from || ""}
                             onChange={(e) => setHistoricoFilters((f) => ({ ...f, date_from: e.target.value || undefined }))}
-                            className="rounded-md bg-white/5 border border-white/10 px-2 py-1.5 text-xs text-zinc-200"
+                            className="rounded-md bg-gray-100 border border-gray-300 px-2 py-1.5 text-xs text-gray-800"
                             placeholder="Desde"
                         />
                         <input
                             type="date"
                             value={historicoFilters.date_to || ""}
                             onChange={(e) => setHistoricoFilters((f) => ({ ...f, date_to: e.target.value || undefined }))}
-                            className="rounded-md bg-white/5 border border-white/10 px-2 py-1.5 text-xs text-zinc-200"
+                            className="rounded-md bg-gray-100 border border-gray-300 px-2 py-1.5 text-xs text-gray-800"
                             placeholder="Hasta"
                         />
                         <select
                             value={historicoFilters.product_id || ""}
                             onChange={(e) => setHistoricoFilters((f) => ({ ...f, product_id: e.target.value || undefined }))}
-                            className="rounded-md bg-white/5 border border-white/10 px-2 py-1.5 text-xs text-zinc-200"
+                            className="rounded-md bg-gray-100 border border-gray-300 px-2 py-1.5 text-xs text-gray-800"
                         >
                             <option value="">Todos los productos</option>
                             {(cuaderno.productos || []).map((p) => (
@@ -1192,30 +1602,30 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                             value={historicoFilters.num_lote || ""}
                             onChange={(e) => setHistoricoFilters((f) => ({ ...f, num_lote: e.target.value || undefined }))}
                             placeholder="Nº Lote"
-                            className="rounded-md bg-white/5 border border-white/10 px-2 py-1.5 text-xs text-zinc-200 w-28"
+                            className="rounded-md bg-gray-100 border border-gray-300 px-2 py-1.5 text-xs text-gray-800 w-28"
                         />
                     </div>
                 )}
 
                 {/* Barra sumatorio hectáreas */}
                 {effectiveSheet === "parcelas" && hectareasSummary && (
-                    <div className="px-4 py-2.5 border-b border-white/5 bg-gradient-to-r from-emerald-500/5 to-transparent flex items-center justify-between shrink-0">
+                    <div className="px-4 py-2.5 border-b border-gray-200 bg-gradient-to-r from-emerald-500/5 to-transparent flex items-center justify-between shrink-0">
                         <div className="flex items-center gap-4">
                             <div className="flex items-center gap-2">
                                 <MapPin size={14} className="text-emerald-400" />
-                                <span className="text-xs text-zinc-400">Total:</span>
-                                <span className="text-sm font-semibold text-zinc-100">{hectareasSummary.total} parcelas</span>
-                                <span className="text-xs text-zinc-500">·</span>
+                                <span className="text-xs text-gray-600">Total:</span>
+                                <span className="text-sm font-semibold text-gray-900">{hectareasSummary.total} parcelas</span>
+                                <span className="text-xs text-gray-500">·</span>
                                 <span className="text-sm font-semibold text-emerald-400">{Number(hectareasSummary.totalHa || 0).toFixed(2)} ha</span>
                             </div>
                             {hectareasSummary.selected > 0 && (
                                 <>
-                                    <div className="w-px h-5 bg-white/10" />
+                                    <div className="w-px h-5 bg-gray-200" />
                                     <div className="flex items-center gap-2">
                                         <CheckSquare size={14} className="text-blue-400" />
-                                        <span className="text-xs text-zinc-400">Seleccionadas:</span>
+                                        <span className="text-xs text-gray-600">Seleccionadas:</span>
                                         <span className="text-sm font-semibold text-blue-400">{hectareasSummary.selected} parcelas</span>
-                                        <span className="text-xs text-zinc-500">·</span>
+                                        <span className="text-xs text-gray-500">·</span>
                                         <span className="text-sm font-bold text-blue-300">{Number(hectareasSummary.selectedHa || 0).toFixed(2)} ha</span>
                                     </div>
                                 </>
@@ -1224,23 +1634,69 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                         {hectareasSummary.selected > 0 && (
                             <div className="flex items-center gap-2">
                                 <button
-                                    onClick={sendParcelaCheckboxesToChat}
-                                    disabled={!onSendSelectionToChat}
-                                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium transition-colors disabled:opacity-50"
+                                    onClick={() => { setOpenTreatFromSelection(true); setShowAddModal(true); }}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium transition-colors"
                                 >
-                                    <Send size={13} />
-                                    Enviar al Chat
+                                    <Plus size={13} />
+                                    Añadir tratamiento
                                 </button>
                                 <button
-                                    onClick={() => { setOpenTreatFromSelection(true); setShowAddModal(true); }}
-                                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-zinc-300 text-xs transition-colors"
+                                    onClick={sendParcelaCheckboxesToChat}
+                                    disabled={!onSendSelectionToChat}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs transition-colors disabled:opacity-50"
                                 >
-                                    <ClipboardList size={13} />
-                                    Formulario
+                                    <Send size={13} />
+                                    Chat IA
                                 </button>
                                 <button
                                     onClick={() => setSelectedParcelas(new Set())}
-                                    className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+                                    className="text-xs text-gray-500 hover:text-gray-700 transition-colors"
+                                >
+                                    Limpiar
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {/* Barra selección tratamientos */}
+                {effectiveSheet === "tratamientos" && tratamientosSummary && (
+                    <div className="px-4 py-2.5 border-b border-gray-200 bg-gradient-to-r from-blue-500/5 to-transparent flex items-center justify-between shrink-0">
+                        <div className="flex items-center gap-4">
+                            <div className="flex items-center gap-2">
+                                <ClipboardList size={14} className="text-blue-400" />
+                                <span className="text-xs text-gray-600">Total:</span>
+                                <span className="text-sm font-semibold text-gray-900">{tratamientosSummary.total} tratamientos</span>
+                                <span className="text-xs text-gray-500">·</span>
+                                <span className="text-sm font-semibold text-emerald-400">{Number(tratamientosSummary.totalHa || 0).toFixed(2)} ha</span>
+                            </div>
+                            {tratamientosSummary.selected > 0 && (
+                                <>
+                                    <div className="w-px h-5 bg-gray-200" />
+                                    <div className="flex items-center gap-2">
+                                        <CheckSquare size={14} className="text-blue-400" />
+                                        <span className="text-xs text-gray-600">Seleccionados:</span>
+                                        <span className="text-sm font-semibold text-blue-400">{tratamientosSummary.selected} tratamiento(s)</span>
+                                        <span className="text-xs text-gray-500">·</span>
+                                        <span className="text-sm font-bold text-blue-300">{Number(tratamientosSummary.selectedHa || 0).toFixed(2)} ha</span>
+                                        <span className="text-xs text-gray-500">·</span>
+                                        <span className="text-sm text-blue-300">{parcelasFromSelectedTratamientos.length} parcela(s)</span>
+                                    </div>
+                                </>
+                            )}
+                        </div>
+                        {tratamientosSummary.selected > 0 && (
+                            <div className="flex items-center gap-2">
+                                <button
+                                    onClick={() => { setOpenTreatFromTratSelection(true); setShowAddModal(true); }}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium transition-colors"
+                                >
+                                    <Plus size={13} />
+                                    Añadir tratamiento
+                                </button>
+                                <button
+                                    onClick={() => setSelectedTratamientos(new Set())}
+                                    className="text-xs text-gray-500 hover:text-gray-700 transition-colors"
                                 >
                                     Limpiar
                                 </button>
@@ -1254,22 +1710,26 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                     <table className="w-full text-sm border-collapse">
                         <thead className="sticky top-0 z-10">
                             <tr className="bg-[var(--bg-dark)]">
-                                {effectiveSheet === "parcelas" && (
-                                    <th className="w-10 px-2 py-2.5 text-center border-b border-r border-white/5">
-                                        <button
-                                            type="button"
-                                            onClick={toggleSelectAll}
-                                            className="text-zinc-500 hover:text-emerald-400 transition-colors"
-                                            title="Seleccionar todo"
-                                        >
-                                            {selectedParcelas.size > 0 && selectedParcelas.size === (displayData as any[]).length
-                                                ? <CheckSquare size={15} className="text-emerald-400" />
-                                                : <Square size={15} />
-                                            }
-                                        </button>
-                                    </th>
-                                )}
-                                <th className="w-12 px-3 py-2.5 text-left text-[11px] font-medium text-zinc-500 uppercase tracking-wider border-b border-r border-white/5 cursor-pointer hover:bg-white/5"
+                                            {(effectiveSheet === "parcelas" || effectiveSheet === "tratamientos") && (
+                                                <th className="w-10 px-2 py-2.5 text-center border-b border-r border-gray-200">
+                                                    <button
+                                                        type="button"
+                                                        onClick={effectiveSheet === "parcelas" ? toggleSelectAll : toggleSelectAllTratamientos}
+                                                        className="text-gray-500 hover:text-emerald-400 transition-colors"
+                                                        title="Seleccionar todo"
+                                                    >
+                                                        {effectiveSheet === "parcelas"
+                                                            ? (selectedParcelas.size > 0 && selectedParcelas.size === (displayData as any[]).length
+                                                                ? <CheckSquare size={15} className="text-emerald-400" />
+                                                                : <Square size={15} />)
+                                                            : (selectedTratamientos.size > 0 && selectedTratamientos.size === (displayData as any[]).length
+                                                                ? <CheckSquare size={15} className="text-emerald-400" />
+                                                                : <Square size={15} />)
+                                                        }
+                                                    </button>
+                                                </th>
+                                            )}
+                                <th className="w-12 px-3 py-2.5 text-left text-[11px] font-medium text-gray-500 uppercase tracking-wider border-b border-r border-gray-200 cursor-pointer hover:bg-gray-100"
                                     onClick={() => clearCellSelection()}
                                     title="Limpiar selección de celdas"
                                 >
@@ -1279,14 +1739,14 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                     <th
                                         key={col.key}
                                         style={{ width: col.width }}
-                                        className="px-3 py-2.5 text-left text-[11px] font-medium text-zinc-500 uppercase tracking-wider border-b border-r border-white/5 whitespace-nowrap cursor-pointer hover:bg-white/5 hover:text-zinc-300 transition-colors select-none"
+                                        className="px-3 py-2.5 text-left text-[11px] font-medium text-gray-500 uppercase tracking-wider border-b border-r border-gray-200 whitespace-nowrap cursor-pointer hover:bg-gray-100 hover:text-gray-700 transition-colors select-none"
                                         onClick={() => handleSelectColumn(colIdx)}
                                         title={`Seleccionar columna "${col.label}"`}
                                     >
                                         {col.label}
                                     </th>
                                 ))}
-                                <th className="w-24 px-3 py-2.5 text-center text-[11px] font-medium text-zinc-500 uppercase tracking-wider border-b border-white/5">
+                                <th className="w-24 px-3 py-2.5 text-center text-[11px] font-medium text-gray-500 uppercase tracking-wider border-b border-gray-200">
 
                                 </th>
                             </tr>
@@ -1295,26 +1755,26 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                             {displayData.length === 0 ? (
                                 <tr>
                                     <td
-                                        colSpan={config.columns.length + (effectiveSheet === "parcelas" ? 3 : 2)}
-                                        className="px-8 py-16 text-center text-zinc-500"
+                                        colSpan={config.columns.length + ((effectiveSheet === "parcelas" || effectiveSheet === "tratamientos") ? 3 : 2)}
+                                        className="px-8 py-16 text-center text-gray-500"
                                     >
                                         <div className="flex flex-col items-center gap-3">
-                                            <div className="w-12 h-12 rounded-xl bg-white/5 flex items-center justify-center text-zinc-400">
+                                            <div className="w-12 h-12 rounded-xl bg-gray-100 flex items-center justify-center text-gray-600">
                                                 {SHEET_ICONS[effectiveSheet]}
                                             </div>
-                                            <p>{cultivoFilter ? `Sin parcelas con cultivo "${cultivoFilter}"` : `Sin datos en ${config.title.toLowerCase()}`}</p>
+                                            <p>{(effectiveSheet === "parcelas" && cultivoFilter) ? `Sin parcelas con cultivo "${cultivoFilter}"` : (effectiveSheet === "tratamientos" && tratCultivoFilter) ? `Sin tratamientos con cultivo "${tratCultivoFilter}"` : `Sin datos en ${config.title.toLowerCase()}`}</p>
                                             {effectiveSheet !== "historico" && !cultivoFilter && (
                                                 <button
                                                     onClick={() => setShowAddModal(true)}
                                                     className="mt-2 flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium transition-colors"
                                                 >
                                                     <Plus size={16} />
-                                                    Añadir {effectiveSheet === "parcelas" ? "parcela" : effectiveSheet === "productos" ? "producto" : "tratamiento"}
+                                                    Añadir {effectiveSheet === "parcelas" ? "parcela" : effectiveSheet === "productos" ? "producto" : effectiveSheet === "fertilizantes" ? "fertilizante" : effectiveSheet === "cosecha" ? "cosecha" : "tratamiento"}
                                                 </button>
                                             )}
-                                            {cultivoFilter && (
+                                            {(cultivoFilter || tratCultivoFilter) && (
                                                 <button
-                                                    onClick={() => setCultivoFilter("")}
+                                                    onClick={() => { setCultivoFilter(""); setTratCultivoFilter(""); }}
                                                     className="mt-2 text-xs text-emerald-400 hover:text-emerald-300 transition-colors"
                                                 >
                                                     Limpiar filtro
@@ -1331,20 +1791,49 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                         row.id &&
                                         highlight.id === row.id;
                                     const isSelected = effectiveSheet === "parcelas" && selectedParcelas.has(row.id);
+                                    const isTratSelected = effectiveSheet === "tratamientos" && selectedTratamientos.has(row.id);
+
+                                    // Separador de parcela cuando tratamientos ordenados por parcela
+                                    const showParcelaSeparator = effectiveSheet === "tratamientos" && tratSortMode === "parcela";
+                                    const parcelaKey = (r: any) => {
+                                        const val = r?.parcela_nombres ?? r?.num_orden_parcelas ?? "";
+                                        return (Array.isArray(val) ? (val as string[]).join(",") : String(val)).toLowerCase();
+                                    };
+                                    const prevRow = idx > 0 ? (displayData as any[])[idx - 1] : null;
+                                    const isNewParcela = !prevRow || parcelaKey(row) !== parcelaKey(prevRow);
+                                    const parcelaLabel = Array.isArray(row.parcela_nombres) && row.parcela_nombres.length
+                                        ? (row.parcela_nombres as string[]).join(", ")
+                                        : (row.num_orden_parcelas ? `Ord. ${row.num_orden_parcelas}` : "-");
+
+                                    const colspan = config.columns.length + ((effectiveSheet === "parcelas" || effectiveSheet === "tratamientos") ? 3 : 2);
 
                                     return (
+                                        <Fragment key={row.id || idx}>
+                                            {showParcelaSeparator && isNewParcela && (
+                                                <tr className="parcela-separator">
+                                                    <td
+                                                        colSpan={colspan}
+                                                        className="px-4 py-2 bg-emerald-500/10 border-b-2 border-emerald-500/30 text-emerald-700 font-semibold text-sm sticky left-0"
+                                                    >
+                                                        <span className="flex items-center gap-2">
+                                                            <MapPin size={14} className="text-emerald-600 shrink-0" />
+                                                            {parcelaLabel}
+                                                        </span>
+                                                    </td>
+                                                </tr>
+                                            )}
                                         <tr
                                             key={row.id || idx}
-                                            className={`group hover:bg-white/[0.03] transition-colors ${isHighlighted ? "bg-emerald-500/15 ring-1 ring-emerald-500/50" : ""} ${isSelected ? "bg-blue-500/10" : ""}`}
+                                            className={`group hover:bg-gray-50 transition-colors ${isHighlighted ? "bg-emerald-500/15 ring-1 ring-emerald-500/50" : ""} ${isSelected || isTratSelected ? "bg-blue-500/10" : ""}`}
                                         >
-                                            {effectiveSheet === "parcelas" && (
-                                                <td className="px-2 py-2 text-center border-b border-r border-white/5 bg-[var(--bg-dark)]">
+                                            {(effectiveSheet === "parcelas" || effectiveSheet === "tratamientos") && (
+                                                <td className="px-2 py-2 text-center border-b border-r border-gray-200 bg-[var(--bg-dark)]">
                                                     <button
                                                         type="button"
-                                                        onClick={() => toggleParcelaSelection(row.id)}
-                                                        className="text-zinc-500 hover:text-emerald-400 transition-colors"
+                                                        onClick={() => effectiveSheet === "parcelas" ? toggleParcelaSelection(row.id) : toggleTratamientoSelection(row.id)}
+                                                        className="text-gray-500 hover:text-emerald-400 transition-colors"
                                                     >
-                                                        {isSelected
+                                                        {(effectiveSheet === "parcelas" ? isSelected : isTratSelected)
                                                             ? <CheckSquare size={15} className="text-blue-400" />
                                                             : <Square size={15} />
                                                         }
@@ -1352,7 +1841,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                                 </td>
                                             )}
                                             <td
-                                                className="px-3 py-2 text-zinc-500 text-xs font-mono border-b border-r border-white/5 bg-[var(--bg-dark)] cursor-pointer hover:bg-white/5 select-none"
+                                                className="px-3 py-2 text-gray-500 text-xs font-mono border-b border-r border-gray-200 bg-[var(--bg-dark)] cursor-pointer hover:bg-gray-100 select-none"
                                                 onClick={() => handleSelectRow(idx)}
                                                 title={`Seleccionar fila ${idx + 1}`}
                                             >
@@ -1373,7 +1862,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                                                         e.stopPropagation();
                                                                         setShowTratamientoDetalleId(row.id);
                                                                     }}
-                                                                    className="p-1 rounded-md bg-white/5 opacity-0 group-hover/link:opacity-100 hover:bg-emerald-500/20 hover:text-emerald-400 focus:opacity-100 transition-all text-zinc-400 shrink-0"
+                                                                    className="p-1 rounded-md bg-gray-100 opacity-0 group-hover/link:opacity-100 hover:bg-emerald-500/20 hover:text-emerald-400 focus:opacity-100 transition-all text-gray-600 shrink-0"
                                                                     title="Ver parcelas vinculadas"
                                                                 >
                                                                     <MapPin size={12} />
@@ -1405,7 +1894,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                                                 setEditValue(raw !== null && raw !== undefined && raw !== "" ? String(raw) : "");
                                                             }
                                                         }}
-                                                        className={`px-3 py-2 text-zinc-300 border-b border-r border-white/5 cursor-pointer select-none transition-colors ${isCellSelected
+                                                        className={`px-3 py-2 text-gray-700 border-b border-r border-gray-200 cursor-pointer select-none transition-colors ${isCellSelected
                                                             ? "bg-blue-500/20 ring-1 ring-inset ring-blue-500/40"
                                                             : isSearchMatch
                                                                 ? (isActiveMatch ? "bg-amber-500/30 ring-1 ring-amber-500/60" : "bg-amber-500/15")
@@ -1417,14 +1906,14 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                                                 ? "bg-emerald-500/20 text-emerald-400"
                                                                 : raw === "pendiente"
                                                                     ? "bg-amber-500/20 text-amber-400"
-                                                                    : "bg-white/10 text-zinc-400"
+                                                                    : "bg-gray-200 text-gray-600"
                                                                 }`}>
                                                                 {raw || "-"}
                                                             </span>
                                                         ) : isEditing ? (
                                                             <input
                                                                 autoFocus
-                                                                className="w-full min-w-[80px] px-2 py-1 rounded bg-white/10 border border-emerald-500/50 text-zinc-100 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                                                                className="w-full min-w-[80px] px-2 py-1 rounded bg-gray-200 border border-emerald-500/50 text-gray-900 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500"
                                                                 value={editValue}
                                                                 onChange={(e) => setEditValue(e.target.value)}
                                                                 onBlur={() => handleSaveCell(row.id, col.key, editValue)}
@@ -1438,21 +1927,21 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                                                 }}
                                                             />
                                                         ) : (
-                                                            <span className={`block w-full text-left min-h-[28px] rounded px-1 -mx-1 ${isBaseSheetEditable && row.id ? "hover:bg-white/5" : ""}`}>
+                                                            <span className={`block w-full text-left min-h-[28px] rounded px-1 -mx-1 ${isBaseSheetEditable && row.id ? "hover:bg-gray-100" : ""}`}>
                                                                 {display}
                                                             </span>
                                                         )}
                                                     </td>
                                                 );
                                             })}
-                                            <td className="px-3 py-2 border-b border-white/5">
+                                            <td className="px-3 py-2 border-b border-gray-200">
                                                 <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                                                     {effectiveSheet === "tratamientos" && row.id && (
                                                         <>
                                                             <button
                                                                 type="button"
                                                                 onClick={() => setShowTratamientoDetalleId(row.id)}
-                                                                className="p-1.5 rounded-md hover:bg-white/10 text-zinc-500 hover:text-emerald-400"
+                                                                className="p-1.5 rounded-md hover:bg-gray-200 text-gray-500 hover:text-emerald-400"
                                                                 title="Ver parcelas"
                                                             >
                                                                 <MapPin size={14} />
@@ -1460,23 +1949,23 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                                             <button
                                                                 type="button"
                                                                 onClick={() => setEditTratamientoId(row.id)}
-                                                                className="p-1.5 rounded-md hover:bg-white/10 text-zinc-500 hover:text-zinc-300"
+                                                                className="p-1.5 rounded-md hover:bg-gray-200 text-gray-500 hover:text-gray-700"
                                                                 title="Editar"
                                                             >
                                                                 <Pencil size={14} />
                                                             </button>
                                                             <button
                                                                 type="button"
-                                                                onClick={() => handleDuplicarTratamiento(row.id)}
-                                                                className="p-1.5 rounded-md hover:bg-white/10 text-zinc-500 hover:text-zinc-300"
-                                                                title="Duplicar"
+                                                                onClick={() => { setCopyToParcelsId(row.id); setCopyTargetParcelas(new Set()); }}
+                                                                className="p-1.5 rounded-md hover:bg-gray-200 text-gray-500 hover:text-blue-400"
+                                                                title="Copiar a otras parcelas"
                                                             >
                                                                 <Copy size={14} />
                                                             </button>
                                                             <button
                                                                 type="button"
                                                                 onClick={() => handleDeleteTratamiento(row.id)}
-                                                                className="p-1.5 rounded-md hover:bg-red-500/20 text-zinc-500 hover:text-red-400"
+                                                                className="p-1.5 rounded-md hover:bg-red-500/20 text-gray-500 hover:text-red-400"
                                                                 title="Eliminar"
                                                             >
                                                                 <Trash2 size={14} />
@@ -1488,7 +1977,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                                             <button
                                                                 type="button"
                                                                 onClick={() => loadParcelaTratamientos(row.id)}
-                                                                className="p-1.5 rounded-md hover:bg-white/10 text-zinc-500 hover:text-amber-400"
+                                                                className="p-1.5 rounded-md hover:bg-gray-200 text-gray-500 hover:text-amber-400"
                                                                 title="Ver tratamientos previos"
                                                             >
                                                                 <History size={14} />
@@ -1496,7 +1985,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                                             <button
                                                                 type="button"
                                                                 onClick={() => onRequestHighlight?.(effectiveSheet, row.id)}
-                                                                className="p-1.5 rounded-md hover:bg-white/10 text-zinc-500 hover:text-zinc-300"
+                                                                className="p-1.5 rounded-md hover:bg-gray-200 text-gray-500 hover:text-gray-700"
                                                                 title="Ver"
                                                             >
                                                                 <Eye size={14} />
@@ -1504,7 +1993,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                                             <button
                                                                 type="button"
                                                                 onClick={() => handleDeleteParcela(row.id)}
-                                                                className="p-1.5 rounded-md hover:bg-red-500/20 text-zinc-500 hover:text-red-400"
+                                                                className="p-1.5 rounded-md hover:bg-red-500/20 text-gray-500 hover:text-red-400"
                                                                 title="Eliminar"
                                                             >
                                                                 <Trash2 size={14} />
@@ -1516,7 +2005,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                                             <button
                                                                 type="button"
                                                                 onClick={() => onRequestHighlight?.(effectiveSheet, row.id)}
-                                                                className="p-1.5 rounded-md hover:bg-white/10 text-zinc-500 hover:text-zinc-300"
+                                                                className="p-1.5 rounded-md hover:bg-gray-200 text-gray-500 hover:text-gray-700"
                                                                 title="Ver"
                                                             >
                                                                 <Eye size={14} />
@@ -1524,7 +2013,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                                             <button
                                                                 type="button"
                                                                 onClick={() => handleDeleteProducto(row.id)}
-                                                                className="p-1.5 rounded-md hover:bg-red-500/20 text-zinc-500 hover:text-red-400"
+                                                                className="p-1.5 rounded-md hover:bg-red-500/20 text-gray-500 hover:text-red-400"
                                                                 title="Eliminar"
                                                             >
                                                                 <Trash2 size={14} />
@@ -1534,6 +2023,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                                 </div>
                                             </td>
                                         </tr>
+                                        </Fragment>
                                     );
                                 })
                             )}
@@ -1549,10 +2039,10 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                 <div className="w-6 h-6 rounded-md bg-blue-500/20 flex items-center justify-center">
                                     <Table2 size={14} className="text-blue-400" />
                                 </div>
-                                <span className="text-xs text-zinc-400">Selección:</span>
+                                <span className="text-xs text-gray-600">Selección:</span>
                                 <span className="text-sm font-semibold text-blue-300">{selectedCells.size} celda{selectedCells.size !== 1 ? "s" : ""}</span>
-                                <span className="text-xs text-zinc-500">·</span>
-                                <span className="text-xs text-zinc-400">
+                                <span className="text-xs text-gray-500">·</span>
+                                <span className="text-xs text-gray-600">
                                     {(() => {
                                         const rows = new Set<number>();
                                         for (const key of selectedCells) rows.add(parseInt(key.split(":")[0]));
@@ -1562,22 +2052,66 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                             </div>
                         </div>
                         <div className="flex items-center gap-2">
-                            {BASE_EDITABLE_SHEETS.includes(effectiveSheet) && (
+                            {BULK_EDIT_SHEETS.includes(effectiveSheet) && (
                                 <>
-                                    <input
-                                        type="text"
-                                        value={bulkEditValue}
-                                        onChange={(e) => setBulkEditValue(e.target.value)}
-                                        placeholder="Nuevo valor para todas"
-                                        className="w-52 px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-zinc-200 placeholder-zinc-500 text-xs focus:outline-none focus:border-blue-500/50"
-                                    />
-                                    <button
-                                        onClick={applyBulkEditToSelection}
-                                        disabled={bulkApplying}
-                                        className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                                    >
-                                        {bulkApplying ? "Aplicando..." : "Aplicar a selección"}
-                                    </button>
+                                    <div className="flex items-center gap-1.5">
+                                        <input
+                                            type="text"
+                                            value={bulkEditValue}
+                                            onChange={(e) => setBulkEditValue(e.target.value)}
+                                            placeholder="Nuevo valor para todas"
+                                            className="w-40 px-3 py-1.5 rounded-lg bg-gray-100 border border-gray-300 text-gray-800 placeholder-gray-500 text-xs focus:outline-none focus:border-blue-500/50"
+                                        />
+                                        <button
+                                            onClick={applyBulkEditToSelection}
+                                            disabled={bulkApplying}
+                                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                        >
+                                            {bulkApplying ? "..." : "Aplicar"}
+                                        </button>
+                                    </div>
+                                    <div className="w-px h-5 bg-gray-200" />
+                                    <div className="flex items-center gap-1.5">
+                                        <textarea
+                                            value={pasteValues}
+                                            onChange={(e) => setPasteValues(e.target.value)}
+                                            placeholder="Pegar texto (tab o coma entre columnas, Enter entre filas)"
+                                            rows={1}
+                                            className="w-56 min-h-[32px] max-h-20 px-3 py-1.5 rounded-lg bg-gray-100 border border-gray-300 text-gray-800 placeholder-gray-500 text-xs focus:outline-none focus:border-blue-500/50 resize-y"
+                                        />
+                                        <button
+                                            onClick={applyPasteToSelection}
+                                            disabled={bulkApplying || !pasteValues.trim()}
+                                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-600/80 hover:bg-violet-600 text-white text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+                                        >
+                                            {bulkApplying ? "..." : "Asignar"}
+                                        </button>
+                                    </div>
+                                    <div className="w-px h-5 bg-gray-200" />
+                                    <div className="flex items-center gap-1.5">
+                                        <input
+                                            type="text"
+                                            value={buscarValue}
+                                            onChange={(e) => setBuscarValue(e.target.value)}
+                                            placeholder="Buscar"
+                                            className="w-28 px-2.5 py-1.5 rounded-lg bg-gray-100 border border-gray-300 text-gray-800 placeholder-gray-500 text-xs focus:outline-none focus:border-blue-500/50"
+                                        />
+                                        <span className="text-gray-500 text-xs">→</span>
+                                        <input
+                                            type="text"
+                                            value={reemplazarValue}
+                                            onChange={(e) => setReemplazarValue(e.target.value)}
+                                            placeholder="Reemplazar"
+                                            className="w-28 px-2.5 py-1.5 rounded-lg bg-gray-100 border border-gray-300 text-gray-800 placeholder-gray-500 text-xs focus:outline-none focus:border-blue-500/50"
+                                        />
+                                        <button
+                                            onClick={applyReplaceInSelection}
+                                            disabled={bulkApplying || !buscarValue.trim()}
+                                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600/80 hover:bg-amber-600 text-white text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                        >
+                                            {bulkApplying ? "..." : "Reemplazar"}
+                                        </button>
+                                    </div>
                                 </>
                             )}
                             <button
@@ -1590,7 +2124,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                             </button>
                             <button
                                 onClick={clearCellSelection}
-                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-zinc-200 text-xs transition-colors"
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 hover:text-gray-800 text-xs transition-colors"
                             >
                                 <X size={13} />
                                 Limpiar
@@ -1604,18 +2138,27 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
             </div>
 
             {/* Add / Edit Row Modal */}
+            <AddBulkModal
+                isOpen={showBulkModal}
+                onClose={() => setShowBulkModal(false)}
+                sheet={effectiveSheet}
+                cuaderno={cuaderno}
+                onSuccess={onRefresh}
+            />
             <AddRowModal
                 isOpen={showAddModal || !!editTratamientoId}
-                onClose={() => { setShowAddModal(false); setEditTratamientoId(null); setOpenTreatFromSelection(false); }}
-                sheet={openTreatFromSelection ? "tratamientos" : effectiveSheet}
+                onClose={() => { setShowAddModal(false); setEditTratamientoId(null); setOpenTreatFromSelection(false); setOpenTreatFromTratSelection(false); }}
+                sheet={openTreatFromSelection || openTreatFromTratSelection ? "tratamientos" : effectiveSheet}
                 cuaderno={cuaderno}
                 editTratamientoId={editTratamientoId ?? undefined}
-                initialParcelaIds={openTreatFromSelection ? Array.from(selectedParcelas) : []}
+                initialParcelaIds={openTreatFromTratSelection ? parcelasFromSelectedTratamientos : (openTreatFromSelection ? Array.from(selectedParcelas) : [])}
                 onSuccess={() => {
                     setShowAddModal(false);
                     setEditTratamientoId(null);
                     setOpenTreatFromSelection(false);
+                    setOpenTreatFromTratSelection(false);
                     setSelectedParcelas(new Set());
+                    setSelectedTratamientos(new Set());
                     onRefresh();
                 }}
             />
@@ -1624,16 +2167,16 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
             {showTratamientosParcelaId && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center">
                     <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowTratamientosParcelaId(null)} />
-                    <div className="relative bg-[var(--bg-dark)] border border-white/10 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col overflow-hidden">
+                    <div className="relative bg-[var(--bg-dark)] border border-gray-300 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col overflow-hidden">
                         {/* Header */}
-                        <div className="px-6 py-4 border-b border-white/5 flex items-center justify-between shrink-0">
+                        <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between shrink-0">
                             <div className="flex items-center gap-3">
                                 <div className="w-9 h-9 rounded-xl bg-amber-500/10 flex items-center justify-center">
                                     <History size={18} className="text-amber-400" />
                                 </div>
                                 <div>
-                                    <h3 className="text-sm font-semibold text-zinc-100">Tratamientos Previos</h3>
-                                    <p className="text-xs text-zinc-500">
+                                    <h3 className="text-sm font-semibold text-gray-900">Tratamientos Previos</h3>
+                                    <p className="text-xs text-gray-500">
                                         {(() => {
                                             const p = (cuaderno.parcelas || []).find((p: any) => p.id === showTratamientosParcelaId);
                                             return p ? `${p.nombre || p.especie || 'Parcela'} — ${p.superficie_cultivada || p.superficie_ha || 0} ha` : 'Parcela';
@@ -1643,7 +2186,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                             </div>
                             <button
                                 onClick={() => setShowTratamientosParcelaId(null)}
-                                className="p-2 rounded-lg hover:bg-white/5 text-zinc-500 hover:text-zinc-300 transition-colors"
+                                className="p-2 rounded-lg hover:bg-gray-100 text-gray-500 hover:text-gray-700 transition-colors"
                             >
                                 <X size={18} />
                             </button>
@@ -1654,28 +2197,28 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                             {loadingTratamientos ? (
                                 <div className="flex items-center justify-center py-12">
                                     <div className="w-6 h-6 border-2 border-emerald-500/30 border-t-emerald-500 rounded-full animate-spin" />
-                                    <span className="ml-3 text-sm text-zinc-500">Cargando tratamientos...</span>
+                                    <span className="ml-3 text-sm text-gray-500">Cargando tratamientos...</span>
                                 </div>
                             ) : parcelaTratamientos.length === 0 ? (
                                 <div className="text-center py-12">
-                                    <div className="w-14 h-14 rounded-2xl bg-white/5 flex items-center justify-center text-zinc-500 mx-auto mb-3">
+                                    <div className="w-14 h-14 rounded-2xl bg-gray-100 flex items-center justify-center text-gray-500 mx-auto mb-3">
                                         <ClipboardList size={24} />
                                     </div>
-                                    <p className="text-sm text-zinc-400">Sin tratamientos registrados para esta parcela</p>
-                                    <p className="text-xs text-zinc-600 mt-1">Los tratamientos aparecerán aquí cuando se registren</p>
+                                    <p className="text-sm text-gray-600">Sin tratamientos registrados para esta parcela</p>
+                                    <p className="text-xs text-gray-600 mt-1">Los tratamientos aparecerán aquí cuando se registren</p>
                                 </div>
                             ) : (
                                 <div className="space-y-3">
                                     {parcelaTratamientos.map((t: any, index: number) => (
-                                        <div key={t.id || index} className="rounded-xl bg-white/[0.03] border border-white/5 p-4 hover:bg-white/[0.05] transition-colors">
+                                        <div key={t.id || index} className="rounded-xl bg-gray-50 border border-gray-200 p-4 hover:bg-gray-100 transition-colors">
                                             <div className="flex items-center justify-between mb-2">
                                                 <div className="flex items-center gap-2">
-                                                    <span className="text-xs font-mono text-zinc-500 bg-white/5 px-2 py-0.5 rounded">
+                                                    <span className="text-xs font-mono text-gray-500 bg-gray-100 px-2 py-0.5 rounded">
                                                         {t.fecha_aplicacion ? new Date(t.fecha_aplicacion).toLocaleDateString('es-ES') : '-'}
                                                     </span>
                                                     <span className={`text-[10px] px-2 py-0.5 rounded-md font-medium ${t.estado === 'aplicado' ? 'bg-emerald-500/20 text-emerald-400' :
                                                         t.estado === 'pendiente' ? 'bg-amber-500/20 text-amber-400' :
-                                                            'bg-white/10 text-zinc-400'
+                                                            'bg-gray-200 text-gray-600'
                                                         }`}>
                                                         {t.estado || 'registrado'}
                                                     </span>
@@ -1687,25 +2230,25 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                                 )}
                                             </div>
                                             <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs">
-                                                <div><span className="text-zinc-500">Problema:</span> <span className="text-zinc-300">{t.problema_fitosanitario || t.plaga_enfermedad || '-'}</span></div>
-                                                <div><span className="text-zinc-500">Superficie:</span> <span className="text-zinc-300">{t.superficie_tratada || 0} ha</span></div>
+                                                <div><span className="text-gray-500">Problema:</span> <span className="text-gray-700">{t.problema_fitosanitario || t.plaga_enfermedad || '-'}</span></div>
+                                                <div><span className="text-gray-500">Superficie:</span> <span className="text-gray-700">{t.superficie_tratada || 0} ha</span></div>
                                                 {t.productos && t.productos.length > 0 && (
                                                     <div className="col-span-2 mt-1">
-                                                        <span className="text-zinc-500">Productos:</span>
+                                                        <span className="text-gray-500">Productos:</span>
                                                         <div className="mt-1 space-y-0.5">
                                                             {t.productos.map((p: any, pi: number) => (
-                                                                <div key={pi} className="flex items-center gap-2 text-zinc-300 pl-2 border-l-2 border-emerald-500/30">
+                                                                <div key={pi} className="flex items-center gap-2 text-gray-700 pl-2 border-l-2 border-emerald-500/30">
                                                                     <span className="font-medium">{p.nombre_comercial}</span>
-                                                                    <span className="text-zinc-500">—</span>
+                                                                    <span className="text-gray-500">—</span>
                                                                     <span>{p.dosis} {p.unidad_dosis}</span>
-                                                                    {p.numero_registro && <span className="text-zinc-600">({p.numero_registro})</span>}
+                                                                    {p.numero_registro && <span className="text-gray-600">({p.numero_registro})</span>}
                                                                 </div>
                                                             ))}
                                                         </div>
                                                     </div>
                                                 )}
-                                                {t.operador && <div><span className="text-zinc-500">Operador:</span> <span className="text-zinc-300">{t.operador}</span></div>}
-                                                {t.observaciones && <div className="col-span-2"><span className="text-zinc-500">Notas:</span> <span className="text-zinc-300">{t.observaciones}</span></div>}
+                                                {t.operador && <div><span className="text-gray-500">Operador:</span> <span className="text-gray-700">{t.operador}</span></div>}
+                                                {t.observaciones && <div className="col-span-2"><span className="text-gray-500">Notas:</span> <span className="text-gray-700">{t.observaciones}</span></div>}
                                             </div>
                                         </div>
                                     ))}
@@ -1714,11 +2257,11 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                         </div>
 
                         {/* Footer */}
-                        <div className="px-6 py-3 border-t border-white/5 flex items-center justify-between bg-black/20 shrink-0">
-                            <span className="text-xs text-zinc-500">{parcelaTratamientos.length} tratamiento(s)</span>
+                        <div className="px-6 py-3 border-t border-gray-200 flex items-center justify-between bg-gray-100 shrink-0">
+                            <span className="text-xs text-gray-500">{parcelaTratamientos.length} tratamiento(s)</span>
                             <button
                                 onClick={() => setShowTratamientosParcelaId(null)}
-                                className="px-4 py-2 rounded-lg bg-white/5 hover:bg-white/10 text-sm text-zinc-300 hover:text-zinc-100 transition-colors"
+                                className="px-4 py-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-sm text-gray-700 hover:text-gray-900 transition-colors"
                             >
                                 Cerrar
                             </button>
@@ -1734,23 +2277,23 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                 return (
                     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
                         <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowTratamientoDetalleId(null)} />
-                        <div className="relative bg-[var(--bg-dark)] border border-white/10 rounded-2xl shadow-2xl w-full max-w-xl flex flex-col overflow-hidden">
+                        <div className="relative bg-[var(--bg-dark)] border border-gray-300 rounded-2xl shadow-2xl w-full max-w-xl flex flex-col overflow-hidden">
                             {/* Header */}
-                            <div className="px-6 py-4 border-b border-white/5 flex items-center justify-between shrink-0">
+                            <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between shrink-0">
                                 <div className="flex items-center gap-3">
                                     <div className="w-9 h-9 rounded-xl bg-emerald-500/10 flex items-center justify-center">
                                         <MapPin size={18} className="text-emerald-400" />
                                     </div>
                                     <div>
-                                        <h3 className="text-sm font-semibold text-zinc-100">Parcelas del Tratamiento</h3>
-                                        <p className="text-xs text-zinc-500">
+                                        <h3 className="text-sm font-semibold text-gray-900">Parcelas del Tratamiento</h3>
+                                        <p className="text-xs text-gray-500">
                                             {t?.fecha_aplicacion ? new Date(t.fecha_aplicacion).toLocaleDateString('es-ES') : ''} • {Number(t?.superficie_tratada || 0).toFixed(2)} ha totales
                                         </p>
                                     </div>
                                 </div>
                                 <button
                                     onClick={() => setShowTratamientoDetalleId(null)}
-                                    className="p-2 rounded-lg hover:bg-white/5 text-zinc-500 hover:text-zinc-300 transition-colors"
+                                    className="p-2 rounded-lg hover:bg-gray-100 text-gray-500 hover:text-gray-700 transition-colors"
                                 >
                                     <X size={18} />
                                 </button>
@@ -1760,33 +2303,33 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                             <div className="flex-1 overflow-y-auto p-6 max-h-[60vh]">
                                 {relatedParcelas.length === 0 ? (
                                     <div className="text-center py-8">
-                                        <p className="text-sm text-zinc-400">No se encontraron parcelas vinculadas a este tratamiento.</p>
+                                        <p className="text-sm text-gray-600">No se encontraron parcelas vinculadas a este tratamiento.</p>
                                     </div>
                                 ) : (
                                     <div className="space-y-3">
                                         {relatedParcelas.map(p => (
-                                            <div key={p.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl bg-white/[0.03] border border-white/5 hover:bg-white/[0.05] transition-colors gap-3">
+                                            <div key={p.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl bg-gray-50 border border-gray-200 hover:bg-gray-100 transition-colors gap-3">
                                                 <div className="space-y-1.5">
                                                     <div className="flex items-center gap-2">
-                                                        <span className="text-sm font-semibold text-zinc-200">{p.nombre || 'Sin nombre'}</span>
+                                                        <span className="text-sm font-semibold text-gray-800">{p.nombre || 'Sin nombre'}</span>
                                                         {p.num_orden ? (
-                                                            <span className="text-[10px] font-mono text-zinc-400 bg-white/5 border border-white/10 px-1.5 py-0.5 rounded">
+                                                            <span className="text-[10px] font-mono text-gray-600 bg-gray-100 border border-gray-300 px-1.5 py-0.5 rounded">
                                                                 Nº {p.num_orden}
                                                             </span>
                                                         ) : null}
                                                     </div>
-                                                    <div className="text-xs text-zinc-500 bg-black/20 px-2 py-1 rounded inline-block">
+                                                    <div className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded inline-block">
                                                         {p.num_poligono && p.num_parcela
                                                             ? `Pol ${p.num_poligono} • Parc ${p.num_parcela} • Rec ${p.num_recinto || '-'}`
                                                             : 'Sin datos SIGPAC'}
                                                         {p.termino_municipal && ` • ${p.termino_municipal}`}
                                                     </div>
                                                 </div>
-                                                <div className="sm:text-right flex sm:flex-col justify-between items-center sm:items-end w-full sm:w-auto mt-2 sm:mt-0 pt-2 sm:pt-0 border-t border-white/5 sm:border-t-0">
+                                                <div className="sm:text-right flex sm:flex-col justify-between items-center sm:items-end w-full sm:w-auto mt-2 sm:mt-0 pt-2 sm:pt-0 border-t border-gray-200 sm:border-t-0">
                                                     <div className="text-sm font-bold text-emerald-400">
                                                         {Number(p.superficie_cultivada || p.superficie_ha || p.superficie_sigpac || 0).toFixed(2)} ha
                                                     </div>
-                                                    <div className="text-xs font-medium text-zinc-500 uppercase tracking-wider">
+                                                    <div className="text-xs font-medium text-gray-500 uppercase tracking-wider">
                                                         {p.cultivo || p.especie || 'Sin cultivo'}
                                                     </div>
                                                 </div>
@@ -1797,11 +2340,11 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                             </div>
 
                             {/* Footer */}
-                            <div className="px-6 py-3 border-t border-white/5 flex items-center justify-between bg-black/20 shrink-0">
-                                <span className="text-xs text-zinc-500">{relatedParcelas.length} parcela(s) vinculadas</span>
+                            <div className="px-6 py-3 border-t border-gray-200 flex items-center justify-between bg-gray-100 shrink-0">
+                                <span className="text-xs text-gray-500">{relatedParcelas.length} parcela(s) vinculadas</span>
                                 <button
                                     onClick={() => setShowTratamientoDetalleId(null)}
-                                    className="px-4 py-2 rounded-lg bg-white/5 hover:bg-white/10 text-sm font-medium text-zinc-300 hover:text-zinc-100 transition-colors"
+                                    className="px-4 py-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
                                 >
                                     Cerrar
                                 </button>
@@ -1810,6 +2353,143 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                     </div>
                 );
             })()}
+
+            {/* Modal: Copiar tratamiento a otras parcelas */}
+            {copyToParcelsId && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+                    <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setCopyToParcelsId(null)} />
+                    <div className="relative bg-[var(--bg-dark)] border border-gray-300 rounded-2xl shadow-2xl w-full max-w-lg flex flex-col overflow-hidden">
+                        <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between shrink-0">
+                            <div>
+                                <h3 className="text-sm font-semibold text-gray-900">Copiar tratamiento a otras parcelas</h3>
+                                <p className="text-xs text-gray-500">Selecciona las parcelas destino. Se creará 1 línea por parcela.</p>
+                            </div>
+                            <button onClick={() => setCopyToParcelsId(null)} className="p-2 rounded-lg hover:bg-gray-100 text-gray-500 hover:text-gray-700 transition-colors">
+                                <X size={18} />
+                            </button>
+                        </div>
+                        <div className="flex-1 overflow-y-auto p-4 max-h-[50vh] space-y-1">
+                            {(cuaderno.parcelas || [])
+                                .sort((a: any, b: any) => (a.num_orden || 999) - (b.num_orden || 999))
+                                .map((p: any) => {
+                                    const checked = copyTargetParcelas.has(p.id);
+                                    return (
+                                        <label key={p.id} className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-gray-100 cursor-pointer transition-colors">
+                                            <input
+                                                type="checkbox"
+                                                checked={checked}
+                                                onChange={() => {
+                                                    const next = new Set(copyTargetParcelas);
+                                                    checked ? next.delete(p.id) : next.add(p.id);
+                                                    setCopyTargetParcelas(next);
+                                                }}
+                                                className="accent-blue-500"
+                                            />
+                                            <span className="text-xs font-mono text-gray-600 w-8">{p.num_orden || "-"}</span>
+                                            <span className="text-sm text-gray-800 flex-1">{p.nombre || "Sin nombre"}</span>
+                                            <span className="text-xs text-gray-500">{(p.especie || p.cultivo || "").toUpperCase()}</span>
+                                            <span className="text-xs text-emerald-400 font-medium">{Number(p.superficie_cultivada || p.superficie_ha || 0).toFixed(2)} ha</span>
+                                        </label>
+                                    );
+                                })}
+                        </div>
+                        <div className="px-6 py-3 border-t border-gray-200 flex items-center justify-between bg-gray-100 shrink-0">
+                            <span className="text-xs text-gray-500">{copyTargetParcelas.size} parcela(s) seleccionada(s)</span>
+                            <div className="flex gap-2">
+                                <button
+                                    onClick={() => setCopyToParcelsId(null)}
+                                    className="px-4 py-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-sm text-gray-700 transition-colors"
+                                >
+                                    Cancelar
+                                </button>
+                                <button
+                                    onClick={handleCopiarAParcelas}
+                                    disabled={copyTargetParcelas.size === 0 || copyingToParcels}
+                                    className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-sm font-medium text-white transition-colors"
+                                >
+                                    {copyingToParcels ? "Copiando..." : "Copiar"}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Modal: Seleccionar hojas editadas para exportar */}
+            {exportHojasModal && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+                    <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setExportHojasModal(null)} />
+                    <div className="relative bg-[var(--bg-dark)] border border-gray-300 rounded-2xl shadow-2xl w-full max-w-lg flex flex-col overflow-hidden">
+                        <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between shrink-0">
+                            <div>
+                                <h3 className="text-sm font-semibold text-gray-900">
+                                    Hojas editadas para exportar {exportHojasModal.type === "pdf" ? "PDF" : "Excel"}
+                                </h3>
+                                <p className="text-xs text-gray-500 mt-1">
+                                    Hay {exportHojasModal.hojas.length} hoja(s) importada(s) editada(s). Selecciona cuáles incluir.
+                                </p>
+                            </div>
+                            <button onClick={() => setExportHojasModal(null)} className="p-2 rounded-lg hover:bg-gray-100 text-gray-500 hover:text-gray-700 transition-colors">
+                                <X size={18} />
+                            </button>
+                        </div>
+                        <div className="flex-1 overflow-y-auto p-4 max-h-[50vh] space-y-1">
+                            <div className="flex gap-2 mb-3">
+                                <button
+                                    type="button"
+                                    onClick={() => setSelectedExportHojas(new Set(exportHojasModal.hojas.map((h) => h.sheet_id)))}
+                                    className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200 text-gray-700"
+                                >
+                                    Todas
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setSelectedExportHojas(new Set())}
+                                    className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200 text-gray-700"
+                                >
+                                    Ninguna
+                                </button>
+                            </div>
+                            {exportHojasModal.hojas.map((h) => {
+                                const checked = selectedExportHojas.has(h.sheet_id);
+                                return (
+                                    <label key={h.sheet_id} className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-gray-100 cursor-pointer transition-colors">
+                                        <input
+                                            type="checkbox"
+                                            checked={checked}
+                                            onChange={() => {
+                                                const next = new Set(selectedExportHojas);
+                                                checked ? next.delete(h.sheet_id) : next.add(h.sheet_id);
+                                                setSelectedExportHojas(next);
+                                            }}
+                                            className="accent-emerald-500"
+                                        />
+                                        <span className="text-sm text-gray-800 flex-1">{h.nombre || h.sheet_id}</span>
+                                        <span className="text-xs text-gray-500">{h.num_filas || 0} filas</span>
+                                    </label>
+                                );
+                            })}
+                        </div>
+                        <div className="px-6 py-3 border-t border-gray-200 flex items-center justify-between bg-gray-100 shrink-0">
+                            <span className="text-xs text-gray-500">{selectedExportHojas.size} hoja(s) seleccionada(s)</span>
+                            <div className="flex gap-2">
+                                <button
+                                    onClick={exportSinHojas}
+                                    className="px-4 py-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-sm text-gray-700 transition-colors"
+                                >
+                                    Exportar sin hojas
+                                </button>
+                                <button
+                                    onClick={confirmExportHojas}
+                                    className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-sm font-medium text-white transition-colors"
+                                >
+                                    Exportar con seleccionadas
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
         </>
     );
 }

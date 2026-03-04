@@ -49,13 +49,13 @@ export default function CreateCuadernoModal({ isOpen, onClose, onCreate }: Creat
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-            <div className="w-full max-w-lg bg-[#18181b] border border-zinc-800 rounded-xl shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+            <div className="w-full max-w-lg bg-white border border-gray-200 rounded-xl shadow-2xl animate-in fade-in zoom-in-95 duration-200">
                 {/* Header */}
-                <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-800">
-                    <h2 className="text-lg font-semibold text-zinc-100">Nuevo Cuaderno</h2>
+                <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+                    <h2 className="text-lg font-semibold text-gray-900">Nuevo Cuaderno</h2>
                     <button
                         onClick={onClose}
-                        className="p-1.5 rounded-lg hover:bg-zinc-800 text-zinc-500 hover:text-zinc-300 transition-colors"
+                        className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500 hover:text-gray-700 transition-colors"
                     >
                         <X size={18} />
                     </button>
@@ -64,7 +64,7 @@ export default function CreateCuadernoModal({ isOpen, onClose, onCreate }: Creat
                 {/* Form */}
                 <form onSubmit={handleSubmit} className="p-6 space-y-4">
                     <div>
-                        <label className="block text-xs font-medium text-zinc-400 mb-1.5">
+                        <label className="block text-xs font-medium text-gray-600 mb-1.5">
                             Nombre de la Explotación *
                         </label>
                         <input
@@ -74,13 +74,13 @@ export default function CreateCuadernoModal({ isOpen, onClose, onCreate }: Creat
                             onChange={handleChange}
                             required
                             placeholder="Ej: Finca El Olivar"
-                            className="w-full px-3 py-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-100 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                            className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-gray-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
                         />
                     </div>
 
                     <div className="grid grid-cols-2 gap-4">
                         <div>
-                            <label className="block text-xs font-medium text-zinc-400 mb-1.5">
+                            <label className="block text-xs font-medium text-gray-600 mb-1.5">
                                 Titular
                             </label>
                             <input
@@ -89,11 +89,11 @@ export default function CreateCuadernoModal({ isOpen, onClose, onCreate }: Creat
                                 value={formData.titular}
                                 onChange={handleChange}
                                 placeholder="Nombre del titular"
-                                className="w-full px-3 py-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-100 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-gray-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
                             />
                         </div>
                         <div>
-                            <label className="block text-xs font-medium text-zinc-400 mb-1.5">
+                            <label className="block text-xs font-medium text-gray-600 mb-1.5">
                                 NIF/CIF
                             </label>
                             <input
@@ -102,13 +102,13 @@ export default function CreateCuadernoModal({ isOpen, onClose, onCreate }: Creat
                                 value={formData.nif_titular}
                                 onChange={handleChange}
                                 placeholder="12345678A"
-                                className="w-full px-3 py-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-100 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-gray-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
                             />
                         </div>
                     </div>
 
                     <div>
-                        <label className="block text-xs font-medium text-zinc-400 mb-1.5">
+                        <label className="block text-xs font-medium text-gray-600 mb-1.5">
                             Domicilio
                         </label>
                         <input
@@ -117,13 +117,13 @@ export default function CreateCuadernoModal({ isOpen, onClose, onCreate }: Creat
                             value={formData.domicilio}
                             onChange={handleChange}
                             placeholder="Dirección completa"
-                            className="w-full px-3 py-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-100 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                            className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-gray-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
                         />
                     </div>
 
                     <div className="grid grid-cols-2 gap-4">
                         <div>
-                            <label className="block text-xs font-medium text-zinc-400 mb-1.5">
+                            <label className="block text-xs font-medium text-gray-600 mb-1.5">
                                 Código de Explotación
                             </label>
                             <input
@@ -132,11 +132,11 @@ export default function CreateCuadernoModal({ isOpen, onClose, onCreate }: Creat
                                 value={formData.codigo_explotacion}
                                 onChange={handleChange}
                                 placeholder="REGA, etc."
-                                className="w-full px-3 py-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-100 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-gray-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
                             />
                         </div>
                         <div>
-                            <label className="block text-xs font-medium text-zinc-400 mb-1.5">
+                            <label className="block text-xs font-medium text-gray-600 mb-1.5">
                                 Año
                             </label>
                             <input
@@ -146,18 +146,18 @@ export default function CreateCuadernoModal({ isOpen, onClose, onCreate }: Creat
                                 onChange={handleChange}
                                 min={2020}
                                 max={2050}
-                                className="w-full px-3 py-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-100 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-gray-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
                             />
                         </div>
                     </div>
                 </form>
 
                 {/* Footer */}
-                <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-zinc-800 bg-zinc-900/30">
+                <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-gray-200 bg-white/30">
                     <button
                         type="button"
                         onClick={onClose}
-                        className="px-4 py-2 rounded-lg text-sm font-medium text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
+                        className="px-4 py-2 rounded-lg text-sm font-medium text-gray-600 hover:text-zinc-200 hover:bg-gray-100 transition-colors"
                     >
                         Cancelar
                     </button>

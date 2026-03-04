@@ -70,7 +70,7 @@ function createWindow() {
             contextIsolation: true,
         },
         show: false, // No mostrar hasta que esté listo
-        backgroundColor: '#09090b', // Fondo oscuro para que no parpadee en blanco
+        backgroundColor: '#f8fafc', // Fondo claro
     });
 
     // Tray / barra de menú (macOS)
