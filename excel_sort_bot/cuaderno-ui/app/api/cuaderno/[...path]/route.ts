@@ -5,7 +5,8 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 
-const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:8000';
+const BACKEND_URL = process.env.BACKEND_URL
+  || (process.env.VERCEL ? 'https://hernandezback.onrender.com' : 'http://localhost:8000');
 const TIMEOUT = 300_000; // 5 minutes
 
 // --- HTTP verb handlers (Next.js App Router) ---

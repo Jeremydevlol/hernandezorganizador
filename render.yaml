@@ -1,0 +1,18 @@
+# Render.com - Backend Cuaderno de Explotación
+# Conectar el repo y Render usará este archivo
+services:
+  - type: web
+    name: cuaderno-backend
+    runtime: python
+    rootDir: excel_sort_bot
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn rte_server:app --host 0.0.0.0 --port $PORT --timeout-keep-alive 300
+    envVars:
+      - key: STORAGE_MODE
+        value: supabase
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
