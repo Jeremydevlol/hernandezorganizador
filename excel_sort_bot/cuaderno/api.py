@@ -1433,15 +1433,23 @@ async def exportar_excel_cuaderno(
     # ================================================================
     # GUARDAR Y ENVIAR
     # ================================================================
-    output_dir = Path(storage.base_dir) / "exports"
-    output_dir.mkdir(exist_ok=True)
+    # Usar tempfile (funciona en producción: Render, Heroku, etc.)
+    # storage.base_dir no existe en SupabaseStorage
+    output_dir = Path(tempfile.gettempdir()) / "cuaderno_exports"
+    output_dir.mkdir(parents=True, exist_ok=True)
     base_name = _sanitize_filename(cuaderno.nombre_explotacion)
     suffix = ""
     if desde or hasta:
         suffix = f"_{desde or ''}_a_{hasta or ''}"
     filename = f"{base_name}_Cuaderno_{cuaderno.año}{suffix}.xlsx"
     output_path = output_dir / filename
-    wb.save(str(output_path))
+    try:
+        wb.save(str(output_path))
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error guardando Excel: {str(e)}"
+        )
 
     return FileResponse(
         path=str(output_path),
