@@ -68,6 +68,8 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                     unidad_dosis: first?.unidad_dosis || "L/Ha",
                     plaga_enfermedad: tratamiento.plaga_enfermedad || tratamiento.problema_fitosanitario || "",
                     operador: tratamiento.operador || tratamiento.aplicador || "",
+                    equipo: tratamiento.equipo || "1",
+                    eficacia: tratamiento.eficacia || "BUENA",
                     observaciones: tratamiento.observaciones || "",
                 });
             }).catch(() => setFormData({}));
@@ -81,6 +83,8 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                 numero_registro: suggestedProd?.numero_registro || "",
                 numero_lote: suggestedProd?.numero_lote || "",
                 plaga_enfermedad: sheet === "tratamientos" ? (suggestionFromSelectedParcelas.plaga || "") : "",
+                equipo: "1",
+                eficacia: "BUENA",
             };
             if (sheet === "fertilizantes") {
                 base.fecha_inicio = new Date().toISOString().split("T")[0];
@@ -192,54 +196,88 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                 });
             } else if (sheet === "tratamientos") {
                 const parcelaIds = Array.isArray(formData.parcela_ids) ? formData.parcela_ids : [];
-                const nombreProd = (formData.nombre_comercial || productInputValue || "").trim();
-                if (!formData.fecha_aplicacion || parcelaIds.length === 0 || !nombreProd || (formData.dosis ?? "") === "") {
-                    alert("Completa: Fecha, al menos una parcela, producto y dosis.");
+                const productosLista = Array.isArray(formData.productos_lista) && formData.productos_lista.length > 0
+                    ? formData.productos_lista
+                    : [{ nombre_comercial: formData.nombre_comercial || productInputValue, numero_registro: formData.numero_registro, numero_lote: formData.numero_lote, dosis: formData.dosis, unidad_dosis: formData.unidad_dosis || "L/Ha", producto_id: formData.producto_id }];
+                const hasValidProduct = productosLista.some((p: any) => (p.nombre_comercial || "").trim() && (p.dosis ?? "") !== "");
+                if (!formData.fecha_aplicacion || parcelaIds.length === 0 || !hasValidProduct) {
+                    alert("Completa: Fecha, al menos una parcela, y al menos un producto con dosis.");
                     setLoading(false);
                     return;
                 }
-                let productoId = formData.producto_id || "";
-                let nombreComercial = formData.nombre_comercial || nombreProd;
-                let numeroRegistro = formData.numero_registro || "";
-                let numeroLote = formData.numero_lote || "";
-                if (!productoId) {
-                    const existente = (cuaderno.productos || []).find(
-                        (p) => (p.nombre_comercial || "").toLowerCase() === nombreProd.toLowerCase()
-                    );
-                    if (existente) {
-                        productoId = existente.id;
-                        nombreComercial = existente.nombre_comercial || "";
-                        numeroRegistro = existente.numero_registro || "";
-                        numeroLote = existente.numero_lote || "";
-                    } else {
-                        const nuevo = await api.createProducto(cuaderno.id, {
-                            nombre_comercial: nombreProd,
-                            numero_registro: (formData.numero_registro || numeroRegistro || "-").trim() || "-",
-                            materia_activa: "",
-                            numero_lote: formData.numero_lote || numeroLote || "",
-                            cantidad_adquirida: 0,
-                            unidad: "L",
-                            fecha_adquisicion: "",
-                        });
-                        productoId = nuevo.producto?.id || "";
-                        nombreComercial = nuevo.producto?.nombre_comercial || nombreProd;
-                        numeroRegistro = nuevo.producto?.numero_registro || "-";
-                        onSuccess();
+                const buildProductosPayload = async (): Promise<Array<{ producto_id: string; nombre_comercial: string; numero_registro: string; numero_lote: string; dosis: number; unidad_dosis: string }>> => {
+                    let productosLista = Array.isArray(formData.productos_lista) && formData.productos_lista.length > 0
+                        ? [...formData.productos_lista]
+                        : [{ nombre_comercial: formData.nombre_comercial || productInputValue, numero_registro: formData.numero_registro, numero_lote: formData.numero_lote, dosis: formData.dosis, unidad_dosis: formData.unidad_dosis || "L/Ha", producto_id: formData.producto_id }];
+                    if (productosLista.length > 0) {
+                        productosLista[0] = {
+                            ...productosLista[0],
+                            nombre_comercial: (productosLista[0].nombre_comercial || formData.nombre_comercial || productInputValue || "").trim(),
+                            numero_registro: productosLista[0].numero_registro || formData.numero_registro || "",
+                            numero_lote: productosLista[0].numero_lote ?? formData.numero_lote ?? "",
+                            dosis: productosLista[0].dosis ?? formData.dosis,
+                            unidad_dosis: productosLista[0].unidad_dosis || formData.unidad_dosis || "L/Ha",
+                            producto_id: productosLista[0].producto_id || formData.producto_id || "",
+                        };
                     }
+                    const result: Array<{ producto_id: string; nombre_comercial: string; numero_registro: string; numero_lote: string; dosis: number; unidad_dosis: string }> = [];
+                    for (const p of productosLista) {
+                        const nombreProd = (p.nombre_comercial || "").trim();
+                        if (!nombreProd || (p.dosis ?? "") === "") continue;
+                        let pid = p.producto_id || "";
+                        let ncom = p.nombre_comercial || "";
+                        let nreg = p.numero_registro || "";
+                        let nlot = p.numero_lote || "";
+                        if (!pid) {
+                            const existente = (cuaderno.productos || []).find(
+                                (pr) => (pr.nombre_comercial || "").toLowerCase() === nombreProd.toLowerCase()
+                            );
+                            if (existente) {
+                                pid = existente.id;
+                                ncom = existente.nombre_comercial || "";
+                                nreg = existente.numero_registro || "";
+                                nlot = existente.numero_lote || "";
+                            } else {
+                                const nuevo = await api.createProducto(cuaderno.id, {
+                                    nombre_comercial: nombreProd,
+                                    numero_registro: (p.numero_registro || nreg || "-").trim() || "-",
+                                    materia_activa: "",
+                                    numero_lote: p.numero_lote || nlot || "",
+                                    cantidad_adquirida: 0,
+                                    unidad: "L",
+                                    fecha_adquisicion: "",
+                                });
+                                pid = nuevo.producto?.id || "";
+                                ncom = nuevo.producto?.nombre_comercial || nombreProd;
+                                nreg = nuevo.producto?.numero_registro || "-";
+                                onSuccess();
+                            }
+                        }
+                        result.push({
+                            producto_id: pid,
+                            nombre_comercial: ncom,
+                            numero_registro: nreg,
+                            numero_lote: nlot,
+                            dosis: Number(p.dosis) || 0,
+                            unidad_dosis: p.unidad_dosis || "L/Ha",
+                        });
+                    }
+                    return result;
+                };
+                const productosPayload = await buildProductosPayload();
+                if (productosPayload.length === 0) {
+                    alert("Debe indicar al menos un producto con dosis.");
+                    setLoading(false);
+                    return;
                 }
                 const payload = {
                     fecha_aplicacion: (formData.fecha_aplicacion || new Date().toISOString().split("T")[0]).trim(),
                     parcela_ids: parcelaIds,
-                    productos: [{
-                        producto_id: productoId,
-                        nombre_comercial: nombreComercial,
-                        numero_registro: numeroRegistro,
-                        numero_lote: numeroLote,
-                        dosis: Number(formData.dosis) || 0,
-                        unidad_dosis: formData.unidad_dosis || "L/Ha",
-                    }],
+                    productos: productosPayload,
                     plaga_enfermedad: formData.plaga_enfermedad || "",
                     operador: formData.operador || "",
+                    equipo: formData.equipo || "1",
+                    eficacia: formData.eficacia || "BUENA",
                     observaciones: formData.observaciones || "",
                 };
                 if (editTratamientoId) {
@@ -701,18 +739,126 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                     </select>
                                 </div>
                             </div>
+                            {Array.isArray(formData.productos_lista) && formData.productos_lista.length > 1 && (
+                                <div className="space-y-2">
+                                    <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                                        Productos adicionales
+                                    </label>
+                                    {formData.productos_lista.slice(1).map((p: any, idx: number) => (
+                                        <div key={idx} className="flex gap-2 items-center p-2 rounded-lg bg-gray-50 border border-gray-200">
+                                            <input
+                                                type="text"
+                                                value={p.nombre_comercial || ""}
+                                                onChange={(e) => {
+                                                    const list = [...(formData.productos_lista || [])];
+                                                    list[idx + 1] = { ...list[idx + 1], nombre_comercial: e.target.value };
+                                                    setFormData((prev) => ({ ...prev, productos_lista: list }));
+                                                }}
+                                                placeholder="Producto"
+                                                className="flex-1 px-2 py-1.5 rounded border border-gray-300 text-sm"
+                                            />
+                                            <input
+                                                type="number"
+                                                value={p.dosis ?? ""}
+                                                onChange={(e) => {
+                                                    const list = [...(formData.productos_lista || [])];
+                                                    list[idx + 1] = { ...list[idx + 1], dosis: e.target.value };
+                                                    setFormData((prev) => ({ ...prev, productos_lista: list }));
+                                                }}
+                                                placeholder="Dosis"
+                                                step="0.01"
+                                                className="w-20 px-2 py-1.5 rounded border border-gray-300 text-sm"
+                                            />
+                                            <select
+                                                value={p.unidad_dosis || "L/Ha"}
+                                                onChange={(e) => {
+                                                    const list = [...(formData.productos_lista || [])];
+                                                    list[idx + 1] = { ...list[idx + 1], unidad_dosis: e.target.value };
+                                                    setFormData((prev) => ({ ...prev, productos_lista: list }));
+                                                }}
+                                                className="w-20 px-2 py-1.5 rounded border border-gray-300 text-sm"
+                                            >
+                                                <option value="L/Ha">L/Ha</option>
+                                                <option value="Kg/Ha">Kg/Ha</option>
+                                            </select>
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    const list = (formData.productos_lista || []).filter((_: any, i: number) => i !== idx + 1);
+                                                    setFormData((prev) => ({ ...prev, productos_lista: list }));
+                                                }}
+                                                className="p-1.5 rounded hover:bg-red-100 text-red-600"
+                                            >
+                                                <X size={14} />
+                                            </button>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    const current = formData.productos_lista && formData.productos_lista.length > 0
+                                        ? formData.productos_lista
+                                        : [{
+                                            nombre_comercial: formData.nombre_comercial || productInputValue,
+                                            numero_registro: formData.numero_registro,
+                                            numero_lote: formData.numero_lote,
+                                            dosis: formData.dosis,
+                                            unidad_dosis: formData.unidad_dosis || "L/Ha",
+                                            producto_id: formData.producto_id,
+                                        }];
+                                    setFormData((prev) => ({
+                                        ...prev,
+                                        productos_lista: [...current, { nombre_comercial: "", numero_registro: "", numero_lote: "", dosis: "", unidad_dosis: "L/Ha", producto_id: "" }],
+                                    }));
+                                }}
+                                className="text-sm text-green-600 hover:text-green-700 font-medium"
+                            >
+                                + Añadir otro producto
+                            </button>
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                                        Operador
+                                    </label>
+                                    <input
+                                        type="text"
+                                        name="operador"
+                                        value={formData.operador || ""}
+                                        onChange={handleChange}
+                                        placeholder="Nombre del aplicador"
+                                        className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                                        Equipo
+                                    </label>
+                                    <input
+                                        type="text"
+                                        name="equipo"
+                                        value={formData.equipo ?? "1"}
+                                        onChange={handleChange}
+                                        placeholder="1"
+                                        className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                    />
+                                </div>
+                            </div>
                             <div>
                                 <label className="block text-xs font-medium text-gray-600 mb-1.5">
-                                    Operador
+                                    Eficacia
                                 </label>
-                                <input
-                                    type="text"
-                                    name="operador"
-                                    value={formData.operador || ""}
+                                <select
+                                    name="eficacia"
+                                    value={formData.eficacia ?? "BUENA"}
                                     onChange={handleChange}
-                                    placeholder="Nombre del aplicador"
-                                    className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
-                                />
+                                    className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                >
+                                    <option value="BUENA">BUENA</option>
+                                    <option value="REGULAR">REGULAR</option>
+                                    <option value="MALA">MALA</option>
+                                </select>
                             </div>
                         </>
                     )}

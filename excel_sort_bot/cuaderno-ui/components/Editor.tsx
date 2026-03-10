@@ -1030,10 +1030,14 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                 setSelectedExportHojas(new Set(data.hojas_editadas.map((h: any) => h.sheet_id)));
                 return;
             }
-            window.open(api.getExportExcelUrl(cuaderno.id, queryParams), "_blank");
+            await api.downloadExportExcel(cuaderno.id, queryParams);
         } catch (e) {
-            console.error("Error checking excel export:", e);
-            window.open(api.getExportExcelUrl(cuaderno.id, baseParams), "_blank");
+            console.error("Error exporting excel:", e);
+            try {
+                window.open(api.getExportExcelUrl(cuaderno.id, baseParams), "_blank");
+            } catch {
+                alert("No se pudo exportar a Excel. Comprueba la conexión.");
+            }
         }
     };
 
@@ -1052,7 +1056,9 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
         if (type === "pdf") {
             window.open(api.getExportPDFUrl(cuaderno.id, queryParams), "_blank");
         } else {
-            window.open(api.getExportExcelUrl(cuaderno.id, queryParams), "_blank");
+            api.downloadExportExcel(cuaderno.id, queryParams).catch(() =>
+                window.open(api.getExportExcelUrl(cuaderno.id, queryParams), "_blank")
+            );
         }
         setExportHojasModal(null);
     };
@@ -1065,7 +1071,9 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
         if (type === "pdf") {
             window.open(api.getExportPDFUrl(cuaderno.id, queryParams), "_blank");
         } else {
-            window.open(api.getExportExcelUrl(cuaderno.id, queryParams), "_blank");
+            api.downloadExportExcel(cuaderno.id, queryParams).catch(() =>
+                window.open(api.getExportExcelUrl(cuaderno.id, queryParams), "_blank")
+            );
         }
         setExportHojasModal(null);
     };

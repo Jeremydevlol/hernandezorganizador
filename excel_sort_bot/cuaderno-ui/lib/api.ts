@@ -327,6 +327,34 @@ export const api = {
         return `${API_BASE}/${cuadernoId}/export/excel${q ? `?${q}` : ""}`;
     },
 
+    // Export Excel como descarga (fetch + blob) - más fiable que window.open
+    downloadExportExcel: async (cuadernoId: string, params?: { desde?: string; hasta?: string; incluir_hojas?: string; orden_parcelas?: string; orden_tratamientos?: string; orden_parcelas_modo?: string }) => {
+        const url = getApiBase();
+        const search = new URLSearchParams();
+        if (params?.desde) search.set("desde", params.desde);
+        if (params?.hasta) search.set("hasta", params.hasta);
+        if (params?.incluir_hojas !== undefined) search.set("incluir_hojas", params.incluir_hojas);
+        if (params?.orden_parcelas) search.set("orden_parcelas", params.orden_parcelas);
+        if (params?.orden_tratamientos) search.set("orden_tratamientos", params.orden_tratamientos);
+        if (params?.orden_parcelas_modo) search.set("orden_parcelas_modo", params.orden_parcelas_modo);
+        const q = search.toString();
+        const fullUrl = `${url}/${cuadernoId}/export/excel${q ? `?${q}` : ""}`;
+        const res = await fetch(fullUrl, { credentials: "include" });
+        if (!res.ok) throw new Error("Error al exportar Excel");
+        const blob = await res.blob();
+        const disposition = res.headers.get("Content-Disposition");
+        let filename = "Cuaderno_export.xlsx";
+        if (disposition) {
+            const match = disposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+            if (match) filename = match[1].replace(/['"]/g, "").trim();
+        }
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(a.href);
+    },
+
     // Histórico de tratamientos de una parcela
     getHistoricoParcela: (cuadernoId: string, parcelaId: string) =>
         request<{ parcela: any; tratamientos: any[]; total: number }>(

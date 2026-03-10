@@ -42,6 +42,8 @@ coverage/
 cuadernos_data/
 *.xlsx
 *.XLSX
+*.xls
+*.XLS
 
 # Archivos grandes innecesarios
 *.png
