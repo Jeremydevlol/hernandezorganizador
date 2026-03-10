@@ -1012,25 +1012,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
     const exportExcel = async (params?: { desde?: string; hasta?: string }) => {
         const baseParams = buildExportParams(params);
         try {
-            const checkUrl = api.getExportPDFUrl(cuaderno.id, { check_hojas_editadas: true, ...baseParams });
-            const checkRes = await fetch(checkUrl);
-            const data = await checkRes.json();
-
-            let queryParams: any = { ...baseParams };
-            const checkParams = new URL(checkUrl).searchParams;
-            checkParams.forEach((val, key) => queryParams[key] = val);
-            delete queryParams.check_hojas_editadas;
-
-            if (data?.tiene_hojas_editadas && data?.hojas_editadas?.length > 0) {
-                setExportHojasModal({
-                    hojas: data.hojas_editadas,
-                    type: "excel",
-                    params: queryParams,
-                });
-                setSelectedExportHojas(new Set(data.hojas_editadas.map((h: any) => h.sheet_id)));
-                return;
-            }
-            await api.downloadExportExcel(cuaderno.id, queryParams);
+            await api.downloadExportExcel(cuaderno.id, baseParams);
         } catch (e) {
             console.error("Error exporting excel:", e);
             try {

@@ -1394,41 +1394,62 @@ async def exportar_excel_cuaderno(
         _freeze(ws_cos)
 
     # ================================================================
-    # 7. HOJAS IMPORTADAS / EDITADAS
+    # 7. HOJAS IMPORTADAS (TODAS, como en el editor)
     # ================================================================
-    sheet_ids_a_incluir: List[str] = []
+    hojas_a_exportar = list(cuaderno.hojas_originales or [])
     if incluir_hojas is not None:
-        sheet_ids_a_incluir = [s.strip() for s in incluir_hojas.split(",") if s.strip()]
-    hojas_a_exportar = cuaderno.hojas_originales
-    if incluir_hojas is not None:
-        hojas_a_exportar = [h for h in cuaderno.hojas_originales if h.sheet_id in sheet_ids_a_incluir]
+        ids_incluir = [s.strip() for s in incluir_hojas.split(",") if s.strip()]
+        if ids_incluir:
+            hojas_a_exportar = [h for h in hojas_a_exportar if h.sheet_id in ids_incluir]
+        elif incluir_hojas.strip() == "":
+            hojas_a_exportar = []
+
+    used_names = {ws.title for ws in wb.worksheets}
     for hoja in hojas_a_exportar:
-        if not hoja.datos:
+        has_cols = bool(hoja.columnas)
+        has_data = bool(hoja.datos and any(
+            any(c is not None and str(c).strip() for c in fila)
+            for fila in hoja.datos
+        ))
+        if not has_cols and not has_data:
             continue
-        safe_name = re.sub(r'[\[\]:*?/\\]', '', hoja.nombre)[:31]
-        if safe_name in [ws.title for ws in wb.worksheets]:
-            safe_name = (safe_name[:27] + " (2)")[:31]
+        safe_name = re.sub(r'[\[\]:*?/\\]', '', hoja.nombre or "Hoja")[:31]
+        if not safe_name.strip():
+            safe_name = "Hoja"
+        counter = 2
+        original_name = safe_name
+        while safe_name in used_names:
+            safe_name = f"{original_name[:27]} ({counter})"[:31]
+            counter += 1
+        used_names.add(safe_name)
+
         ws_imp = wb.create_sheet(safe_name)
-        ws_imp.sheet_properties.tabColor = "9E9E9E"
+        ws_imp.sheet_properties.tabColor = "7B1FA2"
         start_row = 1
-        if hoja.columnas:
+        if has_cols:
             for c, col_name in enumerate(hoja.columnas, 1):
                 ws_imp.cell(row=1, column=c, value=col_name)
             _style_header_row(ws_imp, 1, len(hoja.columnas))
             start_row = 2
-        for r, fila in enumerate(hoja.datos, start_row):
-            for c, v in enumerate(fila, 1):
-                cell = ws_imp.cell(row=r, column=c, value=v)
-                cell.border = thin_border
-                cell.alignment = data_align
-                if r % 2 == 0:
-                    cell.fill = even_fill
-        num_cols_imp = max(len(hoja.columnas or []), max((len(f) for f in hoja.datos), default=0))
-        if num_cols_imp:
-            _auto_width(ws_imp, num_cols_imp, data_start_row=start_row)
-            if hoja.columnas:
-                _add_autofilter(ws_imp, num_cols_imp)
-                _freeze(ws_imp)
+
+        if hoja.datos:
+            for r, fila in enumerate(hoja.datos, start_row):
+                for c, v in enumerate(fila, 1):
+                    cell = ws_imp.cell(row=r, column=c, value=v)
+                    cell.border = thin_border
+                    cell.alignment = data_align
+                    if r % 2 == 0:
+                        cell.fill = even_fill
+
+        num_cols_imp = max(
+            len(hoja.columnas or []),
+            max((len(f) for f in (hoja.datos or [])), default=0),
+            1
+        )
+        _auto_width(ws_imp, num_cols_imp, data_start_row=start_row)
+        if has_cols:
+            _add_autofilter(ws_imp, num_cols_imp)
+        _freeze(ws_imp)
 
     # ================================================================
     # GUARDAR Y ENVIAR
