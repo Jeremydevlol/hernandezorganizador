@@ -5,6 +5,25 @@ import { X } from "lucide-react";
 import { Cuaderno, SheetType } from "@/lib/types";
 import { api } from "@/lib/api";
 
+/** Convierte YYYY-MM-DD a DD/MM/YYYY para mostrar en el formulario */
+function fechaAFormatoDDMM(fecha: string): string {
+    if (!fecha?.trim()) return "";
+    const m = fecha.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (m) return `${m[3]}/${m[2]}/${m[1]}`;
+    if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(fecha.trim())) return fecha.trim();
+    return fecha;
+}
+
+/** Convierte DD/MM/YYYY, DD-MM-YYYY o YYYY-MM-DD a YYYY-MM-DD para enviar al API */
+function fechaAFormatoISO(fecha: string): string {
+    if (!fecha?.trim()) return "";
+    const s = fecha.trim().replace(/-/g, "/");
+    const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (m) return `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
+    if (/^\d{4}-\d{2}-\d{2}/.test(fecha)) return fecha.split("T")[0];
+    return fecha;
+}
+
 interface AddRowModalProps {
     isOpen: boolean;
     onClose: () => void;
@@ -22,43 +41,12 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
     const [productDropdownOpen, setProductDropdownOpen] = useState(false);
     const productInputRef = useRef<HTMLInputElement>(null);
 
-    const suggestionFromSelectedParcelas = useMemo(() => {
-        if (!initialParcelaIds.length || sheet !== "tratamientos") {
-            return { productoId: "", plaga: "" };
-        }
-
-        const selectedParcelas = (cuaderno.parcelas || []).filter((p) => initialParcelaIds.includes(p.id));
-        const cultivoCount = new Map<string, number>();
-        for (const p of selectedParcelas) {
-            const cultivo = (p.especie || p.cultivo || "").trim().toUpperCase();
-            if (!cultivo) continue;
-            cultivoCount.set(cultivo, (cultivoCount.get(cultivo) || 0) + 1);
-        }
-        const cultivoDominante = Array.from(cultivoCount.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] || "";
-
-        const tratamientos = [...(cuaderno.tratamientos || [])].sort((a, b) => {
-            return String(b.fecha_aplicacion || "").localeCompare(String(a.fecha_aplicacion || ""));
-        });
-        const previoMismoCultivo = tratamientos.find((t: any) => {
-            const c = String(t.cultivo_especie || "").trim().toUpperCase();
-            return cultivoDominante && c === cultivoDominante;
-        });
-
-        const productoPrevioId = previoMismoCultivo?.productos?.[0]?.producto_id || "";
-        const productoExiste = !!(cuaderno.productos || []).find((p) => p.id === productoPrevioId);
-
-        return {
-            productoId: productoExiste ? productoPrevioId : ((cuaderno.productos || [])[0]?.id || ""),
-            plaga: String(previoMismoCultivo?.problema_fitosanitario || previoMismoCultivo?.plaga_enfermedad || ""),
-        };
-    }, [initialParcelaIds, sheet, cuaderno.parcelas, cuaderno.tratamientos, cuaderno.productos]);
-
     useEffect(() => {
         if (isOpen && sheet === "tratamientos" && editTratamientoId) {
             api.getTratamiento(cuaderno.id, editTratamientoId).then(({ tratamiento }) => {
                 const first = tratamiento.productos?.[0];
                 setFormData({
-                    fecha_aplicacion: (tratamiento.fecha_aplicacion || "").split("T")[0],
+                    fecha_aplicacion: fechaAFormatoDDMM((tratamiento.fecha_aplicacion || "").split("T")[0]),
                     parcela_ids: tratamiento.parcela_ids || [],
                     producto_id: first?.producto_id || "",
                     nombre_comercial: first?.nombre_comercial || "",
@@ -74,15 +62,14 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                 });
             }).catch(() => setFormData({}));
         } else if (isOpen && !editTratamientoId) {
-            const suggestedProd = (cuaderno.productos || []).find((p) => p.id === suggestionFromSelectedParcelas.productoId);
             const base: Record<string, any> = {
-                fecha_aplicacion: new Date().toISOString().split("T")[0],
+                fecha_aplicacion: fechaAFormatoDDMM(new Date().toISOString().split("T")[0]),
                 parcela_ids: sheet === "tratamientos" || sheet === "fertilizantes" || sheet === "cosecha" ? initialParcelaIds : [],
-                producto_id: sheet === "tratamientos" ? (suggestionFromSelectedParcelas.productoId || "") : "",
-                nombre_comercial: suggestedProd?.nombre_comercial || "",
-                numero_registro: suggestedProd?.numero_registro || "",
-                numero_lote: suggestedProd?.numero_lote || "",
-                plaga_enfermedad: sheet === "tratamientos" ? (suggestionFromSelectedParcelas.plaga || "") : "",
+                producto_id: "",
+                nombre_comercial: "",
+                numero_registro: "",
+                numero_lote: "",
+                plaga_enfermedad: "",
                 operador: "1",
                 equipo: "1",
                 eficacia: "BUENA",
@@ -102,9 +89,9 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                 base.cantidad_kg = "";
             }
             setFormData(base);
-            setProductInputValue(suggestedProd?.nombre_comercial || "");
+            setProductInputValue("");
         }
-    }, [isOpen, sheet, cuaderno.id, editTratamientoId, initialParcelaIds, suggestionFromSelectedParcelas, cuaderno.productos]);
+    }, [isOpen, sheet, cuaderno.id, editTratamientoId, initialParcelaIds]);
 
     useEffect(() => {
         if (isOpen && sheet === "tratamientos" && editTratamientoId) {
@@ -139,10 +126,16 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
 
     const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
         const { name, value, type } = e.target;
-        setFormData((prev) => ({
-            ...prev,
-            [name]: type === "number" ? parseFloat(value) || 0 : value,
-        }));
+        setFormData((prev) => {
+            const next = { ...prev, [name]: type === "number" ? parseFloat(value) || 0 : value };
+            // Sincronizar plaga del primer producto cuando hay varios productos
+            if (name === "plaga_enfermedad" && Array.isArray(prev.productos_lista) && prev.productos_lista.length > 0) {
+                const list = [...prev.productos_lista];
+                list[0] = { ...list[0], plaga_enfermedad: value };
+                next.productos_lista = list;
+            }
+            return next;
+        });
     };
 
     const handleCheckbox = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -274,7 +267,7 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                     return;
                 }
                 const payload = {
-                    fecha_aplicacion: (formData.fecha_aplicacion || new Date().toISOString().split("T")[0]).trim(),
+                    fecha_aplicacion: fechaAFormatoISO(formData.fecha_aplicacion || "") || new Date().toISOString().split("T")[0],
                     parcela_ids: parcelaIds,
                     productos: productosPayload,
                     plaga_enfermedad: formData.plaga_enfermedad || "",
@@ -591,11 +584,12 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                         Fecha *
                                     </label>
                                     <input
-                                        type="date"
+                                        type="text"
                                         name="fecha_aplicacion"
-                                        value={formData.fecha_aplicacion || new Date().toISOString().split("T")[0]}
+                                        value={formData.fecha_aplicacion || ""}
                                         onChange={handleChange}
                                         required
+                                        placeholder="DD/MM/AAAA (ej: 16/03/2025)"
                                         className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 text-sm focus:outline-none focus:border-green-500 transition-colors"
                                     />
                                 </div>

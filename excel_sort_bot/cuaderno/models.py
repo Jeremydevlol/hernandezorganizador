@@ -607,7 +607,8 @@ class CuadernoExplotacion:
             for prod in productos:
                 plaga_prod = getattr(prod, "problema_fitosanitario", "") or ""
                 plaga_trat = tratamiento.problema_fitosanitario or tratamiento.plaga_enfermedad
-                plaga_final = (plaga_prod or plaga_trat).strip()
+                # Con varios productos: cada uno usa su plaga; no heredar de tratamiento
+                plaga_final = (plaga_prod or (plaga_trat if len(productos) == 1 else "")).strip()
                 prod_copy = ProductoAplicado(
                     producto_id=prod.producto_id,
                     nombre_comercial=prod.nombre_comercial,
