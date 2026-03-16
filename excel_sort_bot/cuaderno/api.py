@@ -81,6 +81,7 @@ class ProductoAplicadoCreate(BaseModel):
     nombre_comercial: str = ""
     numero_registro: str = ""
     numero_lote: str = ""
+    plaga_enfermedad: str = ""   # Problemática específica de este producto (si varios productos en el tratamiento)
     dosis: float = 0.0
     unidad_dosis: str = "L/Ha"
     caldo_hectarea: float = 0.0
@@ -95,7 +96,7 @@ class TratamientoCreate(BaseModel):
     justificacion: str = ""
     metodo_aplicacion: str = ""
     condiciones_climaticas: str = ""
-    operador: str = ""
+    operador: str = "1"
     equipo: str = "1"
     eficacia: str = "BUENA"
     hora_inicio: str = ""
@@ -625,6 +626,7 @@ async def crear_tratamiento(cuaderno_id: str, data: TratamientoCreate):
             nombre_comercial=prod_data.nombre_comercial or "",
             numero_registro=prod_data.numero_registro or "",
             numero_lote=prod_data.numero_lote or "",
+            problema_fitosanitario=(prod_data.plaga_enfermedad or "").strip(),
             dosis=prod_data.dosis,
             unidad_dosis=prod_data.unidad_dosis,
             caldo_hectarea=prod_data.caldo_hectarea,
@@ -640,7 +642,7 @@ async def crear_tratamiento(cuaderno_id: str, data: TratamientoCreate):
         justificacion=data.justificacion,
         metodo_aplicacion=data.metodo_aplicacion,
         condiciones_climaticas=data.condiciones_climaticas,
-        operador=data.operador,
+        operador=(data.operador or "1").strip(),
         equipo=(data.equipo or "1").strip(),
         eficacia=(data.eficacia or "BUENA").strip(),
         hora_inicio=data.hora_inicio,
@@ -683,7 +685,7 @@ async def actualizar_tratamiento(cuaderno_id: str, tratamiento_id: str, data: Tr
         raise HTTPException(status_code=404, detail="Tratamiento no encontrado")
     
     updates = data.model_dump(exclude_unset=True)
-    if "productos" in updates:
+        if "productos" in updates:
         raw = updates["productos"]
         productos_aplicados = []
         for p in raw:
@@ -693,6 +695,7 @@ async def actualizar_tratamiento(cuaderno_id: str, tratamiento_id: str, data: Tr
                 nombre_comercial=d.get("nombre_comercial", ""),
                 numero_registro=d.get("numero_registro", ""),
                 numero_lote=d.get("numero_lote", ""),
+                problema_fitosanitario=d.get("plaga_enfermedad", d.get("problema_fitosanitario", "")),
                 dosis=d.get("dosis", 0),
                 unidad_dosis=d.get("unidad_dosis", "L/Ha"),
                 caldo_hectarea=d.get("caldo_hectarea", 0),

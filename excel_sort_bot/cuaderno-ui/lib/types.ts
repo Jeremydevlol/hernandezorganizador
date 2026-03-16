@@ -67,6 +67,7 @@ export interface ProductoAplicado {
     producto_id: string;
     nombre_comercial: string;
     numero_registro: string;              // Nº Registro
+    problema_fitosanitario?: string;       // Problemática específica del producto
     dosis: number;                        // Dosis
     unidad_dosis: string;                 // kg/ha, l/ha, etc.
 }

@@ -169,6 +169,7 @@ class ProductoAplicado:
     nombre_comercial: str = ""   # Copia para histórico
     numero_registro: str = ""    # Copia para histórico
     numero_lote: str = ""        # Copia para histórico / trazabilidad
+    problema_fitosanitario: str = ""  # Plaga/enfermedad específica de este producto
     dosis: float = 0.0
     unidad_dosis: str = "L/Ha"   # L/Ha, Kg/Ha, cc/L, g/L
     caldo_hectarea: float = 0.0
@@ -180,6 +181,7 @@ class ProductoAplicado:
             "nombre_comercial": self.nombre_comercial,
             "numero_registro": self.numero_registro,
             "numero_lote": self.numero_lote,
+            "problema_fitosanitario": self.problema_fitosanitario,
             "dosis": self.dosis,
             "unidad_dosis": self.unidad_dosis,
             "caldo_hectarea": self.caldo_hectarea,
@@ -603,11 +605,15 @@ class CuadernoExplotacion:
             orden = str(parcela.num_orden) if parcela and isinstance(parcela.num_orden, int) and parcela.num_orden > 0 else ""
 
             for prod in productos:
+                plaga_prod = getattr(prod, "problema_fitosanitario", "") or ""
+                plaga_trat = tratamiento.problema_fitosanitario or tratamiento.plaga_enfermedad
+                plaga_final = (plaga_prod or plaga_trat).strip()
                 prod_copy = ProductoAplicado(
                     producto_id=prod.producto_id,
                     nombre_comercial=prod.nombre_comercial,
                     numero_registro=prod.numero_registro,
                     numero_lote=getattr(prod, "numero_lote", "") or "",
+                    problema_fitosanitario=plaga_prod,
                     dosis=prod.dosis,
                     unidad_dosis=prod.unidad_dosis,
                     caldo_hectarea=prod.caldo_hectarea,
@@ -620,8 +626,8 @@ class CuadernoExplotacion:
                     cultivo_especie=cultivo or tratamiento.cultivo_especie,
                     superficie_tratada=round(sup, 2) if sup else tratamiento.superficie_tratada,
                     fecha_aplicacion=tratamiento.fecha_aplicacion,
-                    problema_fitosanitario=tratamiento.problema_fitosanitario or tratamiento.plaga_enfermedad,
-                    plaga_enfermedad=tratamiento.plaga_enfermedad or tratamiento.problema_fitosanitario,
+                    problema_fitosanitario=plaga_final,
+                    plaga_enfermedad=plaga_final,
                     aplicador=tratamiento.aplicador or tratamiento.operador,
                     operador=tratamiento.operador or tratamiento.aplicador,
                     equipo=tratamiento.equipo,

@@ -97,6 +97,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
     const [selectedParcelas, setSelectedParcelas] = useState<Set<string>>(new Set());
     const [selectedTratamientos, setSelectedTratamientos] = useState<Set<string>>(new Set());
     const [cultivoFilter, setCultivoFilter] = useState<string>("");
+    const [parcelaTratamientoFilter, setParcelaTratamientoFilter] = useState<"" | "con_tratamiento" | "sin_tratamiento">("");
     const [tratCultivoFilter, setTratCultivoFilter] = useState<string>("");
     const [parcelSortMode, setParcelSortMode] = useState<ParcelSortMode>("num_orden");
     const [tratSortMode, setTratSortMode] = useState<TratSortMode>("fecha_desc");
@@ -196,6 +197,17 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
         return cultivos.sort();
     }, [cuaderno.tratamientos]);
 
+    // Parcelas que tienen al menos un tratamiento (para filtro "con/sin tratamiento")
+    const parcelaIdsConTratamiento = useMemo(() => {
+        const ids = new Set<string>();
+        for (const t of cuaderno.tratamientos || []) {
+            for (const pid of t.parcela_ids || []) {
+                if (pid) ids.add(pid);
+            }
+        }
+        return ids;
+    }, [cuaderno.tratamientos]);
+
     // ---- Data filtrada por cultivo y orden ----
     const displayData = useMemo(() => {
         if (effectiveSheet === "tratamientos") {
@@ -236,9 +248,16 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
         }
         if (effectiveSheet !== "parcelas") return data;
         const filtered = (data as any[]).filter((row: any) => {
-            if (!cultivoFilter) return true;
-            const cultivo = row.especie || row.cultivo || "";
-            return cultivo.toLowerCase().includes(cultivoFilter.toLowerCase());
+            if (cultivoFilter) {
+                const cultivo = row.especie || row.cultivo || "";
+                if (!cultivo.toLowerCase().includes(cultivoFilter.toLowerCase())) return false;
+            }
+            if (parcelaTratamientoFilter) {
+                const tieneTratamiento = parcelaIdsConTratamiento.has(row.id || "");
+                if (parcelaTratamientoFilter === "con_tratamiento" && !tieneTratamiento) return false;
+                if (parcelaTratamientoFilter === "sin_tratamiento" && tieneTratamiento) return false;
+            }
+            return true;
         });
 
         const sorted = [...filtered].sort((a: any, b: any) => {
@@ -286,7 +305,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
             }
         });
         return sorted;
-    }, [data, effectiveSheet, cultivoFilter, parcelSortMode, tratCultivoFilter, tratSortMode]);
+    }, [data, effectiveSheet, cultivoFilter, parcelaTratamientoFilter, parcelaIdsConTratamiento, parcelSortMode, tratCultivoFilter, tratSortMode]);
 
     // ---- Orden para exportar (parcelas con el orden actual del editor) ----
     const sortedParcelasForExport = useMemo(() => {
@@ -1371,10 +1390,21 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2 electron-no-drag shrink-0 ml-auto justify-end">
-                        {/* Filtro por cultivo - solo en parcelas */}
-                        {effectiveSheet === "parcelas" && uniqueCultivos.length > 0 && (
+                        {/* Filtro por cultivo y tratamiento - solo en parcelas */}
+                        {effectiveSheet === "parcelas" && (
                             <div className="flex flex-wrap items-center gap-1.5">
                                 <Filter size={14} className="text-gray-500 hidden sm:block" />
+                                <select
+                                    value={parcelaTratamientoFilter}
+                                    onChange={(e) => { setParcelaTratamientoFilter(e.target.value as "" | "con_tratamiento" | "sin_tratamiento"); setSelectedParcelas(new Set()); }}
+                                    className="rounded-md bg-gray-100 border border-gray-300 px-2 py-1.5 text-xs text-gray-800 focus:outline-none focus:border-emerald-500/40 min-w-[140px]"
+                                    title="Filtrar parcelas con o sin tratamiento"
+                                >
+                                    <option value="">Todas las parcelas</option>
+                                    <option value="sin_tratamiento">Sin tratamiento</option>
+                                    <option value="con_tratamiento">Con tratamiento</option>
+                                </select>
+                                {uniqueCultivos.length > 0 && (
                                 <select
                                     value={cultivoFilter}
                                     onChange={(e) => { setCultivoFilter(e.target.value); setSelectedParcelas(new Set()); }}
@@ -1385,6 +1415,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                         <option key={c} value={c}>{c}</option>
                                     ))}
                                 </select>
+                                )}
                                 <select
                                     value={parcelSortMode}
                                     onChange={(e) => setParcelSortMode(e.target.value as ParcelSortMode)}
@@ -1756,8 +1787,8 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                             <div className="w-12 h-12 rounded-xl bg-gray-100 flex items-center justify-center text-gray-600">
                                                 {SHEET_ICONS[effectiveSheet]}
                                             </div>
-                                            <p>{(effectiveSheet === "parcelas" && cultivoFilter) ? `Sin parcelas con cultivo "${cultivoFilter}"` : (effectiveSheet === "tratamientos" && tratCultivoFilter) ? `Sin tratamientos con cultivo "${tratCultivoFilter}"` : `Sin datos en ${config.title.toLowerCase()}`}</p>
-                                            {effectiveSheet !== "historico" && !cultivoFilter && (
+                                            <p>{(effectiveSheet === "parcelas" && cultivoFilter) ? `Sin parcelas con cultivo "${cultivoFilter}"` : (effectiveSheet === "parcelas" && parcelaTratamientoFilter === "sin_tratamiento") ? "¡Todas las parcelas tienen tratamiento!" : (effectiveSheet === "parcelas" && parcelaTratamientoFilter === "con_tratamiento") ? "Ninguna parcela tiene tratamiento aún" : (effectiveSheet === "tratamientos" && tratCultivoFilter) ? `Sin tratamientos con cultivo "${tratCultivoFilter}"` : `Sin datos en ${config.title.toLowerCase()}`}</p>
+                                            {effectiveSheet !== "historico" && !cultivoFilter && !parcelaTratamientoFilter && (
                                                 <button
                                                     onClick={() => setShowAddModal(true)}
                                                     className="mt-2 flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium transition-colors"
@@ -1766,9 +1797,9 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                                     Añadir {effectiveSheet === "parcelas" ? "parcela" : effectiveSheet === "productos" ? "producto" : effectiveSheet === "fertilizantes" ? "fertilizante" : effectiveSheet === "cosecha" ? "cosecha" : "tratamiento"}
                                                 </button>
                                             )}
-                                            {(cultivoFilter || tratCultivoFilter) && (
+                                            {(cultivoFilter || tratCultivoFilter || parcelaTratamientoFilter) && (
                                                 <button
-                                                    onClick={() => { setCultivoFilter(""); setTratCultivoFilter(""); }}
+                                                    onClick={() => { setCultivoFilter(""); setTratCultivoFilter(""); setParcelaTratamientoFilter(""); }}
                                                     className="mt-2 text-xs text-emerald-400 hover:text-emerald-300 transition-colors"
                                                 >
                                                     Limpiar filtro

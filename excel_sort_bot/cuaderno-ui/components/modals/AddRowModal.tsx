@@ -67,7 +67,7 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                     dosis: first?.dosis ?? "",
                     unidad_dosis: first?.unidad_dosis || "L/Ha",
                     plaga_enfermedad: tratamiento.plaga_enfermedad || tratamiento.problema_fitosanitario || "",
-                    operador: tratamiento.operador || tratamiento.aplicador || "",
+                    operador: tratamiento.operador || tratamiento.aplicador || "1",
                     equipo: tratamiento.equipo || "1",
                     eficacia: tratamiento.eficacia || "BUENA",
                     observaciones: tratamiento.observaciones || "",
@@ -83,6 +83,7 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                 numero_registro: suggestedProd?.numero_registro || "",
                 numero_lote: suggestedProd?.numero_lote || "",
                 plaga_enfermedad: sheet === "tratamientos" ? (suggestionFromSelectedParcelas.plaga || "") : "",
+                operador: "1",
                 equipo: "1",
                 eficacia: "BUENA",
             };
@@ -205,22 +206,23 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                     setLoading(false);
                     return;
                 }
-                const buildProductosPayload = async (): Promise<Array<{ producto_id: string; nombre_comercial: string; numero_registro: string; numero_lote: string; dosis: number; unidad_dosis: string }>> => {
+                const buildProductosPayload = async (): Promise<Array<{ producto_id: string; nombre_comercial: string; numero_registro: string; numero_lote: string; plaga_enfermedad: string; dosis: number; unidad_dosis: string }>> => {
                     let productosLista = Array.isArray(formData.productos_lista) && formData.productos_lista.length > 0
                         ? [...formData.productos_lista]
-                        : [{ nombre_comercial: formData.nombre_comercial || productInputValue, numero_registro: formData.numero_registro, numero_lote: formData.numero_lote, dosis: formData.dosis, unidad_dosis: formData.unidad_dosis || "L/Ha", producto_id: formData.producto_id }];
+                        : [{ nombre_comercial: formData.nombre_comercial || productInputValue, numero_registro: formData.numero_registro, numero_lote: formData.numero_lote, plaga_enfermedad: formData.plaga_enfermedad || "", dosis: formData.dosis, unidad_dosis: formData.unidad_dosis || "L/Ha", producto_id: formData.producto_id }];
                     if (productosLista.length > 0) {
                         productosLista[0] = {
                             ...productosLista[0],
                             nombre_comercial: (productosLista[0].nombre_comercial || formData.nombre_comercial || productInputValue || "").trim(),
-                            numero_registro: productosLista[0].numero_registro || formData.numero_registro || "",
+                            numero_registro: productosLista[0].numero_registro ?? formData.numero_registro ?? "",
                             numero_lote: productosLista[0].numero_lote ?? formData.numero_lote ?? "",
+                            plaga_enfermedad: productosLista[0].plaga_enfermedad ?? formData.plaga_enfermedad ?? "",
                             dosis: productosLista[0].dosis ?? formData.dosis,
                             unidad_dosis: productosLista[0].unidad_dosis || formData.unidad_dosis || "L/Ha",
                             producto_id: productosLista[0].producto_id || formData.producto_id || "",
                         };
                     }
-                    const result: Array<{ producto_id: string; nombre_comercial: string; numero_registro: string; numero_lote: string; dosis: number; unidad_dosis: string }> = [];
+                    const result: Array<{ producto_id: string; nombre_comercial: string; numero_registro: string; numero_lote: string; plaga_enfermedad: string; dosis: number; unidad_dosis: string }> = [];
                     for (const p of productosLista) {
                         const nombreProd = (p.nombre_comercial || "").trim();
                         if (!nombreProd || (p.dosis ?? "") === "") continue;
@@ -258,6 +260,7 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                             nombre_comercial: ncom,
                             numero_registro: nreg,
                             numero_lote: nlot,
+                            plaga_enfermedad: (p.plaga_enfermedad ?? "").trim(),
                             dosis: Number(p.dosis) || 0,
                             unidad_dosis: p.unidad_dosis || "L/Ha",
                         });
@@ -275,7 +278,7 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                     parcela_ids: parcelaIds,
                     productos: productosPayload,
                     plaga_enfermedad: formData.plaga_enfermedad || "",
-                    operador: formData.operador || "",
+                    operador: formData.operador || "1",
                     equipo: formData.equipo || "1",
                     eficacia: formData.eficacia || "BUENA",
                     observaciones: formData.observaciones || "",
@@ -742,55 +745,79 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                             {Array.isArray(formData.productos_lista) && formData.productos_lista.length > 1 && (
                                 <div className="space-y-2">
                                     <label className="block text-xs font-medium text-gray-600 mb-1.5">
-                                        Productos adicionales
+                                        Productos adicionales (cada uno con su problemática y Nº registro)
                                     </label>
                                     {formData.productos_lista.slice(1).map((p: any, idx: number) => (
-                                        <div key={idx} className="flex gap-2 items-center p-2 rounded-lg bg-gray-50 border border-gray-200">
-                                            <input
-                                                type="text"
-                                                value={p.nombre_comercial || ""}
-                                                onChange={(e) => {
-                                                    const list = [...(formData.productos_lista || [])];
-                                                    list[idx + 1] = { ...list[idx + 1], nombre_comercial: e.target.value };
-                                                    setFormData((prev) => ({ ...prev, productos_lista: list }));
-                                                }}
-                                                placeholder="Producto"
-                                                className="flex-1 px-2 py-1.5 rounded border border-gray-300 text-sm"
-                                            />
-                                            <input
-                                                type="number"
-                                                value={p.dosis ?? ""}
-                                                onChange={(e) => {
-                                                    const list = [...(formData.productos_lista || [])];
-                                                    list[idx + 1] = { ...list[idx + 1], dosis: e.target.value };
-                                                    setFormData((prev) => ({ ...prev, productos_lista: list }));
-                                                }}
-                                                placeholder="Dosis"
-                                                step="0.01"
-                                                className="w-20 px-2 py-1.5 rounded border border-gray-300 text-sm"
-                                            />
-                                            <select
-                                                value={p.unidad_dosis || "L/Ha"}
-                                                onChange={(e) => {
-                                                    const list = [...(formData.productos_lista || [])];
-                                                    list[idx + 1] = { ...list[idx + 1], unidad_dosis: e.target.value };
-                                                    setFormData((prev) => ({ ...prev, productos_lista: list }));
-                                                }}
-                                                className="w-20 px-2 py-1.5 rounded border border-gray-300 text-sm"
-                                            >
-                                                <option value="L/Ha">L/Ha</option>
-                                                <option value="Kg/Ha">Kg/Ha</option>
-                                            </select>
-                                            <button
-                                                type="button"
-                                                onClick={() => {
-                                                    const list = (formData.productos_lista || []).filter((_: any, i: number) => i !== idx + 1);
-                                                    setFormData((prev) => ({ ...prev, productos_lista: list }));
-                                                }}
-                                                className="p-1.5 rounded hover:bg-red-100 text-red-600"
-                                            >
-                                                <X size={14} />
-                                            </button>
+                                        <div key={idx} className="grid grid-cols-1 gap-2 p-2 rounded-lg bg-gray-50 border border-gray-200">
+                                            <div className="flex gap-2 items-center flex-wrap">
+                                                <input
+                                                    type="text"
+                                                    value={p.nombre_comercial || ""}
+                                                    onChange={(e) => {
+                                                        const list = [...(formData.productos_lista || [])];
+                                                        list[idx + 1] = { ...list[idx + 1], nombre_comercial: e.target.value };
+                                                        setFormData((prev) => ({ ...prev, productos_lista: list }));
+                                                    }}
+                                                    placeholder="Producto"
+                                                    className="flex-1 min-w-[120px] px-2 py-1.5 rounded border border-gray-300 text-sm"
+                                                />
+                                                <input
+                                                    type="text"
+                                                    value={p.numero_registro ?? ""}
+                                                    onChange={(e) => {
+                                                        const list = [...(formData.productos_lista || [])];
+                                                        list[idx + 1] = { ...list[idx + 1], numero_registro: e.target.value };
+                                                        setFormData((prev) => ({ ...prev, productos_lista: list }));
+                                                    }}
+                                                    placeholder="Nº Registro"
+                                                    className="w-24 px-2 py-1.5 rounded border border-gray-300 text-sm"
+                                                />
+                                                <input
+                                                    type="text"
+                                                    value={p.plaga_enfermedad ?? ""}
+                                                    onChange={(e) => {
+                                                        const list = [...(formData.productos_lista || [])];
+                                                        list[idx + 1] = { ...list[idx + 1], plaga_enfermedad: e.target.value };
+                                                        setFormData((prev) => ({ ...prev, productos_lista: list }));
+                                                    }}
+                                                    placeholder="Problemática"
+                                                    className="flex-1 min-w-[100px] px-2 py-1.5 rounded border border-gray-300 text-sm"
+                                                />
+                                                <input
+                                                    type="number"
+                                                    value={p.dosis ?? ""}
+                                                    onChange={(e) => {
+                                                        const list = [...(formData.productos_lista || [])];
+                                                        list[idx + 1] = { ...list[idx + 1], dosis: e.target.value };
+                                                        setFormData((prev) => ({ ...prev, productos_lista: list }));
+                                                    }}
+                                                    placeholder="Dosis"
+                                                    step="0.01"
+                                                    className="w-20 px-2 py-1.5 rounded border border-gray-300 text-sm"
+                                                />
+                                                <select
+                                                    value={p.unidad_dosis || "L/Ha"}
+                                                    onChange={(e) => {
+                                                        const list = [...(formData.productos_lista || [])];
+                                                        list[idx + 1] = { ...list[idx + 1], unidad_dosis: e.target.value };
+                                                        setFormData((prev) => ({ ...prev, productos_lista: list }));
+                                                    }}
+                                                    className="w-20 px-2 py-1.5 rounded border border-gray-300 text-sm"
+                                                >
+                                                    <option value="L/Ha">L/Ha</option>
+                                                    <option value="Kg/Ha">Kg/Ha</option>
+                                                </select>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        const list = (formData.productos_lista || []).filter((_: any, i: number) => i !== idx + 1);
+                                                        setFormData((prev) => ({ ...prev, productos_lista: list }));
+                                                    }}
+                                                    className="p-1.5 rounded hover:bg-red-100 text-red-600"
+                                                >
+                                                    <X size={14} />
+                                                </button>
+                                            </div>
                                         </div>
                                     ))}
                                 </div>
@@ -804,13 +831,14 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                             nombre_comercial: formData.nombre_comercial || productInputValue,
                                             numero_registro: formData.numero_registro,
                                             numero_lote: formData.numero_lote,
+                                            plaga_enfermedad: formData.plaga_enfermedad || "",
                                             dosis: formData.dosis,
                                             unidad_dosis: formData.unidad_dosis || "L/Ha",
                                             producto_id: formData.producto_id,
                                         }];
                                     setFormData((prev) => ({
                                         ...prev,
-                                        productos_lista: [...current, { nombre_comercial: "", numero_registro: "", numero_lote: "", dosis: "", unidad_dosis: "L/Ha", producto_id: "" }],
+                                        productos_lista: [...current, { nombre_comercial: "", numero_registro: "", numero_lote: "", plaga_enfermedad: "", dosis: "", unidad_dosis: "L/Ha", producto_id: "" }],
                                     }));
                                 }}
                                 className="text-sm text-green-600 hover:text-green-700 font-medium"
@@ -825,9 +853,9 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                     <input
                                         type="text"
                                         name="operador"
-                                        value={formData.operador || ""}
+                                        value={formData.operador ?? "1"}
                                         onChange={handleChange}
-                                        placeholder="Nombre del aplicador"
+                                        placeholder="1"
                                         className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
                                     />
                                 </div>
