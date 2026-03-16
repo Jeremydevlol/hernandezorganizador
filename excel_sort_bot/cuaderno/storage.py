@@ -232,14 +232,34 @@ class CuadernoStorage:
     """
     Wrapper que selecciona automáticamente el backend de almacenamiento
     según la variable STORAGE_MODE (local | supabase).
+    En Render, si STORAGE_MODE no está definido pero hay SUPABASE_URL/KEY,
+    usa Supabase para evitar pérdida de datos (disco efímero).
     """
 
     def __init__(self, base_dir: str = None):
-        mode = os.environ.get("STORAGE_MODE", "local").lower()
+        mode = os.environ.get("STORAGE_MODE", "").lower()
+        on_render = os.environ.get("RENDER") == "true"
+        has_supabase = bool(os.environ.get("SUPABASE_URL") and os.environ.get("SUPABASE_KEY"))
+
+        # En Render con disco efímero: forzar Supabase si está configurado
+        if on_render and has_supabase and mode != "supabase":
+            if mode == "local":
+                print("⚠️  RENDER: STORAGE_MODE=local pierde datos al reiniciar. Usando Supabase.")
+            mode = "supabase"
+
         if mode == "supabase":
-            print("📦 Storage: Supabase (producción)")
-            self._backend = SupabaseStorage()
+            if has_supabase:
+                print("📦 Storage: Supabase (producción)")
+                self._backend = SupabaseStorage()
+            else:
+                raise ValueError(
+                    "STORAGE_MODE=supabase requiere SUPABASE_URL y SUPABASE_KEY. "
+                    "Configúralas o usa STORAGE_MODE=local"
+                )
         else:
+            if on_render:
+                print("⚠️  ADVERTENCIA: En Render el disco es efímero. Los cuadernos se perderán al reiniciar.")
+                print("   Para persistencia: STORAGE_MODE=supabase + SUPABASE_URL + SUPABASE_KEY")
             print("📁 Storage: Local (desarrollo)")
             self._backend = LocalStorage(base_dir)
 

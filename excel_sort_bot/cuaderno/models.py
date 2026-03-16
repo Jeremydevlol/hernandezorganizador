@@ -9,6 +9,7 @@ from datetime import datetime, date
 from typing import List, Optional, Dict, Any
 from enum import Enum
 import json
+import os
 import uuid
 
 
@@ -896,9 +897,11 @@ class CuadernoExplotacion:
     # ============================================
     
     def guardar(self, filepath: str):
-        """Guarda el cuaderno en un archivo JSON"""
+        """Guarda el cuaderno en un archivo JSON (flush explícito para persistencia)"""
         with open(filepath, 'w', encoding='utf-8') as f:
             json.dump(self.to_dict(), f, indent=2, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
     
     @classmethod
     def cargar(cls, filepath: str) -> 'CuadernoExplotacion':
