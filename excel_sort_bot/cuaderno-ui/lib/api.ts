@@ -1,9 +1,6 @@
 // API client for Cuaderno de Explotación v2.0
 // Con soporte para upload de archivos y procesamiento GPT-4o
 
-/** API pública de cuaderno en Render (mismo valor que el proxy usa como BACKEND_URL por defecto). */
-const DEFAULT_PRODUCTION_API_ORIGIN = "https://hernandezback.onrender.com";
-
 function getApiBase(): string {
     if (process.env.NEXT_PUBLIC_API_URL) {
         return `${process.env.NEXT_PUBLIC_API_URL}/api/cuaderno`;
@@ -15,11 +12,8 @@ function getApiBase(): string {
             return "http://127.0.0.1:8000/api/cuaderno";
         }
     }
-    // Producción en el navegador: llamar directo a Render (CORS ya permitido en rte_server).
-    // Evita 502 del proxy Vercel→Render si el env del servidor no detecta bien el backend.
-    if (typeof window !== "undefined" && process.env.NODE_ENV === "production") {
-        return `${DEFAULT_PRODUCTION_API_ORIGIN}/api/cuaderno`;
-    }
+    // Vercel / producción: SIEMPRE mismo origen (/api/cuaderno). Si el navegador llama directo a Render y
+    // Render devuelve 502/503, la respuesta no lleva CORS y parece "blocked by CORS policy".
     return "/api/cuaderno";
 }
 
