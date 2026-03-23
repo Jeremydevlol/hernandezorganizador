@@ -57,6 +57,7 @@ _merged_origins = list(dict.fromkeys(origins_list + default_origins))
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_merged_origins,
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
