@@ -5,9 +5,6 @@ function getApiBase(): string {
     if (process.env.NEXT_PUBLIC_API_URL) {
         return `${process.env.NEXT_PUBLIC_API_URL}/api/cuaderno`;
     }
-    if (typeof window !== "undefined" && (window.location.hostname.includes("vercel.app") || window.location.hostname.includes("hernandezbueno"))) {
-        return "https://hernandezback.onrender.com/api/cuaderno";
-    }
     // next dev: el navegador llama al Python directamente (evita fallos del proxy Next→localhost/IPv6).
     if (typeof window !== "undefined" && process.env.NODE_ENV === "development") {
         const h = window.location.hostname;
@@ -15,6 +12,8 @@ function getApiBase(): string {
             return "http://127.0.0.1:8000/api/cuaderno";
         }
     }
+    // Producción (Vercel, dominio propio): mismo origen → sin CORS ni "Failed to fetch" por peticiones cross-origin.
+    // La ruta app/api/cuaderno reenvía al backend (BACKEND_URL / Render).
     return "/api/cuaderno";
 }
 

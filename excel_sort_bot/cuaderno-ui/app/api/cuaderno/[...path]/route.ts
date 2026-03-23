@@ -5,13 +5,20 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 
+/** Node evita límites cortos del Edge en subidas y chat largo. */
+export const runtime = 'nodejs';
+/** Vercel: subir en dashboard si el plan lo permite (Hobby suele ser 10–60s; Pro hasta 300s+). */
+export const maxDuration = 300;
+
 /** En local usar 127.0.0.1: el fetch del servidor Next a "localhost" a veces resuelve a ::1 y falla si el backend solo escucha en IPv4. */
 function getBackendUrl(): string {
-  if (process.env.BACKEND_URL) return process.env.BACKEND_URL;
-  if (process.env.VERCEL) return 'https://hernandezback.onrender.com';
+  if (process.env.BACKEND_URL?.trim()) return process.env.BACKEND_URL.trim();
+  if (process.env.VERCEL === '1' || process.env.VERCEL_ENV) {
+    return 'https://hernandezback.onrender.com';
+  }
   return 'http://127.0.0.1:8000';
 }
-const BACKEND_URL = getBackendUrl();
+
 const TIMEOUT = 900_000; // 15 minutes (subidas Excel grandes + análisis)
 
 // --- HTTP verb handlers (Next.js App Router) ---
@@ -41,7 +48,7 @@ async function proxy(
   const { path } = await ctx.params;
   const pathStr = path.join('/');
   const qs = request.nextUrl.searchParams.toString();
-  const backendUrl = `${BACKEND_URL}/api/cuaderno/${pathStr}${qs ? `?${qs}` : ''}`;
+  const backendUrl = `${getBackendUrl()}/api/cuaderno/${pathStr}${qs ? `?${qs}` : ''}`;
 
   try {
     const hasBody = request.method !== 'GET' && request.method !== 'HEAD';
