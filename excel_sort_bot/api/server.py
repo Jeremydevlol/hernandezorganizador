@@ -47,12 +47,16 @@ origins_list = [origin.strip() for origin in allow_origins_env.split(",") if ori
 default_origins = [
     "http://localhost:3000",
     "http://localhost:5173",
+    "https://hernandezbuenoorganizador.vercel.app",
     "https://hernandezorganizador.vercel.app",
 ]
 
+# Sin "*" mezclado con credenciales: lista explícita + env; duplicados se eliminan.
+_merged_origins = list(dict.fromkeys(origins_list + default_origins))
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins_list + default_origins + ["*"],
+    allow_origins=_merged_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

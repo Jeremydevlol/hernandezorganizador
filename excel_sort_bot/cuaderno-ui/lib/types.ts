@@ -101,6 +101,7 @@ export interface Tratamiento {
     plaga_enfermedad: string;             // Alias
     metodo_aplicacion: string;
     operador: string;                     // Alias aplicador
+    color_fila?: string;                  // Color de fondo (hex) para marcar la fila
 }
 
 // ============================================

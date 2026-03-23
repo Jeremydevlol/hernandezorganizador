@@ -50,13 +50,26 @@ app = FastAPI(
     version="2.1"
 )
 
-# CORS
+# CORS — no mezclar allow_origins=["*"] con allow_credentials=True (los navegadores lo rechazan).
+# Orígenes explícitos para Vercel + local; amplía con ALLOWED_ORIGINS en Render (coma-separado).
+_allow_env = os.getenv("ALLOWED_ORIGINS", "")
+_cors_extra = [o.strip() for o in _allow_env.split(",") if o.strip()]
+_cors_defaults = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "https://hernandezbuenoorganizador.vercel.app",
+    "https://hernandezorganizador.vercel.app",
+]
+_cors_origins = list(dict.fromkeys(_cors_defaults + _cors_extra))
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    allow_origin_regex=r"https://.*\.vercel\.app",
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Content-Disposition", "X-Fields-Extracted", "X-Warnings", "X-Errors", "X-Parcels-Count"],
 )
 
 # Directorio base

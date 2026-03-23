@@ -5,6 +5,7 @@
   "main": "electron.js",
   "scripts": {
     "dev": "next dev --hostname 127.0.0.1",
+    "dev:stack": "concurrently -n api,web -c blue,green \"python3 ../rte_server.py\" \"next dev --hostname 127.0.0.1\"",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",

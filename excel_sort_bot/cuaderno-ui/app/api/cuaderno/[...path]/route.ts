@@ -5,9 +5,14 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 
-const BACKEND_URL = process.env.BACKEND_URL
-  || (process.env.VERCEL ? 'https://hernandezback.onrender.com' : 'http://localhost:8000');
-const TIMEOUT = 300_000; // 5 minutes
+/** En local usar 127.0.0.1: el fetch del servidor Next a "localhost" a veces resuelve a ::1 y falla si el backend solo escucha en IPv4. */
+function getBackendUrl(): string {
+  if (process.env.BACKEND_URL) return process.env.BACKEND_URL;
+  if (process.env.VERCEL) return 'https://hernandezback.onrender.com';
+  return 'http://127.0.0.1:8000';
+}
+const BACKEND_URL = getBackendUrl();
+const TIMEOUT = 900_000; // 15 minutes (subidas Excel grandes + análisis)
 
 // --- HTTP verb handlers (Next.js App Router) ---
 

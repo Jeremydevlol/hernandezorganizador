@@ -8,9 +8,15 @@ function getApiBase(): string {
     if (typeof window !== "undefined" && (window.location.hostname.includes("vercel.app") || window.location.hostname.includes("hernandezbueno"))) {
         return "https://hernandezback.onrender.com/api/cuaderno";
     }
+    // next dev: el navegador llama al Python directamente (evita fallos del proxy Next→localhost/IPv6).
+    if (typeof window !== "undefined" && process.env.NODE_ENV === "development") {
+        const h = window.location.hostname;
+        if (h === "localhost" || h === "127.0.0.1") {
+            return "http://127.0.0.1:8000/api/cuaderno";
+        }
+    }
     return "/api/cuaderno";
 }
-const API_BASE = getApiBase();
 
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
     // Increase timeout for chat operations (AI can take time)
@@ -20,13 +26,21 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeout);
 
+    const method = (options.method ?? "GET").toUpperCase();
+    const optHeaders = options.headers as Record<string, string> | undefined;
+    const headers: Record<string, string> = { ...optHeaders };
+    // GET/HEAD sin cuerpo: sin Content-Type → petición CORS "simple" (evita preflight fallido tras cold start / proxy).
+    if (method !== "GET" && method !== "HEAD") {
+        const hasBody = options.body != null && options.body !== "";
+        if (hasBody && !headers["Content-Type"] && !headers["content-type"]) {
+            headers["Content-Type"] = "application/json";
+        }
+    }
+
     try {
-        const res = await fetch(`${API_BASE}${endpoint}`, {
-            headers: {
-                "Content-Type": "application/json",
-                ...options.headers,
-            },
+        const res = await fetch(`${getApiBase()}${endpoint}`, {
             ...options,
+            headers,
             signal: controller.signal,
         });
 
@@ -59,22 +73,40 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
     }
 }
 
+/** Subidas Excel/PDF grandes: el servidor puede tardar varios minutos en leer y procesar. */
+const UPLOAD_TIMEOUT_MS = 900_000; // 15 min
+
 // Upload helper sin Content-Type (para FormData)
 async function uploadFile<T>(endpoint: string, file: File): Promise<T> {
     const formData = new FormData();
     formData.append("file", file);
 
-    const res = await fetch(`${API_BASE}${endpoint}`, {
-        method: "POST",
-        body: formData,
-    });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), UPLOAD_TIMEOUT_MS);
 
-    if (!res.ok) {
-        const error = await res.json().catch(() => ({ detail: "Error procesando archivo" }));
-        throw new Error(error.detail || "Error en upload");
+    try {
+        const res = await fetch(`${getApiBase()}${endpoint}`, {
+            method: "POST",
+            body: formData,
+            signal: controller.signal,
+        });
+
+        if (!res.ok) {
+            const error = await res.json().catch(() => ({ detail: "Error procesando archivo" }));
+            throw new Error(error.detail || "Error en upload");
+        }
+
+        return res.json();
+    } catch (e: any) {
+        if (e?.name === "AbortError") {
+            throw new Error(
+                "La subida o el análisis tardaron demasiado (límite 15 min). Si el archivo es enorme, prueba en red estable o reduce el tamaño."
+            );
+        }
+        throw e;
+    } finally {
+        clearTimeout(timer);
     }
-
-    return res.json();
 }
 
 // Upload con opciones (solo_datos, hojas_seleccionadas)
@@ -92,17 +124,32 @@ async function uploadFileWithOptions<T>(
         formData.append("hojas_seleccionadas", JSON.stringify(options.hojas_seleccionadas));
     }
 
-    const res = await fetch(`${API_BASE}${endpoint}`, {
-        method: "POST",
-        body: formData,
-    });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), UPLOAD_TIMEOUT_MS);
 
-    if (!res.ok) {
-        const error = await res.json().catch(() => ({ detail: "Error procesando archivo" }));
-        throw new Error(error.detail || "Error en upload");
+    try {
+        const res = await fetch(`${getApiBase()}${endpoint}`, {
+            method: "POST",
+            body: formData,
+            signal: controller.signal,
+        });
+
+        if (!res.ok) {
+            const error = await res.json().catch(() => ({ detail: "Error procesando archivo" }));
+            throw new Error(error.detail || "Error en upload");
+        }
+
+        return res.json();
+    } catch (e: any) {
+        if (e?.name === "AbortError") {
+            throw new Error(
+                "La subida o el análisis tardaron demasiado (límite 15 min). Si el archivo es enorme, prueba en red estable o reduce el tamaño."
+            );
+        }
+        throw e;
+    } finally {
+        clearTimeout(timer);
     }
-
-    return res.json();
 }
 
 export interface HojaResumen {
@@ -310,7 +357,7 @@ export const api = {
         if (params?.orden_tratamientos) search.set("orden_tratamientos", params.orden_tratamientos);
         if (params?.orden_parcelas_modo) search.set("orden_parcelas_modo", params.orden_parcelas_modo);
         const q = search.toString();
-        return `${API_BASE}/${cuadernoId}/export/pdf${q ? `?${q}` : ""}`;
+        return `${getApiBase()}/${cuadernoId}/export/pdf${q ? `?${q}` : ""}`;
     },
 
     // Export Excel (opcional: periodo, orden, check flags)
@@ -324,7 +371,7 @@ export const api = {
         if (params?.orden_tratamientos) search.set("orden_tratamientos", params.orden_tratamientos);
         if (params?.orden_parcelas_modo) search.set("orden_parcelas_modo", params.orden_parcelas_modo);
         const q = search.toString();
-        return `${API_BASE}/${cuadernoId}/export/excel${q ? `?${q}` : ""}`;
+        return `${getApiBase()}/${cuadernoId}/export/excel${q ? `?${q}` : ""}`;
     },
 
     // Export Excel como descarga (fetch + blob) - más fiable que window.open

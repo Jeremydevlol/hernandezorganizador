@@ -1,0 +1,10 @@
+{
+  "name": "excel_sort_bot",
+  "private": true,
+  "scripts": {
+    "dev": "npm --prefix cuaderno-ui run dev",
+    "dev:all": "cd cuaderno-ui && npx concurrently -n api,web -c blue,green \"python3 ../rte_server.py\" \"next dev --hostname 127.0.0.1\"",
+    "build": "npm --prefix cuaderno-ui run build",
+    "start": "npm --prefix cuaderno-ui run start"
+  }
+}

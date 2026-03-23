@@ -47,5 +47,6 @@ cuadernos_data/
 
 # Archivos grandes innecesarios
 *.png
+!excel_sort_bot/cuaderno-ui/public/app-icon.png
 tsconfig.tsbuildinfo
 next-env.d.ts

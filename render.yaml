@@ -8,6 +8,10 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn rte_server:app --host 0.0.0.0 --port $PORT --timeout-keep-alive 300
     envVars:
+      # Opcional: subidas muy grandes (MB). Por defecto 250 MB en código.
+      # - key: MAX_UPLOAD_BYTES
+      #   value: "524288000"
+      # Filas máx. por hoja / combinadas (Excel): MAX_EXCEL_ROWS_PER_SHEET, MAX_EXCEL_COMBINED_ROWS
       - key: STORAGE_MODE
         value: supabase
       - key: OPENAI_API_KEY

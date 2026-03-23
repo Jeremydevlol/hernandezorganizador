@@ -28,7 +28,8 @@ import {
     History,
     MapPin,
     Table2,
-    Send
+    Send,
+    Palette
 } from "lucide-react";
 import { Cuaderno, SheetType, SHEET_CONFIG, HistoricoRow, HojaExcel, CellSelection } from "@/lib/types";
 import { api } from "@/lib/api";
@@ -1711,7 +1712,26 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                             )}
                         </div>
                         {tratamientosSummary.selected > 0 && (
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 flex-wrap">
+                                <div className="flex items-center gap-1" title="Color de fila">
+                                    <Palette size={14} className="text-gray-500" />
+                                    {(["#ffffff", "#fef3c7", "#fde68a", "#bbf7d0", "#bfdbfe", "#e9d5ff", "#fbcfe8", "#fecaca"].map((hex) => (
+                                        <button
+                                            key={hex}
+                                            type="button"
+                                            onClick={async () => {
+                                                for (const tid of selectedTratamientos) {
+                                                    await api.patchCell(cuaderno.id, { sheet_id: "tratamientos", row: tid, column: "color_fila", value: hex === "#ffffff" ? "" : hex });
+                                                }
+                                                onRefresh();
+                                            }}
+                                            className={`w-5 h-5 rounded border-2 transition-all ${hex === "#ffffff" ? "border-gray-300" : "border-transparent"} hover:scale-110 hover:ring-2 hover:ring-gray-400`}
+                                            style={{ backgroundColor: hex }}
+                                            title={hex === "#ffffff" ? "Blanco (sin color)" : `Color ${hex}`}
+                                        />
+                                    )))}
+                                </div>
+                                <div className="w-px h-5 bg-gray-200" />
                                 <button
                                     onClick={() => { setOpenTreatFromTratSelection(true); setShowAddModal(true); }}
                                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium transition-colors"
@@ -1849,7 +1869,10 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                             )}
                                         <tr
                                             key={row.id || idx}
-                                            className={`group hover:bg-gray-50 transition-colors ${isHighlighted ? "bg-emerald-500/15 ring-1 ring-emerald-500/50" : ""} ${isSelected || isTratSelected ? "bg-blue-500/10" : ""}`}
+                                            className={`group transition-colors ${!row.color_fila ? "hover:bg-gray-50" : "hover:brightness-95"} ${isHighlighted ? "ring-1 ring-emerald-500/50" : ""} ${isSelected || isTratSelected ? "ring-1 ring-blue-500/40" : ""}`}
+                                            style={effectiveSheet === "tratamientos" && row.color_fila
+                                                ? { backgroundColor: row.color_fila }
+                                                : undefined}
                                         >
                                             {(effectiveSheet === "parcelas" || effectiveSheet === "tratamientos") && (
                                                 <td className="px-2 py-2 text-center border-b border-r border-gray-200 bg-[var(--bg-dark)]">

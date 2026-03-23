@@ -88,9 +88,32 @@ export default function Home() {
     ? chatSessions.find((s) => s.id === activeChatId)
     : chatSessions[0] ?? null;
 
+  const loadCuadernos = useCallback(async (): Promise<Cuaderno[] | null> => {
+    try {
+      const data = await api.listCuadernos();
+      const list = (data.cuadernos || []) as Cuaderno[];
+      setCuadernos(list);
+      return list;
+    } catch (error) {
+      console.error("Error loading cuadernos:", error);
+      return null;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     loadCuadernos();
-  }, []);
+  }, [loadCuadernos]);
+
+  // Tras inactividad (p. ej. Render free tier) el backend puede dormir: al volver a la pestaña reintentamos la lista.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") loadCuadernos();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [loadCuadernos]);
 
   // Listeners globales para redimensionar paneles con el ratón
   useEffect(() => {
@@ -123,17 +146,6 @@ export default function Home() {
       window.removeEventListener("mouseup", handleMouseUp);
     };
   }, [dragging]);
-
-  const loadCuadernos = useCallback(async () => {
-    try {
-      const data = await api.listCuadernos();
-      setCuadernos(data.cuadernos || []);
-    } catch (error) {
-      console.error("Error loading cuadernos:", error);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
 
   const selectCuaderno = useCallback(async (id: string) => {
     try {
@@ -281,8 +293,8 @@ export default function Home() {
               onCreateCuaderno={createCuaderno}
               onUploadSuccess={onUploadSuccess}
               onCuadernoDeleted={async () => {
-                await loadCuadernos();
-                if (activeCuaderno && !cuadernos.find(c => c.id === activeCuaderno.id)) {
+                const list = await loadCuadernos();
+                if (activeCuaderno && list && !list.find((c) => c.id === activeCuaderno.id)) {
                   setActiveCuaderno(null);
                 }
               }}
@@ -375,8 +387,8 @@ export default function Home() {
                 setMobilePanel("editor");
               }}
               onCuadernoDeleted={async () => {
-                await loadCuadernos();
-                if (activeCuaderno && !cuadernos.find(c => c.id === activeCuaderno.id)) {
+                const list = await loadCuadernos();
+                if (activeCuaderno && list && !list.find((c) => c.id === activeCuaderno.id)) {
                   setActiveCuaderno(null);
                 }
               }}

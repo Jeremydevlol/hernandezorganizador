@@ -10,7 +10,7 @@ import io
 import base64
 import json
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple, Union
 from datetime import datetime
 import tempfile
 
@@ -50,6 +50,24 @@ try:
     OPENPYXL_AVAILABLE = True
 except ImportError:
     OPENPYXL_AVAILABLE = False
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)))
+    except ValueError:
+        return default
+
+
+# Límites para Excel muy grandes (alineado con MAX_UPLOAD_BYTES en la API)
+MAX_UPLOAD_BYTES = _env_int(
+    "MAX_UPLOAD_BYTES",
+    _env_int("MAX_EXCEL_UPLOAD_BYTES", 250 * 1024 * 1024),
+)  # 250 MB por defecto
+MAX_ROWS_PER_SHEET = _env_int("MAX_EXCEL_ROWS_PER_SHEET", 100_000)
+MAX_FORM_SCAN_ROWS = _env_int("MAX_EXCEL_FORM_SCAN_ROWS", 5_000)
+MAX_COMBINED_ROWS = _env_int("MAX_EXCEL_COMBINED_ROWS", 150_000)
+MAX_GPT_INPUT_CHARS = _env_int("MAX_EXCEL_GPT_INPUT_CHARS", 120_000)
 
 # PDF processing
 try:
@@ -156,6 +174,18 @@ Responde SOLO con el JSON, sin markdown, sin explicaciones."""
         self.client = None
         if OPENAI_AVAILABLE and self.api_key:
             self.client = OpenAI(api_key=self.api_key)
+
+    def _is_readonly_sheet(self, ws) -> bool:
+        return type(ws).__name__ == "ReadOnlyWorksheet"
+
+    def _cell_value(self, ws, row: int, col: int) -> Any:
+        """Celda compatible con Worksheet y ReadOnlyWorksheet (uploads grandes)."""
+        if self._is_readonly_sheet(ws):
+            for r in ws.iter_rows(min_row=row, max_row=row, min_col=col, max_col=col, values_only=True):
+                if r:
+                    return r[0]
+            return None
+        return ws.cell(row=row, column=col).value
     
     def get_file_type(self, filename: str) -> Optional[str]:
         """Determina el tipo de archivo por su extensión"""
@@ -169,8 +199,8 @@ Responde SOLO con el JSON, sin markdown, sin explicaciones."""
         """Verifica si el archivo está soportado"""
         return self.get_file_type(filename) is not None
     
-    async def process_file(self, file_content: bytes, filename: str) -> Dict[str, Any]:
-        """Procesa un archivo y extrae datos estructurados"""
+    async def process_file(self, file_content: Union[bytes, Path], filename: str) -> Dict[str, Any]:
+        """Procesa un archivo y extrae datos estructurados. Acepta bytes o ruta (recomendado para archivos grandes)."""
         file_type = self.get_file_type(filename)
         
         if not file_type:
@@ -179,18 +209,35 @@ Responde SOLO con el JSON, sin markdown, sin explicaciones."""
                 "error": f"Tipo de archivo no soportado: {filename}",
                 "supported_types": list(self.SUPPORTED_EXTENSIONS.keys())
             }
+
+        if isinstance(file_content, Path):
+            if not file_content.exists():
+                return {"success": False, "error": "Archivo temporal no encontrado"}
+            if file_content.stat().st_size > MAX_UPLOAD_BYTES:
+                return {
+                    "success": False,
+                    "error": f"Archivo demasiado grande (máx. {MAX_UPLOAD_BYTES // (1024 * 1024)} MB)",
+                }
+        elif isinstance(file_content, bytes):
+            if len(file_content) > MAX_UPLOAD_BYTES:
+                return {
+                    "success": False,
+                    "error": f"Archivo demasiado grande (máx. {MAX_UPLOAD_BYTES // (1024 * 1024)} MB)",
+                }
+        else:
+            return {"success": False, "error": "Tipo de contenido no válido"}
         
         try:
             if file_type == 'excel':
                 return await self._process_excel(file_content, filename)
-            elif file_type == 'pdf':
-                return await self._process_pdf(file_content, filename)
-            elif file_type == 'image':
-                return await self._process_image(file_content, filename)
-            elif file_type == 'csv':
-                return await self._process_csv(file_content, filename)
-            else:
-                return {"success": False, "error": "Tipo no implementado"}
+            blob = file_content.read_bytes() if isinstance(file_content, Path) else file_content
+            if file_type == 'pdf':
+                return await self._process_pdf(blob, filename)
+            if file_type == 'image':
+                return await self._process_image(blob, filename)
+            if file_type == 'csv':
+                return await self._process_csv(blob, filename)
+            return {"success": False, "error": "Tipo no implementado"}
         except Exception as e:
             return {
                 "success": False,
@@ -230,10 +277,15 @@ Responde SOLO con el JSON, sin markdown, sin explicaciones."""
         if not columns_cfg:
             return None
 
-        # Filas completas (1-based con Excel: row 1 = index 0)
-        max_row = max(ws.max_row, data_start)
+        # Filas completas (1-based con Excel: row 1 = index 0); tope para Excel muy grandes
+        safe_upper = data_start + MAX_ROWS_PER_SHEET
+        mr = ws.max_row
+        if mr is None:
+            capped = safe_upper
+        else:
+            capped = min(max(mr, data_start), safe_upper)
         rows = []
-        for row in ws.iter_rows(min_row=1, max_row=max_row, values_only=True):
+        for row in ws.iter_rows(min_row=1, max_row=capped, values_only=True):
             rows.append([self._format_cell(c) for c in row])
 
         if not rows:
@@ -298,34 +350,55 @@ Responde SOLO con el JSON, sin markdown, sin explicaciones."""
                 best_idx = idx
         return best_idx
 
-    async def _process_excel(self, content: bytes, filename: str) -> Dict[str, Any]:
-        """Procesa archivo Excel extrayendo datos de todas las hojas"""
+    async def _process_excel(self, content: Union[bytes, Path], filename: str) -> Dict[str, Any]:
+        """
+        Procesa Excel con modo read_only y topes de filas para archivos muy grandes
+        sin agotar RAM ni tumbar el proceso.
+        """
         if not OPENPYXL_AVAILABLE:
             return {"success": False, "error": "openpyxl no instalado"}
-        
+
+        tmp_owned: Optional[Path] = None
+        wb = None
         try:
-            wb = load_workbook(io.BytesIO(content), data_only=True)
+            if isinstance(content, Path):
+                src = content
+            else:
+                tmp_owned = Path(tempfile.mkstemp(suffix=Path(filename).suffix)[1])
+                tmp_owned.write_bytes(content)
+                src = tmp_owned
+
+            if Path(filename).suffix.lower() == ".xls":
+                return {
+                    "success": False,
+                    "error": "El formato .xls antiguo no es compatible. Guarda el archivo como .xlsx e inténtalo de nuevo.",
+                }
+
+            wb = load_workbook(str(src), read_only=True, data_only=True)
             workbook_dict = self._load_workbook_dict()
             sheets_config = workbook_dict.get("sheets", {})
-            
-            sheets_data = []
-            all_data = []
-            
+
+            sheets_data: List[Dict[str, Any]] = []
+            all_data: List[Dict[str, Any]] = []
+            avisos: List[str] = []
+
             doc_name = Path(filename).stem or "Documento"
+            combined_full = False
+
             for sheet_name in wb.sheetnames:
                 ws = wb[sheet_name]
-                
-                # Hojas inf.gral 1 / inf.gral 2: extraer como formulario ordenado (Campo | Valor)
+
                 form_extracted = self._extract_form_sheet(ws, sheet_name)
                 if form_extracted:
                     sheets_data.append(form_extracted)
                     for row in form_extracted.get("datos", []):
+                        if len(all_data) >= MAX_COMBINED_ROWS:
+                            combined_full = True
+                            break
                         if len(row) >= 2:
                             all_data.append({"sheet": sheet_name, "Campo": row[0], "Valor": row[1]})
                     continue
 
-                # Si la hoja coincide con el workbook_dictionary, usar títulos oficiales y fila 1
-                # Matching exacto primero, luego por prefijo (e.g. "2.1. DATOS PARCELAS (2)")
                 sheet_config = sheets_config.get(sheet_name)
                 if not sheet_config:
                     for cfg_name, cfg_val in sheets_config.items():
@@ -340,18 +413,26 @@ Responde SOLO con el JSON, sin markdown, sin explicaciones."""
                         datos = parsed["datos"]
                         if headers and datos:
                             for row in datos:
+                                if len(all_data) >= MAX_COMBINED_ROWS:
+                                    combined_full = True
+                                    break
                                 row_dict = {}
                                 for i, header in enumerate(headers):
                                     row_dict[header] = row[i] if i < len(row) else None
                                 all_data.append({"sheet": sheet_name, **row_dict})
-                        continue
-                
-                # Fallback: extraer filas (solo con contenido)
-                rows = []
+                    continue
+
+                rows: List[List[Any]] = []
+                truncated_fb = False
+                n = 0
                 for row in ws.iter_rows(values_only=True):
+                    n += 1
+                    if n > MAX_ROWS_PER_SHEET:
+                        truncated_fb = True
+                        break
                     if any(cell is not None for cell in row):
                         rows.append([self._format_cell(cell) for cell in row])
-                
+
                 if not rows:
                     sheets_data.append({
                         "nombre": sheet_name,
@@ -362,7 +443,6 @@ Responde SOLO con el JSON, sin markdown, sin explicaciones."""
                     })
                     continue
 
-                # Detectar header y usar nombres detectados (legacy)
                 header_idx = self._find_header_row(rows)
                 header_row = rows[header_idx]
                 max_cols = max(len(r) for r in rows)
@@ -373,46 +453,69 @@ Responde SOLO con el JSON, sin markdown, sin explicaciones."""
                         headers.append(str(val).strip())
                     else:
                         headers.append(f"{doc_name} - Columna {i + 1}")
-                # Datos: solo filas DESPUÉS del header (no incluir filas de título antes)
                 datos = rows[header_idx + 1:]
-                
-                sheets_data.append({
+
+                entry: Dict[str, Any] = {
                     "nombre": sheet_name,
                     "columnas": headers,
                     "datos": datos,
                     "num_filas": len(datos),
-                    "num_columnas": len(headers)
-                })
-                    
+                    "num_columnas": len(headers),
+                }
+                if truncated_fb:
+                    entry["truncado"] = True
+                    avisos.append(
+                        f"Hoja «{sheet_name}»: solo las primeras {MAX_ROWS_PER_SHEET} filas (archivo muy grande)."
+                    )
+                sheets_data.append(entry)
+
                 if headers and datos:
                     for row in datos:
+                        if len(all_data) >= MAX_COMBINED_ROWS:
+                            combined_full = True
+                            break
                         row_dict = {}
                         for i, header in enumerate(headers):
                             row_dict[header] = row[i] if i < len(row) else None
                         all_data.append({"sheet": sheet_name, **row_dict})
-            
-            result = {
+
+            if combined_full:
+                avisos.append(f"Volcado combinado limitado a {MAX_COMBINED_ROWS} filas.")
+
+            result: Dict[str, Any] = {
                 "success": True,
                 "file_type": "excel",
                 "filename": filename,
                 "hojas": sheets_data,
                 "total_hojas": len(sheets_data),
-                "datos_combinados": all_data
+                "datos_combinados": all_data,
             }
-            
-            # Si hay OpenAI disponible, usar GPT para análisis inteligente
+            if avisos:
+                result["avisos"] = avisos
+
             if self.client and sheets_data:
-                analysis = await self._analyze_with_gpt(
-                    json.dumps(sheets_data[:3], ensure_ascii=False, indent=2),  # Limitar a 3 hojas
-                    is_image=False
-                )
+                sample = json.dumps(sheets_data[:3], ensure_ascii=False, indent=2)
+                if len(sample) > MAX_GPT_INPUT_CHARS:
+                    sample = sample[:MAX_GPT_INPUT_CHARS] + "\n...[contenido truncado para análisis IA]"
+                analysis = await self._analyze_with_gpt(sample, is_image=False)
                 if analysis:
                     result["analisis_ia"] = analysis
-            
+
             return result
-            
+
         except Exception as e:
             return {"success": False, "error": f"Error procesando Excel: {str(e)}"}
+        finally:
+            if wb is not None:
+                try:
+                    wb.close()
+                except Exception:
+                    pass
+            if tmp_owned is not None:
+                try:
+                    tmp_owned.unlink(missing_ok=True)
+                except OSError:
+                    pass
     
     async def _process_pdf(self, content: bytes, filename: str) -> Dict[str, Any]:
         """
@@ -819,7 +922,7 @@ Responde SOLO con el JSON, sin markdown, sin explicaciones."""
             for cell_ref, label in INF_GRAL_1_CELLS:
                 try:
                     row, col = self._cell_ref_to_coord(cell_ref)
-                    val = ws.cell(row=row, column=col).value
+                    val = self._cell_value(ws, row, col)
                     val_fmt = self._format_cell(val)
                     if val_fmt is not None and str(val_fmt).strip():
                         pairs.append([label, str(val_fmt).strip()])
@@ -851,7 +954,7 @@ Responde SOLO con el JSON, sin markdown, sin explicaciones."""
 
         def _add_cell(cell_ref: str, label: str) -> None:
             row, col = self._cell_ref_to_coord(cell_ref)
-            val = ws.cell(row=row, column=col).value
+            val = self._cell_value(ws, row, col)
             val_fmt = self._format_cell(val)
             if val_fmt is not None and str(val_fmt).strip():
                 pairs.append([label, str(val_fmt).strip()])
@@ -863,19 +966,19 @@ Responde SOLO con el JSON, sin markdown, sin explicaciones."""
         # Personas (1.2): fila 10
         for cell_ref, label in INF_GRAL_2_PERSONAS:
             row, col = self._cell_ref_to_coord(cell_ref)
-            val = ws.cell(row=row, column=col).value
+            val = self._cell_value(ws, row, col)
             val_fmt = self._format_cell(val)
             if val_fmt is not None and str(val_fmt).strip():
                 pairs.append([label, str(val_fmt).strip()])
         # Más filas de personas (11, 12, 13, 14)
         for extra_row in range(11, 15):
-            a_val = ws.cell(row=extra_row, column=1).value
+            a_val = self._cell_value(ws, extra_row, 1)
             if a_val is None or not str(a_val).strip():
                 continue
             pairs.append([f"--- Persona {extra_row - 9} ---", ""])
             for cell_ref, label in INF_GRAL_2_PERSONAS:
                 _, c = self._cell_ref_to_coord(cell_ref)
-                val = ws.cell(row=extra_row, column=c).value
+                val = self._cell_value(ws, extra_row, c)
                 val_fmt = self._format_cell(val)
                 if val_fmt is not None and str(val_fmt).strip():
                     pairs.append([label, str(val_fmt).strip()])
@@ -884,18 +987,18 @@ Responde SOLO con el JSON, sin markdown, sin explicaciones."""
         # Equipos (1.3): fila 17 + posibles filas 18+
         for cell_ref, label in INF_GRAL_2_EQUIPOS:
             row, col = self._cell_ref_to_coord(cell_ref)
-            val = ws.cell(row=row, column=col).value
+            val = self._cell_value(ws, row, col)
             val_fmt = self._format_cell(val)
             if val_fmt is not None and str(val_fmt).strip():
                 pairs.append([label, str(val_fmt).strip()])
         for extra_row in range(18, 22):
-            a_val = ws.cell(row=extra_row, column=1).value
+            a_val = self._cell_value(ws, extra_row, 1)
             if a_val is None or not str(a_val).strip():
                 continue
             pairs.append([f"--- Equipo {extra_row - 16} ---", ""])
             for cell_ref, label in INF_GRAL_2_EQUIPOS:
                 _, c = self._cell_ref_to_coord(cell_ref)
-                val = ws.cell(row=extra_row, column=c).value
+                val = self._cell_value(ws, extra_row, c)
                 val_fmt = self._format_cell(val)
                 if val_fmt is not None and str(val_fmt).strip():
                     pairs.append([label, str(val_fmt).strip()])
@@ -922,7 +1025,9 @@ Responde SOLO con el JSON, sin markdown, sin explicaciones."""
         Valor: celda a la derecha o en la misma celda tras ':'.
         """
         rows = []
-        for row in ws.iter_rows(values_only=True):
+        for i, row in enumerate(ws.iter_rows(values_only=True)):
+            if i >= MAX_FORM_SCAN_ROWS:
+                break
             rows.append([self._format_cell(c) for c in row])
 
         pairs = []

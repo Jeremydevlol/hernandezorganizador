@@ -229,6 +229,7 @@ class Tratamiento:
     plaga_enfermedad: str = ""               # Alias de problema_fitosanitario
     operador: str = ""                       # Alias de aplicador
     fecha_creacion: str = field(default_factory=lambda: datetime.now().isoformat())
+    color_fila: str = ""                     # Color de fondo para marcar (hex, ej: #fef3c7). Vacío = blanco
     
     def to_dict(self) -> Dict:
         return {
@@ -255,7 +256,8 @@ class Tratamiento:
             # Alias
             "plaga_enfermedad": self.plaga_enfermedad or self.problema_fitosanitario,
             "operador": self.operador or self.aplicador,
-            "fecha_creacion": self.fecha_creacion
+            "fecha_creacion": self.fecha_creacion,
+            "color_fila": self.color_fila or ""
         }
     
     @classmethod

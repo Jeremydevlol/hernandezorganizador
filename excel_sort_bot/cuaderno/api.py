@@ -146,6 +146,7 @@ class TratamientoUpdate(BaseModel):
     hora_inicio: Optional[str] = None
     hora_fin: Optional[str] = None
     observaciones: Optional[str] = None
+    color_fila: Optional[str] = None
 
 
 class CuadernoCreate(BaseModel):
@@ -685,7 +686,7 @@ async def actualizar_tratamiento(cuaderno_id: str, tratamiento_id: str, data: Tr
         raise HTTPException(status_code=404, detail="Tratamiento no encontrado")
     
     updates = data.model_dump(exclude_unset=True)
-        if "productos" in updates:
+    if "productos" in updates:
         raw = updates["productos"]
         productos_aplicados = []
         for p in raw:
@@ -1486,6 +1487,45 @@ async def exportar_excel_cuaderno(
 # UPLOAD Y PROCESAMIENTO DE ARCHIVOS
 # ============================================
 
+def _max_upload_bytes() -> int:
+    """Tamaño máximo de subida (Excel/PDF/etc.); configurable con MAX_UPLOAD_BYTES."""
+    return int(os.environ.get("MAX_UPLOAD_BYTES", str(250 * 1024 * 1024)))
+
+
+async def _spool_upload_to_temp(file: UploadFile) -> Path:
+    """
+    Escribe el UploadFile en un temporal por trozos (no carga todo el archivo en RAM).
+    """
+    suffix = Path(file.filename or "upload").suffix or ".bin"
+    fd, raw_path = tempfile.mkstemp(prefix="cuaderno_upload_", suffix=suffix)
+    os.close(fd)
+    path = Path(raw_path)
+    total = 0
+    max_b = _max_upload_bytes()
+    chunk_size = 1024 * 1024  # 1 MiB
+    try:
+        with open(path, "wb") as out:
+            while True:
+                chunk = await file.read(chunk_size)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > max_b:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"El archivo supera el tamaño máximo permitido ({max_b // (1024 * 1024)} MB). "
+                        "Configura MAX_UPLOAD_BYTES en el servidor si necesitas un límite mayor.",
+                    )
+                out.write(chunk)
+        return path
+    except HTTPException:
+        path.unlink(missing_ok=True)
+        raise
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
+
+
 @router.post("/upload/analyze")
 async def analizar_archivo(file: UploadFile = File(...)):
     """
@@ -1509,9 +1549,10 @@ async def analizar_archivo(file: UploadFile = File(...)):
             detail=f"Tipo de archivo no soportado: {file.filename}. Formatos: Excel, PDF, imágenes, CSV"
         )
     
+    tmp: Optional[Path] = None
     try:
-        content = await file.read()
-        result = await processor.process_file(content, file.filename)
+        tmp = await _spool_upload_to_temp(file)
+        result = await processor.process_file(tmp, file.filename)
         
         # Resumen de hojas para el modal (nombre, vacía, num_filas)
         hojas_resumen = []
@@ -1532,11 +1573,16 @@ async def analizar_archivo(file: UploadFile = File(...)):
             "data": result,
             "hojas_resumen": hojas_resumen,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=500,
             detail=f"Error procesando archivo: {str(e)}"
         )
+    finally:
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
 
 
 # ============================================
@@ -1860,9 +1906,10 @@ async def crear_cuaderno_desde_archivo(
             detail=f"Tipo de archivo no soportado: {file.filename}"
         )
     
+    tmp: Optional[Path] = None
     try:
-        content = await file.read()
-        result = await processor.process_file(content, file.filename)
+        tmp = await _spool_upload_to_temp(file)
+        result = await processor.process_file(tmp, file.filename)
         
         if not result.get("success"):
             raise HTTPException(
@@ -2025,6 +2072,9 @@ async def crear_cuaderno_desde_archivo(
             status_code=500,
             detail=f"Error creando cuaderno: {str(e)}"
         )
+    finally:
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
 
 
 @router.post("/{cuaderno_id}/upload/import")
@@ -2047,9 +2097,10 @@ async def importar_datos_archivo(cuaderno_id: str, file: UploadFile = File(...))
             detail=f"Tipo de archivo no soportado: {file.filename}"
         )
     
+    tmp: Optional[Path] = None
     try:
-        content = await file.read()
-        result = await processor.process_file(content, file.filename)
+        tmp = await _spool_upload_to_temp(file)
+        result = await processor.process_file(tmp, file.filename)
         
         if not result.get("success"):
             raise HTTPException(
@@ -2176,6 +2227,9 @@ async def importar_datos_archivo(cuaderno_id: str, file: UploadFile = File(...))
             status_code=500,
             detail=f"Error importando datos: {str(e)}"
         )
+    finally:
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
 
 
 @router.get("/upload/supported-formats")
