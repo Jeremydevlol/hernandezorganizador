@@ -28,6 +28,17 @@ function getBackendUrl(): string {
 
 const TIMEOUT = 900_000; // 15 minutes (subidas Excel grandes + análisis)
 
+/**
+ * GET /api/cuaderno/list (clientes cacheados) → backend /catalog/cuadernos.
+ * En algunos despliegues FastAPI hace match de /{cuaderno_id} antes que /list y trata "list" como id → 404.
+ */
+function mapBackendCuadernoPath(method: string, pathStr: string): string {
+  if ((method === 'GET' || method === 'HEAD') && pathStr === 'list') {
+    return 'catalog/cuadernos';
+  }
+  return pathStr;
+}
+
 // --- HTTP verb handlers (Next.js App Router) ---
 
 export async function GET(req: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
@@ -53,7 +64,7 @@ async function proxy(
   ctx: { params: Promise<{ path: string[] }> },
 ) {
   const { path } = await ctx.params;
-  const pathStr = path.join('/');
+  const pathStr = mapBackendCuadernoPath(request.method, path.join('/'));
   const qs = request.nextUrl.searchParams.toString();
   const backendUrl = `${getBackendUrl()}/api/cuaderno/${pathStr}${qs ? `?${qs}` : ''}`;
 
