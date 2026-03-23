@@ -10,10 +10,17 @@ export const runtime = 'nodejs';
 /** Vercel: subir en dashboard si el plan lo permite (Hobby suele ser 10–60s; Pro hasta 300s+). */
 export const maxDuration = 300;
 
-/** En local usar 127.0.0.1: el fetch del servidor Next a "localhost" a veces resuelve a ::1 y falla si el backend solo escucha en IPv4. */
+/** Backend Python (Render en prod). En Vercel a veces VERCEL no está en el runtime del Route Handler → antes caíamos en 127.0.0.1 y el proxy devolvía 502. */
 function getBackendUrl(): string {
-  if (process.env.BACKEND_URL?.trim()) return process.env.BACKEND_URL.trim();
-  if (process.env.VERCEL === '1' || process.env.VERCEL_ENV) {
+  const explicit = process.env.BACKEND_URL?.trim();
+  if (explicit) return explicit;
+  const onVercel =
+    process.env.VERCEL === '1' ||
+    !!process.env.VERCEL_ENV ||
+    !!process.env.NEXT_PUBLIC_VERCEL_URL;
+  if (onVercel) return 'https://hernandezback.onrender.com';
+  // next build + next start local (NODE_ENV=production) sin env Vercel: no usar 127.0.0.1 salvo que quieras solo backend local (BACKEND_URL).
+  if (process.env.NODE_ENV === 'production') {
     return 'https://hernandezback.onrender.com';
   }
   return 'http://127.0.0.1:8000';
