@@ -21,6 +21,6 @@
     "scripts": {
         "dev": "npm --prefix excel_sort_bot/cuaderno-ui run dev",
         "build": "cd excel_sort_bot/cuaderno-ui && npm install && npx next build",
-        "vercel-build": "cd excel_sort_bot/cuaderno-ui && npm install && npx next build"
+        "vercel-build": "cd excel_sort_bot/cuaderno-ui && npm install && npx next build && cd ../.. && rm -rf .next && ln -s excel_sort_bot/cuaderno-ui/.next .next"
     }
 }
