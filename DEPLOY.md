@@ -18,13 +18,11 @@ Variables de entorno en Render: `OPENAI_API_KEY`, `SUPABASE_URL`, `SUPABASE_KEY`
 
 ## Frontend en Vercel
 
-**Root Directory en Vercel (elige una opción):**
+**Obligatorio — Root Directory:** en **Settings → General → Root Directory** pon **`excel_sort_bot/cuaderno-ui`** (donde están `next.config.ts`, `app/` y `package.json` del Cuaderno). Deja el **Build Command** por defecto (`npm run build` / detección Next) y **sin** “Output Directory” personalizado.
 
-1. **Recomendado:** **General → Root Directory** = `excel_sort_bot/cuaderno-ui`. Build por defecto `npm run build` en esa carpeta; Vercel encuentra `.next` ahí sin trucos.
+No despliegues este frontend con la raíz del monorepo en `.`: el build genera `.next` dentro de `cuaderno-ui` y el preset de Vercel espera `node_modules/next` y `.next` en la **misma** carpeta. Un symlink de `.next` en la raíz provoca errores como *`.next` not found* o `ENOENT ... node_modules/next/dist/.../middleware-webpack.js`.
 
-2. **Raíz del repo = `.`:** el repo incluye `vercel.json` con `buildCommand: npm run vercel-build`. Ese script construye en `cuaderno-ui` y crea en la raíz un **symlink** `.next` → `excel_sort_bot/cuaderno-ui/.next` para que el preset de Next.js en Vercel no falle con *“output directory .next was not found at /vercel/path0/.next”*.
-
-**No** uses “Output Directory” en el dashboard apuntando solo a una subcarpeta `.next` sin el preset completo de Next: en el pasado eso publicaba la app como estática y **`/api/cuaderno/*` devolvía 404**. El symlink + `vercel-build` no sustituye el output por una carpeta estática; deja intacto el árbol `.next` del build real.
+Si el proyecto ya está enlazado con Root = `.`, cámbialo a `excel_sort_bot/cuaderno-ui` y vuelve a desplegar (o crea un proyecto nuevo apuntando a esa carpeta).
 
 En Vercel, el proxy usa por defecto `https://hernandezback.onrender.com` (detecta VERCEL=1). Si quieres otro backend, añade `BACKEND_URL` en Environment Variables.
 
