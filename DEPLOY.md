@@ -18,6 +18,12 @@ Variables de entorno en Render: `OPENAI_API_KEY`, `SUPABASE_URL`, `SUPABASE_KEY`
 
 ## Frontend en Vercel
 
+**Importante — Root Directory:** en el proyecto de Vercel, **General → Root Directory** debe ser `excel_sort_bot/cuaderno-ui` (donde está `next.config.ts` y `app/`). Si la raíz del repo es `.`, Vercel no aplica bien el preset de Next.js y las rutas `app/api/*` no se despliegan.
+
+**No** configures un “Output Directory” manual apuntando a `.next`: Vercel lo resuelve solo para Next.js. Forzar `outputDirectory` a `.next` en `vercel.json` hace que la app se publique como estática y **`/api/cuaderno/*` responda 404** aunque la home cargue.
+
+Build: con Root Directory correcto, basta `npm run build` (o el comando por defecto de Next). Si construyes desde la raíz del monorepo sin cambiar Root Directory, usa el script `npm run vercel-build` en la raíz del repo.
+
 En Vercel, el proxy usa por defecto `https://hernandezback.onrender.com` (detecta VERCEL=1). Si quieres otro backend, añade `BACKEND_URL` en Environment Variables.
 
 **Nota:** En el plan free de Render, el backend entra en sleep tras inactividad. El primer request puede tardar ~30-60s (cold start). Los siguientes serán rápidos.
