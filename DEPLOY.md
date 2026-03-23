@@ -24,7 +24,7 @@ No despliegues este frontend con la raíz del monorepo en `.`: el build genera `
 
 Si el proyecto ya está enlazado con Root = `.`, cámbialo a `excel_sort_bot/cuaderno-ui` y vuelve a desplegar (o crea un proyecto nuevo apuntando a esa carpeta).
 
-En Vercel, el proxy usa por defecto `https://hernandezback.onrender.com` (detecta VERCEL=1). Si quieres otro backend, añade `BACKEND_URL` en Environment Variables.
+En Vercel, el proxy usa por defecto `https://hernandezback.onrender.com` (detecta VERCEL=1). Si defines `BACKEND_URL`, usa el origen **sin** barra final (`https://…onrender.com`); si termina en `/`, el proxy la normaliza, pero evitar la barra reduce confusiones en logs (Render mostraba `GET //api/cuaderno/...` → 404).
 
 **Nota:** En el plan free de Render, el backend entra en sleep tras inactividad. El primer request puede tardar ~30-60s (cold start). Los siguientes serán rápidos.
 

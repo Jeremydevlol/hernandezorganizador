@@ -26,6 +26,11 @@ function getBackendUrl(): string {
   return 'http://127.0.0.1:8000';
 }
 
+/** BACKEND_URL con barra final → `//api/...` en el origin; FastAPI registra `/api/...` y responde 404. */
+function backendOrigin(): string {
+  return getBackendUrl().trim().replace(/\/+$/, '');
+}
+
 const TIMEOUT = 900_000; // 15 minutes (subidas Excel grandes + análisis)
 
 /**
@@ -66,7 +71,7 @@ async function proxy(
   const { path } = await ctx.params;
   const pathStr = mapBackendCuadernoPath(request.method, path.join('/'));
   const qs = request.nextUrl.searchParams.toString();
-  const backendUrl = `${getBackendUrl()}/api/cuaderno/${pathStr}${qs ? `?${qs}` : ''}`;
+  const backendUrl = `${backendOrigin()}/api/cuaderno/${pathStr}${qs ? `?${qs}` : ''}`;
 
   try {
     const hasBody = request.method !== 'GET' && request.method !== 'HEAD';
