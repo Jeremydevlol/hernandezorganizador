@@ -188,12 +188,21 @@ class CellPatch(BaseModel):
 # CUADERNO ENDPOINTS
 # ============================================
 
+async def _listar_cuadernos_payload():
+    storage = get_storage()
+    return {"cuadernos": storage.listar()}
+
+
+@router.get("/catalog/cuadernos")
+async def listar_cuadernos_catalog():
+    """Lista cuadernos (ruta de varios segmentos: evita que /{cuaderno_id} capture 'list' en algunos despliegues)."""
+    return await _listar_cuadernos_payload()
+
+
 @router.get("/list")
 async def listar_cuadernos():
-    """Lista todos los cuadernos disponibles"""
-    storage = get_storage()
-    cuadernos = storage.listar()
-    return {"cuadernos": cuadernos}
+    """Lista todos los cuadernos disponibles (legacy; preferir /catalog/cuadernos en clientes nuevos)."""
+    return await _listar_cuadernos_payload()
 
 
 @router.post("/create")

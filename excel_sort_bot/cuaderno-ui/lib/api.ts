@@ -218,7 +218,7 @@ export interface ChatResponse {
 
 export const api = {
     // Cuadernos
-    listCuadernos: () => request<{ cuadernos: any[] }>("/list"),
+    listCuadernos: () => request<{ cuadernos: any[] }>("/catalog/cuadernos"),
 
     getCuaderno: (id: string) => request<{ cuaderno: any }>(`/${id}`),
 
