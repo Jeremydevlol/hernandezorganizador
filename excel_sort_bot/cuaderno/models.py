@@ -74,6 +74,7 @@ class Parcela:
     provincia: str = ""                     # Provincia
     notas: str = ""
     activa: bool = True
+    color_fila: str = ""                    # Marcar fila en el editor (hex); vacío = blanco
     fecha_creacion: str = field(default_factory=lambda: datetime.now().isoformat())
     
     def to_dict(self) -> Dict:
@@ -110,6 +111,7 @@ class Parcela:
             "provincia": self.provincia or self.codigo_provincia,
             "notas": self.notas,
             "activa": self.activa,
+            "color_fila": self.color_fila or "",
             "fecha_creacion": self.fecha_creacion
         }
     
@@ -134,6 +136,7 @@ class ProductoFitosanitario:
     proveedor: str = ""
     fecha_caducidad: str = ""
     notas: str = ""
+    color_fila: str = ""
     fecha_creacion: str = field(default_factory=lambda: datetime.now().isoformat())
     
     def to_dict(self) -> Dict:
@@ -151,6 +154,7 @@ class ProductoFitosanitario:
             "proveedor": self.proveedor,
             "fecha_caducidad": self.fecha_caducidad,
             "notas": self.notas,
+            "color_fila": self.color_fila or "",
             "fecha_creacion": self.fecha_creacion
         }
     
@@ -286,6 +290,7 @@ class Fertilizacion:
     dosis: str = ""
     tipo_fertilizacion: str = ""
     observaciones: str = ""
+    color_fila: str = ""
 
     def to_dict(self) -> Dict:
         return {
@@ -301,6 +306,7 @@ class Fertilizacion:
             "dosis": self.dosis,
             "tipo_fertilizacion": self.tipo_fertilizacion,
             "observaciones": self.observaciones,
+            "color_fila": self.color_fila or "",
         }
 
     @classmethod
@@ -322,6 +328,7 @@ class Cosecha:
     cliente_nif: str = ""
     cliente_direccion: str = ""
     cliente_rgseaa: str = ""
+    color_fila: str = ""
 
     def to_dict(self) -> Dict:
         return {
@@ -336,6 +343,7 @@ class Cosecha:
             "cliente_nif": self.cliente_nif,
             "cliente_direccion": self.cliente_direccion,
             "cliente_rgseaa": self.cliente_rgseaa,
+            "color_fila": self.color_fila or "",
         }
 
     @classmethod
@@ -607,10 +615,10 @@ class CuadernoExplotacion:
             orden = str(parcela.num_orden) if parcela and isinstance(parcela.num_orden, int) and parcela.num_orden > 0 else ""
 
             for prod in productos:
-                plaga_prod = getattr(prod, "problema_fitosanitario", "") or ""
-                plaga_trat = tratamiento.problema_fitosanitario or tratamiento.plaga_enfermedad
-                # Con varios productos: cada uno usa su plaga; no heredar de tratamiento
-                plaga_final = (plaga_prod or (plaga_trat if len(productos) == 1 else "")).strip()
+                plaga_prod = (getattr(prod, "problema_fitosanitario", "") or "").strip()
+                plaga_trat = (tratamiento.problema_fitosanitario or tratamiento.plaga_enfermedad or "").strip()
+                # Cada línea: problemática del producto; si vacía, la del tratamiento (cabecera del formulario)
+                plaga_final = (plaga_prod or plaga_trat).strip()
                 prod_copy = ProductoAplicado(
                     producto_id=prod.producto_id,
                     nombre_comercial=prod.nombre_comercial,
@@ -733,6 +741,8 @@ class CuadernoExplotacion:
         historico = []
         for t in sorted(self.tratamientos, key=lambda x: x.fecha_aplicacion, reverse=True):
             for prod in t.productos:
+                plaga_prod = (getattr(prod, "problema_fitosanitario", "") or "").strip()
+                plaga_trat = (t.problema_fitosanitario or t.plaga_enfermedad or "").strip()
                 historico.append({
                     "id": t.id,
                     "fecha": t.fecha_aplicacion,
@@ -741,7 +751,7 @@ class CuadernoExplotacion:
                     "num_registro": prod.numero_registro,
                     "num_lote": getattr(prod, "numero_lote", "") or "",
                     "dosis": f"{prod.dosis} {prod.unidad_dosis}",
-                    "plaga": t.plaga_enfermedad,
+                    "plaga": plaga_prod or plaga_trat,
                     "operador": t.operador,
                     "observaciones": t.observaciones,
                     "estado": t.estado.value if isinstance(t.estado, EstadoTratamiento) else t.estado

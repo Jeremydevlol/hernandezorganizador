@@ -8,7 +8,7 @@ import re
 import json
 from pathlib import Path
 from typing import List, Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, date
 import tempfile
 
 
@@ -648,6 +648,7 @@ async def crear_tratamiento(cuaderno_id: str, data: TratamientoCreate):
         fecha_aplicacion=data.fecha_aplicacion.strip(),
         parcela_ids=data.parcela_ids,
         productos=productos_aplicados,
+        problema_fitosanitario=(data.plaga_enfermedad or "").strip(),
         plaga_enfermedad=data.plaga_enfermedad,
         justificacion=data.justificacion,
         metodo_aplicacion=data.metodo_aplicacion,
@@ -845,7 +846,8 @@ async def duplicar_tratamiento(cuaderno_id: str, tratamiento_id: str):
         operador=t.operador,
         hora_inicio=t.hora_inicio,
         hora_fin=t.hora_fin,
-        observaciones=t.observaciones
+        observaciones=t.observaciones,
+        color_fila="",
     )
     cuaderno.agregar_tratamiento(nuevo)
     storage.guardar(cuaderno)
@@ -1069,6 +1071,37 @@ async def exportar_pdf_parcela(cuaderno_id: str, parcela_id: str):
 # EXPORTACIÓN EXCEL
 # ============================================
 
+def _parse_date_for_excel(val: Any) -> Any:
+    """Convierte strings habituales a date para Excel; si no se reconoce, devuelve el valor original."""
+    if val is None or val == "":
+        return None
+    if isinstance(val, datetime):
+        return val.date()
+    if isinstance(val, date):
+        return val
+    s = str(val).strip()
+    if not s:
+        return None
+    if re.match(r"^\d{4}-\d{2}-\d{2}", s):
+        try:
+            return datetime.strptime(s[:10], "%Y-%m-%d").date()
+        except ValueError:
+            pass
+    for fmt in ("%d/%m/%Y", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    return val
+
+
+def _trat_parcela_group_key(t: Tratamiento) -> str:
+    """Misma lógica que el editor (parcela_nombres o num_orden_parcelas), en minúsculas."""
+    if t.parcela_nombres:
+        return ",".join(t.parcela_nombres).lower()
+    return (t.num_orden_parcelas or "").lower()
+
+
 @router.get("/{cuaderno_id}/export/excel")
 async def exportar_excel_cuaderno(
     cuaderno_id: str,
@@ -1078,6 +1111,10 @@ async def exportar_excel_cuaderno(
     orden_parcelas: Optional[str] = Query(None, description="IDs de parcelas en el orden deseado (separados por coma)"),
     orden_tratamientos: Optional[str] = Query(None, description="IDs de tratamientos en el orden deseado (separados por coma)"),
     orden_parcelas_modo: Optional[str] = Query(None, description="Modo de orden: num_orden, cultivo, alfabetico, etc."),
+    orden_tratamientos_modo: Optional[str] = Query(
+        None,
+        description="Modo orden tratamientos del editor (ej. parcela): inserta fila en blanco entre grupos de parcela en la hoja Tratamientos",
+    ),
 ):
     """
     Exporta el cuaderno completo a un archivo Excel (.xlsx).
@@ -1117,7 +1154,7 @@ async def exportar_excel_cuaderno(
     
     try:
         from openpyxl import Workbook
-        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side, numbers
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
         from openpyxl.utils import get_column_letter
     except ImportError:
         raise HTTPException(status_code=500, detail="openpyxl no instalado. Ejecuta: pip install openpyxl")
@@ -1150,6 +1187,15 @@ async def exportar_excel_cuaderno(
     data_align_wrap = Alignment(vertical="center", wrap_text=True)
     num_align = Alignment(horizontal="right", vertical="center")
     num_format_2d = "#,##0.00"
+    date_format_es = "dd/mm/yyyy"
+
+    def _fill_from_color_hex(hex_str: Optional[str]):
+        if not hex_str or not str(hex_str).strip():
+            return None
+        h = str(hex_str).strip().lstrip("#").upper()
+        if len(h) == 6 and all(c in "0123456789ABCDEF" for c in h):
+            return PatternFill(start_color=h, end_color=h, fill_type="solid")
+        return None
 
     def _style_header_row(ws, row_num, num_cols):
         for col in range(1, num_cols + 1):
@@ -1159,23 +1205,36 @@ async def exportar_excel_cuaderno(
             c.alignment = header_align
             c.border = thin_border
 
-    def _write_data_row(ws, row_num, values, col_types=None):
+    def _write_data_row(ws, row_num, values, col_types=None, *, row_fill_hex: Optional[str] = None, use_zebra: bool = True):
         """col_types: list of 'str' | 'num' | 'date' | None per column."""
         is_even = (row_num % 2 == 0)
-        for col_idx, val in enumerate(values, 1):
+        row_fill = _fill_from_color_hex(row_fill_hex)
+        for col_idx, raw_val in enumerate(values, 1):
+            ct = col_types[col_idx - 1] if col_types and col_idx - 1 < len(col_types) else None
+            val = _parse_date_for_excel(raw_val) if ct == "date" else raw_val
             cell = ws.cell(row=row_num, column=col_idx, value=val)
             cell.border = thin_border
-            ct = col_types[col_idx - 1] if col_types and col_idx - 1 < len(col_types) else None
             if ct == "num":
                 cell.alignment = num_align
                 if isinstance(val, (int, float)):
                     cell.number_format = num_format_2d
             elif ct == "date":
                 cell.alignment = data_align
+                if isinstance(val, date):
+                    cell.number_format = date_format_es
             else:
                 cell.alignment = data_align
-            if is_even:
+            if row_fill:
+                cell.fill = row_fill
+            elif use_zebra and is_even:
                 cell.fill = even_fill
+
+    def _write_blank_separator_row(ws, row_num: int, num_cols: int):
+        """Fila vacía entre grupos de parcela (misma idea que la banda verde en el editor)."""
+        for col in range(1, num_cols + 1):
+            c = ws.cell(row=row_num, column=col)
+            c.value = None
+            c.border = thin_border
 
     def _auto_width(ws, num_cols, data_start_row=2, max_width=55, min_width=10):
         for col in range(1, num_cols + 1):
@@ -1251,13 +1310,14 @@ async def exportar_excel_cuaderno(
     _style_header_row(ws_parc, 1, len(parc_headers))
 
     for r, p in enumerate(parcelas_ordenadas, 2):
+        _cf = (getattr(p, "color_fila", None) or "").strip() or None
         _write_data_row(ws_parc, r, [
             p.num_orden, p.nombre, p.codigo_provincia or p.provincia,
             p.termino_municipal or p.municipio,
             p.num_poligono, p.num_parcela, p.num_recinto, p.uso_sigpac,
             p.superficie_sigpac or None, p.superficie_cultivada or p.superficie_ha or None,
             p.especie or p.cultivo, p.variedad, p.ecoregimen, p.secano_regadio,
-        ], parc_types)
+        ], parc_types, row_fill_hex=_cf)
 
     total_r = len(parcelas_ordenadas) + 2
     ws_parc.cell(row=total_r, column=8, value="TOTAL:").font = total_font
@@ -1286,11 +1346,12 @@ async def exportar_excel_cuaderno(
         ws_prod.cell(row=1, column=c, value=h)
     _style_header_row(ws_prod, 1, len(prod_headers))
     for r, p in enumerate(sorted(cuaderno.productos, key=lambda x: (x.nombre_comercial or "").upper()), 2):
+        _cf = (getattr(p, "color_fila", None) or "").strip() or None
         _write_data_row(ws_prod, r, [
             p.nombre_comercial, p.numero_registro, p.materia_activa, p.formulacion,
             p.numero_lote, p.cantidad_adquirida or None, p.unidad,
             p.fecha_adquisicion, p.fecha_caducidad, p.proveedor,
-        ], prod_types)
+        ], prod_types, row_fill_hex=_cf)
     _auto_width(ws_prod, len(prod_headers))
     _add_autofilter(ws_prod, len(prod_headers))
     _freeze(ws_prod)
@@ -1323,10 +1384,19 @@ async def exportar_excel_cuaderno(
         if hasta:
             tratamientos = [t for t in tratamientos if (t.fecha_aplicacion or "") <= hasta]
 
+    modo_parcela_export = (orden_tratamientos_modo or "").strip().lower() == "parcela"
     row = 2
+    prev_parcela_key: Optional[str] = None
     for t in tratamientos:
+        parcela_key = _trat_parcela_group_key(t)
+        if modo_parcela_export and prev_parcela_key is not None and parcela_key != prev_parcela_key:
+            _write_blank_separator_row(ws_trat, row, len(trat_headers))
+            row += 1
+        prev_parcela_key = parcela_key
+
         parcela_ref = t.num_orden_parcelas or ", ".join(t.parcela_nombres) or ""
         productos = t.productos if t.productos else [ProductoAplicado()]
+        color_hex = (getattr(t, "color_fila", None) or "").strip() or None
         for pi, prod in enumerate(productos):
             _write_data_row(ws_trat, row, [
                 parcela_ref if pi == 0 else "",
@@ -1343,7 +1413,7 @@ async def exportar_excel_cuaderno(
                 t.equipo if pi == 0 else "",
                 t.eficacia if pi == 0 else "",
                 t.observaciones if pi == 0 else "",
-            ], trat_types)
+            ], trat_types, row_fill_hex=color_hex, use_zebra=False)
             row += 1
 
     _auto_width(ws_trat, len(trat_headers))
@@ -1367,11 +1437,12 @@ async def exportar_excel_cuaderno(
             ws_fert.cell(row=1, column=c, value=h)
         _style_header_row(ws_fert, 1, len(fert_headers))
         for r, f in enumerate(fertilizaciones, 2):
+            _cf = (getattr(f, "color_fila", None) or "").strip() or None
             _write_data_row(ws_fert, r, [
                 f.fecha_inicio, f.fecha_fin, f.num_orden_parcelas, f.cultivo_especie,
                 f.tipo_abono, f.num_albaran, f.riqueza_npk, f.dosis,
                 f.tipo_fertilizacion, f.observaciones,
-            ], fert_types)
+            ], fert_types, row_fill_hex=_cf)
         _auto_width(ws_fert, len(fert_headers))
         _add_autofilter(ws_fert, len(fert_headers))
         _freeze(ws_fert)
@@ -1393,11 +1464,12 @@ async def exportar_excel_cuaderno(
             ws_cos.cell(row=1, column=c, value=h)
         _style_header_row(ws_cos, 1, len(cos_headers))
         for r, co in enumerate(cosechas, 2):
+            _cf = (getattr(co, "color_fila", None) or "").strip() or None
             _write_data_row(ws_cos, r, [
                 co.fecha, co.producto, co.cantidad_kg or None, co.num_orden_parcelas,
                 co.num_albaran, co.num_lote, co.cliente_nombre, co.cliente_nif,
                 getattr(co, 'cliente_direccion', ''), getattr(co, 'cliente_rgseaa', ''),
-            ], cos_types)
+            ], cos_types, row_fill_hex=_cf)
         total_cos_r = len(cosechas) + 2
         ws_cos.cell(row=total_cos_r, column=2, value="TOTAL kg:").font = total_font
         c_tkg = ws_cos.cell(row=total_cos_r, column=3, value=round(sum(co.cantidad_kg or 0 for co in cosechas), 2))

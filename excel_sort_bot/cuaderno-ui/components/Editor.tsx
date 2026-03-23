@@ -32,6 +32,8 @@ import {
     Palette
 } from "lucide-react";
 import { Cuaderno, SheetType, SHEET_CONFIG, HistoricoRow, HojaExcel, CellSelection } from "@/lib/types";
+import { fechaFlexibleAISO, formatDateTableES } from "@/lib/dateSpanish";
+import { parseDecimalInput } from "@/lib/parseDecimal";
 import { api } from "@/lib/api";
 import AddRowModal from "./modals/AddRowModal";
 import AddBulkModal from "./modals/AddBulkModal";
@@ -77,6 +79,9 @@ const BASE_EDITABLE_SHEETS: SheetType[] = ["parcelas", "productos", "tratamiento
 const BULK_EDIT_SHEETS: SheetType[] = ["parcelas", "productos", "tratamientos", "fertilizantes", "cosecha"];
 
 const BASE_SHEET_IDS: SheetType[] = ["parcelas", "productos", "tratamientos", "fertilizantes", "cosecha", "historico"];
+/** Hojas base con casilla de selección y color de fila */
+const SHEETS_WITH_ROW_SELECT: SheetType[] = ["parcelas", "productos", "tratamientos", "fertilizantes", "cosecha"];
+const ROW_COLOR_SWATCHES = ["#ffffff", "#fef3c7", "#fde68a", "#bbf7d0", "#bfdbfe", "#e9d5ff", "#fbcfe8", "#fecaca"] as const;
 type ParcelSortMode = "num_orden" | "cultivo_superficie" | "cultivo" | "alfabetico" | "superficie_desc" | "superficie_asc" | "termino_municipal" | "todo_az";
 type TratSortMode = "fecha_desc" | "fecha_asc" | "cultivo" | "parcela" | "producto";
 
@@ -97,6 +102,9 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
     // ---- Nuevas funcionalidades ----
     const [selectedParcelas, setSelectedParcelas] = useState<Set<string>>(new Set());
     const [selectedTratamientos, setSelectedTratamientos] = useState<Set<string>>(new Set());
+    const [selectedProductos, setSelectedProductos] = useState<Set<string>>(new Set());
+    const [selectedFertilizaciones, setSelectedFertilizaciones] = useState<Set<string>>(new Set());
+    const [selectedCosechas, setSelectedCosechas] = useState<Set<string>>(new Set());
     const [cultivoFilter, setCultivoFilter] = useState<string>("");
     const [parcelaTratamientoFilter, setParcelaTratamientoFilter] = useState<"" | "con_tratamiento" | "sin_tratamiento">("");
     const [tratCultivoFilter, setTratCultivoFilter] = useState<string>("");
@@ -139,6 +147,14 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
         : "";
 
     useEffect(() => {
+        setSelectedParcelas(new Set());
+        setSelectedTratamientos(new Set());
+        setSelectedProductos(new Set());
+        setSelectedFertilizaciones(new Set());
+        setSelectedCosechas(new Set());
+    }, [effectiveSheet]);
+
+    useEffect(() => {
         if (effectiveSheet === "historico") {
             loadHistorico();
         }
@@ -162,6 +178,8 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
             case "tratamientos":
                 return (cuaderno.tratamientos || []).map(t => {
                     const prod = t.productos?.[0] || {};
+                    const probProd = String((prod as any).problema_fitosanitario || (prod as any).plaga_enfermedad || "").trim();
+                    const probTrat = String(t.problema_fitosanitario || t.plaga_enfermedad || "").trim();
                     return {
                         ...t,
                         parcela_nombres: t.parcela_nombres?.join(", ") || "",
@@ -169,6 +187,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                         numero_registro: (prod as any).numero_registro || "",
                         dosis: (prod as any).dosis ?? "",
                         unidad_dosis: (prod as any).unidad_dosis || "",
+                        problema_fitosanitario: probTrat || probProd,
                     };
                 });
             case "fertilizantes":
@@ -357,8 +376,37 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
     }, [cuaderno.parcelas, parcelSortMode]);
 
     const sortedTratamientosForExport = useMemo(() => {
-        return (cuaderno.tratamientos || []) as any[];
-    }, [cuaderno.tratamientos]);
+        const tratamientos = [...(cuaderno.tratamientos || [])] as any[];
+        tratamientos.sort((a: any, b: any) => {
+            const aFecha = String(a.fecha_aplicacion || "").toLowerCase();
+            const bFecha = String(b.fecha_aplicacion || "").toLowerCase();
+            const aCultivo = String(a.cultivo_especie || "").toLowerCase();
+            const bCultivo = String(b.cultivo_especie || "").toLowerCase();
+            const aParcela = String(a.parcela_nombres || a.num_orden_parcelas || "").toLowerCase();
+            const bParcela = String(b.parcela_nombres || b.num_orden_parcelas || "").toLowerCase();
+            const aProd = String((a.productos?.[0] as any)?.nombre_comercial || "").toLowerCase();
+            const bProd = String((b.productos?.[0] as any)?.nombre_comercial || "").toLowerCase();
+            switch (tratSortMode) {
+                case "fecha_asc":
+                    if (aFecha !== bFecha) return aFecha.localeCompare(bFecha, "es");
+                    return (a.id || "").localeCompare(b.id || "");
+                case "cultivo":
+                    if (aCultivo !== bCultivo) return aCultivo.localeCompare(bCultivo, "es");
+                    return bFecha.localeCompare(aFecha, "es");
+                case "parcela":
+                    if (aParcela !== bParcela) return aParcela.localeCompare(bParcela, "es");
+                    return aFecha.localeCompare(bFecha, "es");
+                case "producto":
+                    if (aProd !== bProd) return aProd.localeCompare(bProd, "es");
+                    return bFecha.localeCompare(aFecha, "es");
+                case "fecha_desc":
+                default:
+                    if (bFecha !== aFecha) return bFecha.localeCompare(aFecha, "es");
+                    return (a.id || "").localeCompare(b.id || "");
+            }
+        });
+        return tratamientos;
+    }, [cuaderno.tratamientos, tratSortMode]);
 
     const parcelasFromSelectedTratamientos = useMemo(() => {
         if (selectedTratamientos.size === 0) return [];
@@ -412,14 +460,6 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
         });
     }, []);
 
-    const toggleSelectAll = useCallback(() => {
-        setSelectedParcelas(prev => {
-            const allIds = (displayData as any[]).map((r: any) => r.id).filter(Boolean);
-            if (prev.size === allIds.length) return new Set();
-            return new Set(allIds);
-        });
-    }, [displayData]);
-
     const toggleTratamientoSelection = useCallback((id: string) => {
         setSelectedTratamientos(prev => {
             const next = new Set(prev);
@@ -428,13 +468,86 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
         });
     }, []);
 
-    const toggleSelectAllTratamientos = useCallback(() => {
-        setSelectedTratamientos(prev => {
-            const allIds = (displayData as any[]).map((r: any) => r.id).filter(Boolean);
-            if (prev.size === allIds.length) return new Set();
-            return new Set(allIds);
+    const toggleProductoSelection = useCallback((id: string) => {
+        setSelectedProductos((prev) => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id);
+            else next.add(id);
+            return next;
         });
-    }, [displayData]);
+    }, []);
+
+    const toggleFertilizacionSelection = useCallback((id: string) => {
+        setSelectedFertilizaciones((prev) => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id);
+            else next.add(id);
+            return next;
+        });
+    }, []);
+
+    const toggleCosechaSelection = useCallback((id: string) => {
+        setSelectedCosechas((prev) => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id);
+            else next.add(id);
+            return next;
+        });
+    }, []);
+
+    const toggleSelectAllRowSheet = useCallback(() => {
+        const allIds = (displayData as any[]).map((r: any) => r.id).filter(Boolean);
+        if (effectiveSheet === "parcelas") {
+            setSelectedParcelas((prev) => (prev.size === allIds.length ? new Set() : new Set(allIds)));
+        } else if (effectiveSheet === "tratamientos") {
+            setSelectedTratamientos((prev) => (prev.size === allIds.length ? new Set() : new Set(allIds)));
+        } else if (effectiveSheet === "productos") {
+            setSelectedProductos((prev) => (prev.size === allIds.length ? new Set() : new Set(allIds)));
+        } else if (effectiveSheet === "fertilizantes") {
+            setSelectedFertilizaciones((prev) => (prev.size === allIds.length ? new Set() : new Set(allIds)));
+        } else if (effectiveSheet === "cosecha") {
+            setSelectedCosechas((prev) => (prev.size === allIds.length ? new Set() : new Set(allIds)));
+        }
+    }, [displayData, effectiveSheet]);
+
+    const applyRowColorToSelection = useCallback(
+        async (sheet: SheetType, ids: Set<string>, hex: string) => {
+            if (ids.size === 0) return;
+            const sheet_id = sheet === "cosecha" ? "cosecha" : sheet;
+            const val = hex === "#ffffff" ? "" : hex;
+            for (const id of ids) {
+                await api.patchCell(cuaderno.id, { sheet_id, row: id, column: "color_fila", value: val });
+            }
+            onRefresh();
+        },
+        [cuaderno.id, onRefresh]
+    );
+
+    const sheetHasRowSelect = SHEETS_WITH_ROW_SELECT.includes(effectiveSheet);
+
+    const currentRowSelectionCount = useMemo(() => {
+        switch (effectiveSheet) {
+            case "parcelas":
+                return selectedParcelas.size;
+            case "productos":
+                return selectedProductos.size;
+            case "tratamientos":
+                return selectedTratamientos.size;
+            case "fertilizantes":
+                return selectedFertilizaciones.size;
+            case "cosecha":
+                return selectedCosechas.size;
+            default:
+                return 0;
+        }
+    }, [
+        effectiveSheet,
+        selectedParcelas,
+        selectedProductos,
+        selectedTratamientos,
+        selectedFertilizaciones,
+        selectedCosechas,
+    ]);
 
     const autoSelectByHectareas = useCallback(() => {
         const target = parseFloat(targetHectareas || "0");
@@ -826,21 +939,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
     const formatCellValue = useCallback((value: any, type?: string) => {
         if (value === null || value === undefined) return "-";
         if (type === "date" && value !== "") {
-            let d: Date;
-            if (typeof value === "number" && value > 0 && value < 100000) {
-                d = new Date((value - 25569) * 86400 * 1000);
-            } else {
-                const str = String(value).trim();
-                if (!str) return "-";
-                d = new Date(str);
-                if (isNaN(d.getTime())) {
-                    const m = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-                    if (m) d = new Date(parseInt(m[3], 10), parseInt(m[2], 10) - 1, parseInt(m[1], 10));
-                    else if (/^\d{4}-\d{2}-\d{2}/.test(str)) d = new Date(str.slice(0, 10));
-                }
-            }
-            if (!isNaN(d.getTime())) return d.toLocaleDateString("es-ES");
-            return String(value);
+            return formatDateTableES(value);
         }
         if (Array.isArray(value)) return value.join(", ");
         return String(value);
@@ -998,8 +1097,9 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
             orden_parcelas_modo: parcelSortMode,
             orden_parcelas: sortedParcelasForExport.map((p: any) => p.id).join(","),
             orden_tratamientos: sortedTratamientosForExport.map((t: any) => t.id).join(","),
+            orden_tratamientos_modo: tratSortMode,
         };
-    }, [parcelSortMode, sortedParcelasForExport, sortedTratamientosForExport]);
+    }, [parcelSortMode, tratSortMode, sortedParcelasForExport, sortedTratamientosForExport]);
 
     const exportPDF = async (params?: { desde?: string; hasta?: string }) => {
         const baseParams = buildExportParams(params);
@@ -1053,6 +1153,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
             orden_parcelas_modo: freshOrder.orden_parcelas_modo,
             orden_parcelas: freshOrder.orden_parcelas,
             orden_tratamientos: freshOrder.orden_tratamientos,
+            orden_tratamientos_modo: freshOrder.orden_tratamientos_modo,
             incluir_hojas: selectedExportHojas.size > 0 ? Array.from(selectedExportHojas).join(",") : undefined,
         };
         if (type === "pdf") {
@@ -1069,7 +1170,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
         if (!exportHojasModal) return;
         const { type, params } = exportHojasModal;
         const freshOrder = buildExportParams({ desde: params.desde, hasta: params.hasta });
-        const queryParams = { ...params, incluir_hojas: "", orden_parcelas_modo: freshOrder.orden_parcelas_modo, orden_parcelas: freshOrder.orden_parcelas, orden_tratamientos: freshOrder.orden_tratamientos };
+        const queryParams = { ...params, incluir_hojas: "", orden_parcelas_modo: freshOrder.orden_parcelas_modo, orden_parcelas: freshOrder.orden_parcelas, orden_tratamientos: freshOrder.orden_tratamientos, orden_tratamientos_modo: freshOrder.orden_tratamientos_modo };
         if (type === "pdf") {
             window.open(api.getExportPDFUrl(cuaderno.id, queryParams), "_blank");
         } else {
@@ -1083,7 +1184,16 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
     const handleSaveCell = async (rowId: string, colKey: string, newValue: string) => {
         if (!BASE_EDITABLE_SHEETS.includes(effectiveSheet)) return;
         setEditingCell(null);
-        const payload = { sheet_id: effectiveSheet, row: rowId, column: colKey, value: newValue };
+        let valueToSend: string | number = newValue;
+        const colCfg = config.columns.find((c) => c.key === colKey);
+        if (colCfg?.type === "date") {
+            const iso = fechaFlexibleAISO(newValue);
+            if (iso) valueToSend = iso;
+        } else if (colCfg?.type === "number") {
+            const n = parseDecimalInput(newValue);
+            if (n !== null) valueToSend = n;
+        }
+        const payload = { sheet_id: effectiveSheet, row: rowId, column: colKey, value: valueToSend };
         setSaving(true);
         try {
             await api.patchCell(cuaderno.id, payload);
@@ -1658,7 +1768,21 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                             )}
                         </div>
                         {hectareasSummary.selected > 0 && (
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 flex-wrap">
+                                <div className="flex items-center gap-1" title="Color de fila">
+                                    <Palette size={14} className="text-gray-500" />
+                                    {ROW_COLOR_SWATCHES.map((hex) => (
+                                        <button
+                                            key={hex}
+                                            type="button"
+                                            onClick={() => applyRowColorToSelection("parcelas", selectedParcelas, hex)}
+                                            className={`w-5 h-5 rounded border-2 transition-all ${hex === "#ffffff" ? "border-gray-300" : "border-transparent"} hover:scale-110 hover:ring-2 hover:ring-gray-400`}
+                                            style={{ backgroundColor: hex }}
+                                            title={hex === "#ffffff" ? "Blanco (sin color)" : `Color ${hex}`}
+                                        />
+                                    ))}
+                                </div>
+                                <div className="w-px h-5 bg-gray-200 hidden sm:block" />
                                 <button
                                     onClick={() => { setOpenTreatFromSelection(true); setShowAddModal(true); }}
                                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium transition-colors"
@@ -1715,21 +1839,16 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                             <div className="flex items-center gap-2 flex-wrap">
                                 <div className="flex items-center gap-1" title="Color de fila">
                                     <Palette size={14} className="text-gray-500" />
-                                    {(["#ffffff", "#fef3c7", "#fde68a", "#bbf7d0", "#bfdbfe", "#e9d5ff", "#fbcfe8", "#fecaca"].map((hex) => (
+                                    {ROW_COLOR_SWATCHES.map((hex) => (
                                         <button
                                             key={hex}
                                             type="button"
-                                            onClick={async () => {
-                                                for (const tid of selectedTratamientos) {
-                                                    await api.patchCell(cuaderno.id, { sheet_id: "tratamientos", row: tid, column: "color_fila", value: hex === "#ffffff" ? "" : hex });
-                                                }
-                                                onRefresh();
-                                            }}
+                                            onClick={() => applyRowColorToSelection("tratamientos", selectedTratamientos, hex)}
                                             className={`w-5 h-5 rounded border-2 transition-all ${hex === "#ffffff" ? "border-gray-300" : "border-transparent"} hover:scale-110 hover:ring-2 hover:ring-gray-400`}
                                             style={{ backgroundColor: hex }}
                                             title={hex === "#ffffff" ? "Blanco (sin color)" : `Color ${hex}`}
                                         />
-                                    )))}
+                                    ))}
                                 </div>
                                 <div className="w-px h-5 bg-gray-200" />
                                 <button
@@ -1750,27 +1869,108 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                     </div>
                 )}
 
+                {effectiveSheet === "productos" && currentRowSelectionCount > 0 && (
+                    <div className="px-4 py-2.5 border-b border-gray-200 bg-gradient-to-r from-amber-500/5 to-transparent flex items-center justify-between shrink-0">
+                        <span className="text-sm text-gray-700">{currentRowSelectionCount} producto(s) seleccionado(s)</span>
+                        <div className="flex items-center gap-2 flex-wrap">
+                            <div className="flex items-center gap-1" title="Color de fila">
+                                <Palette size={14} className="text-gray-500" />
+                                {ROW_COLOR_SWATCHES.map((hex) => (
+                                    <button
+                                        key={hex}
+                                        type="button"
+                                        onClick={() => applyRowColorToSelection("productos", selectedProductos, hex)}
+                                        className={`w-5 h-5 rounded border-2 transition-all ${hex === "#ffffff" ? "border-gray-300" : "border-transparent"} hover:scale-110 hover:ring-2 hover:ring-gray-400`}
+                                        style={{ backgroundColor: hex }}
+                                        title={hex === "#ffffff" ? "Blanco (sin color)" : `Color ${hex}`}
+                                    />
+                                ))}
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setSelectedProductos(new Set())}
+                                className="text-xs text-gray-500 hover:text-gray-700 transition-colors"
+                            >
+                                Limpiar
+                            </button>
+                        </div>
+                    </div>
+                )}
+
+                {effectiveSheet === "fertilizantes" && currentRowSelectionCount > 0 && (
+                    <div className="px-4 py-2.5 border-b border-gray-200 bg-gradient-to-r from-lime-500/5 to-transparent flex items-center justify-between shrink-0">
+                        <span className="text-sm text-gray-700">{currentRowSelectionCount} registro(s) seleccionado(s)</span>
+                        <div className="flex items-center gap-2 flex-wrap">
+                            <div className="flex items-center gap-1" title="Color de fila">
+                                <Palette size={14} className="text-gray-500" />
+                                {ROW_COLOR_SWATCHES.map((hex) => (
+                                    <button
+                                        key={hex}
+                                        type="button"
+                                        onClick={() => applyRowColorToSelection("fertilizantes", selectedFertilizaciones, hex)}
+                                        className={`w-5 h-5 rounded border-2 transition-all ${hex === "#ffffff" ? "border-gray-300" : "border-transparent"} hover:scale-110 hover:ring-2 hover:ring-gray-400`}
+                                        style={{ backgroundColor: hex }}
+                                        title={hex === "#ffffff" ? "Blanco (sin color)" : `Color ${hex}`}
+                                    />
+                                ))}
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setSelectedFertilizaciones(new Set())}
+                                className="text-xs text-gray-500 hover:text-gray-700 transition-colors"
+                            >
+                                Limpiar
+                            </button>
+                        </div>
+                    </div>
+                )}
+
+                {effectiveSheet === "cosecha" && currentRowSelectionCount > 0 && (
+                    <div className="px-4 py-2.5 border-b border-gray-200 bg-gradient-to-r from-yellow-500/5 to-transparent flex items-center justify-between shrink-0">
+                        <span className="text-sm text-gray-700">{currentRowSelectionCount} registro(s) seleccionado(s)</span>
+                        <div className="flex items-center gap-2 flex-wrap">
+                            <div className="flex items-center gap-1" title="Color de fila">
+                                <Palette size={14} className="text-gray-500" />
+                                {ROW_COLOR_SWATCHES.map((hex) => (
+                                    <button
+                                        key={hex}
+                                        type="button"
+                                        onClick={() => applyRowColorToSelection("cosecha", selectedCosechas, hex)}
+                                        className={`w-5 h-5 rounded border-2 transition-all ${hex === "#ffffff" ? "border-gray-300" : "border-transparent"} hover:scale-110 hover:ring-2 hover:ring-gray-400`}
+                                        style={{ backgroundColor: hex }}
+                                        title={hex === "#ffffff" ? "Blanco (sin color)" : `Color ${hex}`}
+                                    />
+                                ))}
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setSelectedCosechas(new Set())}
+                                className="text-xs text-gray-500 hover:text-gray-700 transition-colors"
+                            >
+                                Limpiar
+                            </button>
+                        </div>
+                    </div>
+                )}
+
                 {/* Spreadsheet */}
                 <div className="flex-1 overflow-auto bg-[var(--bg-darker)]">
                     <table className="w-full text-sm border-collapse">
                         <thead className="sticky top-0 z-10">
                             <tr className="bg-[var(--bg-dark)]">
-                                            {(effectiveSheet === "parcelas" || effectiveSheet === "tratamientos") && (
+                                            {sheetHasRowSelect && (
                                                 <th className="w-10 px-2 py-2.5 text-center border-b border-r border-gray-200">
                                                     <button
                                                         type="button"
-                                                        onClick={effectiveSheet === "parcelas" ? toggleSelectAll : toggleSelectAllTratamientos}
+                                                        onClick={toggleSelectAllRowSheet}
                                                         className="text-gray-500 hover:text-emerald-400 transition-colors"
                                                         title="Seleccionar todo"
                                                     >
-                                                        {effectiveSheet === "parcelas"
-                                                            ? (selectedParcelas.size > 0 && selectedParcelas.size === (displayData as any[]).length
-                                                                ? <CheckSquare size={15} className="text-emerald-400" />
-                                                                : <Square size={15} />)
-                                                            : (selectedTratamientos.size > 0 && selectedTratamientos.size === (displayData as any[]).length
-                                                                ? <CheckSquare size={15} className="text-emerald-400" />
-                                                                : <Square size={15} />)
-                                                        }
+                                                        {(() => {
+                                                            const n = (displayData as any[]).filter((r: any) => r.id).length;
+                                                            const allOn = n > 0 && currentRowSelectionCount === n;
+                                                            return allOn ? <CheckSquare size={15} className="text-emerald-400" /> : <Square size={15} />;
+                                                        })()}
                                                     </button>
                                                 </th>
                                             )}
@@ -1800,7 +2000,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                             {displayData.length === 0 ? (
                                 <tr>
                                     <td
-                                        colSpan={config.columns.length + ((effectiveSheet === "parcelas" || effectiveSheet === "tratamientos") ? 3 : 2)}
+                                        colSpan={config.columns.length + (sheetHasRowSelect ? 3 : 2)}
                                         className="px-8 py-16 text-center text-gray-500"
                                     >
                                         <div className="flex flex-col items-center gap-3">
@@ -1835,8 +2035,12 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                         highlight.sheet === effectiveSheet &&
                                         row.id &&
                                         highlight.id === row.id;
-                                    const isSelected = effectiveSheet === "parcelas" && selectedParcelas.has(row.id);
-                                    const isTratSelected = effectiveSheet === "tratamientos" && selectedTratamientos.has(row.id);
+                                    const isRowSheetSelected =
+                                        (effectiveSheet === "parcelas" && selectedParcelas.has(row.id)) ||
+                                        (effectiveSheet === "productos" && selectedProductos.has(row.id)) ||
+                                        (effectiveSheet === "tratamientos" && selectedTratamientos.has(row.id)) ||
+                                        (effectiveSheet === "fertilizantes" && selectedFertilizaciones.has(row.id)) ||
+                                        (effectiveSheet === "cosecha" && selectedCosechas.has(row.id));
 
                                     // Separador de parcela cuando tratamientos ordenados por parcela
                                     const showParcelaSeparator = effectiveSheet === "tratamientos" && tratSortMode === "parcela";
@@ -1850,7 +2054,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                         ? (row.parcela_nombres as string[]).join(", ")
                                         : (row.num_orden_parcelas ? `Ord. ${row.num_orden_parcelas}` : "-");
 
-                                    const colspan = config.columns.length + ((effectiveSheet === "parcelas" || effectiveSheet === "tratamientos") ? 3 : 2);
+                                    const colspan = config.columns.length + (sheetHasRowSelect ? 3 : 2);
 
                                     return (
                                         <Fragment key={row.id || idx}>
@@ -1869,19 +2073,25 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                             )}
                                         <tr
                                             key={row.id || idx}
-                                            className={`group transition-colors ${!row.color_fila ? "hover:bg-gray-50" : "hover:brightness-95"} ${isHighlighted ? "ring-1 ring-emerald-500/50" : ""} ${isSelected || isTratSelected ? "ring-1 ring-blue-500/40" : ""}`}
-                                            style={effectiveSheet === "tratamientos" && row.color_fila
+                                            className={`group transition-colors ${!row.color_fila ? "hover:bg-gray-50" : "hover:brightness-95"} ${isHighlighted ? "ring-1 ring-emerald-500/50" : ""} ${isRowSheetSelected ? "ring-1 ring-blue-500/40" : ""}`}
+                                            style={sheetHasRowSelect && row.color_fila
                                                 ? { backgroundColor: row.color_fila }
                                                 : undefined}
                                         >
-                                            {(effectiveSheet === "parcelas" || effectiveSheet === "tratamientos") && (
+                                            {sheetHasRowSelect && (
                                                 <td className="px-2 py-2 text-center border-b border-r border-gray-200 bg-[var(--bg-dark)]">
                                                     <button
                                                         type="button"
-                                                        onClick={() => effectiveSheet === "parcelas" ? toggleParcelaSelection(row.id) : toggleTratamientoSelection(row.id)}
+                                                        onClick={() => {
+                                                            if (effectiveSheet === "parcelas") toggleParcelaSelection(row.id);
+                                                            else if (effectiveSheet === "productos") toggleProductoSelection(row.id);
+                                                            else if (effectiveSheet === "tratamientos") toggleTratamientoSelection(row.id);
+                                                            else if (effectiveSheet === "fertilizantes") toggleFertilizacionSelection(row.id);
+                                                            else if (effectiveSheet === "cosecha") toggleCosechaSelection(row.id);
+                                                        }}
                                                         className="text-gray-500 hover:text-emerald-400 transition-colors"
                                                     >
-                                                        {(effectiveSheet === "parcelas" ? isSelected : isTratSelected)
+                                                        {isRowSheetSelected
                                                             ? <CheckSquare size={15} className="text-blue-400" />
                                                             : <Square size={15} />
                                                         }
@@ -2262,7 +2472,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                             <div className="flex items-center justify-between mb-2">
                                                 <div className="flex items-center gap-2">
                                                     <span className="text-xs font-mono text-gray-500 bg-gray-100 px-2 py-0.5 rounded">
-                                                        {t.fecha_aplicacion ? new Date(t.fecha_aplicacion).toLocaleDateString('es-ES') : '-'}
+                                                        {t.fecha_aplicacion ? formatDateTableES(t.fecha_aplicacion) : '-'}
                                                     </span>
                                                     <span className={`text-[10px] px-2 py-0.5 rounded-md font-medium ${t.estado === 'aplicado' ? 'bg-emerald-500/20 text-emerald-400' :
                                                         t.estado === 'pendiente' ? 'bg-amber-500/20 text-amber-400' :
@@ -2285,8 +2495,13 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                                         <span className="text-gray-500">Productos:</span>
                                                         <div className="mt-1 space-y-0.5">
                                                             {t.productos.map((p: any, pi: number) => (
-                                                                <div key={pi} className="flex items-center gap-2 text-gray-700 pl-2 border-l-2 border-emerald-500/30">
+                                                                <div key={pi} className="flex items-center gap-2 text-gray-700 pl-2 border-l-2 border-emerald-500/30 flex-wrap">
                                                                     <span className="font-medium">{p.nombre_comercial}</span>
+                                                                    {(p.problema_fitosanitario || p.plaga_enfermedad) && (
+                                                                        <span className="text-[11px] text-amber-700 bg-amber-500/10 px-1.5 py-0.5 rounded">
+                                                                            {p.problema_fitosanitario || p.plaga_enfermedad}
+                                                                        </span>
+                                                                    )}
                                                                     <span className="text-gray-500">—</span>
                                                                     <span>{p.dosis} {p.unidad_dosis}</span>
                                                                     {p.numero_registro && <span className="text-gray-600">({p.numero_registro})</span>}
@@ -2335,7 +2550,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                     <div>
                                         <h3 className="text-sm font-semibold text-gray-900">Parcelas del Tratamiento</h3>
                                         <p className="text-xs text-gray-500">
-                                            {t?.fecha_aplicacion ? new Date(t.fecha_aplicacion).toLocaleDateString('es-ES') : ''} • {Number(t?.superficie_tratada || 0).toFixed(2)} ha totales
+                                            {t?.fecha_aplicacion ? formatDateTableES(t.fecha_aplicacion) : ''} • {Number(t?.superficie_tratada || 0).toFixed(2)} ha totales
                                         </p>
                                     </div>
                                 </div>

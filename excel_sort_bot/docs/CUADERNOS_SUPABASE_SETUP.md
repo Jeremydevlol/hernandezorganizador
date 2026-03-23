@@ -8,7 +8,7 @@ En **Render** (y plataformas similares), el sistema de archivos es **efímero**:
 
 ## Solución: Supabase
 
-Para que los cuadernos se guarden de forma **persistente**, configura Supabase como almacenamiento.
+Para que los cuadernos se guarden de forma **persistente**, configura Supabase como almacenamiento. Paea q nsn **RENDER**
 
 ### 1. Crear tabla en Supabase
 
@@ -36,7 +36,7 @@ create policy "Service role full access" on public.cuadernos
   for all using (true) with check (true);
 ```
 
-### 2. Variables de entorno en Render
+### 2. Variables de entorno en Render agdhghbds&/&/&%%Rgayyys
 
 En **Render Dashboard** → tu servicio → **Environment**:
 
@@ -51,3 +51,5 @@ Obtén la URL y la key en: Supabase → Project Settings → API.
 ### 3. Reiniciar el servicio
 
 Tras guardar las variables, Render reiniciará el servicio. Los cuadernos se guardarán en Supabase y **persistirán** entre recargas y reinicios.
+
+

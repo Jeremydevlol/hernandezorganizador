@@ -4,24 +4,18 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { X } from "lucide-react";
 import { Cuaderno, SheetType } from "@/lib/types";
 import { api } from "@/lib/api";
+import { fechaFlexibleAISO, fechaFlexibleADDMMYYYY, isoToDisplayDDMM, normalizeSpanishDateInput } from "@/lib/dateSpanish";
+import { parseDecimalInput } from "@/lib/parseDecimal";
 
 /** Convierte YYYY-MM-DD a DD/MM/YYYY para mostrar en el formulario */
 function fechaAFormatoDDMM(fecha: string): string {
     if (!fecha?.trim()) return "";
-    const m = fecha.match(/^(\d{4})-(\d{2})-(\d{2})/);
-    if (m) return `${m[3]}/${m[2]}/${m[1]}`;
-    if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(fecha.trim())) return fecha.trim();
-    return fecha;
+    return isoToDisplayDDMM(fecha) || fechaFlexibleADDMMYYYY(fecha) || fecha;
 }
 
-/** Convierte DD/MM/YYYY, DD-MM-YYYY o YYYY-MM-DD a YYYY-MM-DD para enviar al API */
+/** Convierte cualquier fecha escrita a YYYY-MM-DD para el API */
 function fechaAFormatoISO(fecha: string): string {
-    if (!fecha?.trim()) return "";
-    const s = fecha.trim().replace(/-/g, "/");
-    const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-    if (m) return `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
-    if (/^\d{4}-\d{2}-\d{2}/.test(fecha)) return fecha.split("T")[0];
-    return fecha;
+    return fechaFlexibleAISO(fecha || "");
 }
 
 interface AddRowModalProps {
@@ -32,7 +26,7 @@ interface AddRowModalProps {
     onSuccess: () => void;
     editTratamientoId?: string;
     initialParcelaIds?: string[];
-}
+} 
 
 export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSuccess, editTratamientoId, initialParcelaIds = [] }: AddRowModalProps) {
     const [loading, setLoading] = useState(false);
@@ -75,7 +69,7 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                 eficacia: "BUENA",
             };
             if (sheet === "fertilizantes") {
-                base.fecha_inicio = new Date().toISOString().split("T")[0];
+                base.fecha_inicio = fechaAFormatoDDMM(new Date().toISOString().split("T")[0]);
                 base.fecha_fin = "";
                 base.cultivo_especie = "";
                 base.tipo_abono = "";
@@ -84,7 +78,7 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                 base.tipo_fertilizacion = "";
             }
             if (sheet === "cosecha") {
-                base.fecha = new Date().toISOString().split("T")[0];
+                base.fecha = fechaAFormatoDDMM(new Date().toISOString().split("T")[0]);
                 base.producto = "";
                 base.cantidad_kg = "";
             }
@@ -126,8 +120,13 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
 
     const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
         const { name, value, type } = e.target;
+        const skipNumberCoerce = name === "dosis" || name === "cantidad_kg" || name === "cantidad_adquirida";
         setFormData((prev) => {
-            const next = { ...prev, [name]: type === "number" ? parseFloat(value) || 0 : value };
+            let fieldVal: string | number = value;
+            if (type === "number" && !skipNumberCoerce) {
+                fieldVal = value === "" ? "" : (parseFloat(value) || 0);
+            }
+            const next = { ...prev, [name]: fieldVal };
             // Sincronizar plaga del primer producto cuando hay varios productos
             if (name === "plaga_enfermedad" && Array.isArray(prev.productos_lista) && prev.productos_lista.length > 0) {
                 const list = [...prev.productos_lista];
@@ -135,6 +134,17 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                 next.productos_lista = list;
             }
             return next;
+        });
+    };
+
+    /** Al salir del campo fecha: reescribe DD/MM/AAAA completo (ej. 2/12/25 → 02/12/2025) */
+    const blurNormalizeDateField = (fieldName: string) => {
+        setFormData((prev) => {
+            const raw = String(prev[fieldName] ?? "").trim();
+            if (!raw) return prev;
+            const n = normalizeSpanishDateInput(raw);
+            if (!n) return prev;
+            return { ...prev, [fieldName]: n.ddmmyyyy };
         });
     };
 
@@ -158,12 +168,15 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
             if (sheet === "parcelas") {
                 await api.createParcela(cuaderno.id, formData);
             } else if (sheet === "productos") {
-                await api.createProducto(cuaderno.id, formData);
+                await api.createProducto(cuaderno.id, {
+                    ...formData,
+                    fecha_adquisicion: fechaAFormatoISO(String(formData.fecha_adquisicion || "")) || formData.fecha_adquisicion,
+                });
             } else if (sheet === "fertilizantes") {
                 const parcelaIds = Array.isArray(formData.parcela_ids) ? formData.parcela_ids : [];
                 await api.createFertilizacion(cuaderno.id, {
-                    fecha_inicio: formData.fecha_inicio || "",
-                    fecha_fin: formData.fecha_fin || "",
+                    fecha_inicio: fechaAFormatoISO(String(formData.fecha_inicio || "")) || formData.fecha_inicio || "",
+                    fecha_fin: fechaAFormatoISO(String(formData.fecha_fin || "")) || formData.fecha_fin || "",
                     parcela_ids: parcelaIds,
                     cultivo_especie: formData.cultivo_especie || "",
                     cultivo_variedad: formData.cultivo_variedad || "",
@@ -177,7 +190,7 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
             } else if (sheet === "cosecha") {
                 const parcelaIds = Array.isArray(formData.parcela_ids) ? formData.parcela_ids : [];
                 await api.createCosecha(cuaderno.id, {
-                    fecha: formData.fecha || "",
+                    fecha: fechaAFormatoISO(String(formData.fecha || "")) || formData.fecha || "",
                     producto: formData.producto || "",
                     cantidad_kg: Number(formData.cantidad_kg) || 0,
                     parcela_ids: parcelaIds,
@@ -254,7 +267,7 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                             numero_registro: nreg,
                             numero_lote: nlot,
                             plaga_enfermedad: (p.plaga_enfermedad ?? "").trim(),
-                            dosis: Number(p.dosis) || 0,
+                            dosis: parseDecimalInput(p.dosis) ?? 0,
                             unidad_dosis: p.unidad_dosis || "L/Ha",
                         });
                     }
@@ -522,10 +535,12 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                         F. Adquisición
                                     </label>
                                     <input
-                                        type="date"
+                                        type="text"
                                         name="fecha_adquisicion"
                                         value={formData.fecha_adquisicion || ""}
                                         onChange={handleChange}
+                                        onBlur={() => blurNormalizeDateField("fecha_adquisicion")}
+                                        placeholder="DD/MM/AAAA o 2/12/25"
                                         className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 text-sm focus:outline-none focus:border-green-500 transition-colors"
                                     />
                                 </div>
@@ -588,8 +603,9 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                         name="fecha_aplicacion"
                                         value={formData.fecha_aplicacion || ""}
                                         onChange={handleChange}
+                                        onBlur={() => blurNormalizeDateField("fecha_aplicacion")}
                                         required
-                                        placeholder="DD/MM/AAAA (ej: 16/03/2025)"
+                                        placeholder="DD/MM/AAAA o 2/12/25"
                                         className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 text-sm focus:outline-none focus:border-green-500 transition-colors"
                                     />
                                 </div>
@@ -709,13 +725,13 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                         Dosis *
                                     </label>
                                     <input
-                                        type="number"
+                                        type="text"
+                                        inputMode="decimal"
                                         name="dosis"
-                                        value={formData.dosis || ""}
+                                        value={formData.dosis ?? ""}
                                         onChange={handleChange}
                                         required
-                                        step="0.01"
-                                        placeholder="0.00"
+                                        placeholder="Ej: 0,2 o 1.5"
                                         className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
                                     />
                                 </div>
@@ -778,7 +794,8 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                                     className="flex-1 min-w-[100px] px-2 py-1.5 rounded border border-gray-300 text-sm"
                                                 />
                                                 <input
-                                                    type="number"
+                                                    type="text"
+                                                    inputMode="decimal"
                                                     value={p.dosis ?? ""}
                                                     onChange={(e) => {
                                                         const list = [...(formData.productos_lista || [])];
@@ -786,7 +803,6 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                                         setFormData((prev) => ({ ...prev, productos_lista: list }));
                                                     }}
                                                     placeholder="Dosis"
-                                                    step="0.01"
                                                     className="w-20 px-2 py-1.5 rounded border border-gray-300 text-sm"
                                                 />
                                                 <select
@@ -923,10 +939,12 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                         Fecha Inicio
                                     </label>
                                     <input
-                                        type="date"
+                                        type="text"
                                         name="fecha_inicio"
                                         value={formData.fecha_inicio || ""}
                                         onChange={handleChange}
+                                        onBlur={() => blurNormalizeDateField("fecha_inicio")}
+                                        placeholder="DD/MM/AAAA o 2/12/25"
                                         className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 text-sm focus:outline-none focus:border-green-500 transition-colors"
                                     />
                                 </div>
@@ -935,10 +953,12 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                         Fecha Fin
                                     </label>
                                     <input
-                                        type="date"
+                                        type="text"
                                         name="fecha_fin"
                                         value={formData.fecha_fin || ""}
                                         onChange={handleChange}
+                                        onBlur={() => blurNormalizeDateField("fecha_fin")}
+                                        placeholder="DD/MM/AAAA o 2/12/25"
                                         className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 text-sm focus:outline-none focus:border-green-500 transition-colors"
                                     />
                                 </div>
@@ -1081,10 +1101,12 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                         Fecha
                                     </label>
                                     <input
-                                        type="date"
+                                        type="text"
                                         name="fecha"
                                         value={formData.fecha || ""}
                                         onChange={handleChange}
+                                        onBlur={() => blurNormalizeDateField("fecha")}
+                                        placeholder="DD/MM/AAAA o 2/12/25"
                                         className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 text-sm focus:outline-none focus:border-green-500 transition-colors"
                                     />
                                 </div>

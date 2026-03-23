@@ -346,7 +346,7 @@ export const api = {
     },
 
     // Export PDF (opcional: periodo, orden, check flags)
-    getExportPDFUrl: (cuadernoId: string, params?: { desde?: string; hasta?: string; check_hojas_editadas?: boolean; incluir_hojas?: string; orden_parcelas?: string; orden_tratamientos?: string; orden_parcelas_modo?: string }) => {
+    getExportPDFUrl: (cuadernoId: string, params?: { desde?: string; hasta?: string; check_hojas_editadas?: boolean; incluir_hojas?: string; orden_parcelas?: string; orden_tratamientos?: string; orden_parcelas_modo?: string; orden_tratamientos_modo?: string }) => {
         const search = new URLSearchParams();
         if (params?.desde) search.set("desde", params.desde);
         if (params?.hasta) search.set("hasta", params.hasta);
@@ -355,12 +355,13 @@ export const api = {
         if (params?.orden_parcelas) search.set("orden_parcelas", params.orden_parcelas);
         if (params?.orden_tratamientos) search.set("orden_tratamientos", params.orden_tratamientos);
         if (params?.orden_parcelas_modo) search.set("orden_parcelas_modo", params.orden_parcelas_modo);
+        if (params?.orden_tratamientos_modo) search.set("orden_tratamientos_modo", params.orden_tratamientos_modo);
         const q = search.toString();
         return `${getApiBase()}/${cuadernoId}/export/pdf${q ? `?${q}` : ""}`;
     },
 
     // Export Excel (opcional: periodo, orden, check flags)
-    getExportExcelUrl: (cuadernoId: string, params?: { desde?: string; hasta?: string; check_hojas_editadas?: boolean; incluir_hojas?: string; orden_parcelas?: string; orden_tratamientos?: string; orden_parcelas_modo?: string }) => {
+    getExportExcelUrl: (cuadernoId: string, params?: { desde?: string; hasta?: string; check_hojas_editadas?: boolean; incluir_hojas?: string; orden_parcelas?: string; orden_tratamientos?: string; orden_parcelas_modo?: string; orden_tratamientos_modo?: string }) => {
         const search = new URLSearchParams();
         if (params?.desde) search.set("desde", params.desde);
         if (params?.hasta) search.set("hasta", params.hasta);
@@ -369,12 +370,13 @@ export const api = {
         if (params?.orden_parcelas) search.set("orden_parcelas", params.orden_parcelas);
         if (params?.orden_tratamientos) search.set("orden_tratamientos", params.orden_tratamientos);
         if (params?.orden_parcelas_modo) search.set("orden_parcelas_modo", params.orden_parcelas_modo);
+        if (params?.orden_tratamientos_modo) search.set("orden_tratamientos_modo", params.orden_tratamientos_modo);
         const q = search.toString();
         return `${getApiBase()}/${cuadernoId}/export/excel${q ? `?${q}` : ""}`;
     },
 
     // Export Excel como descarga (fetch + blob) - más fiable que window.open
-    downloadExportExcel: async (cuadernoId: string, params?: { desde?: string; hasta?: string; incluir_hojas?: string; orden_parcelas?: string; orden_tratamientos?: string; orden_parcelas_modo?: string }) => {
+    downloadExportExcel: async (cuadernoId: string, params?: { desde?: string; hasta?: string; incluir_hojas?: string; orden_parcelas?: string; orden_tratamientos?: string; orden_parcelas_modo?: string; orden_tratamientos_modo?: string }) => {
         const url = getApiBase();
         const search = new URLSearchParams();
         if (params?.desde) search.set("desde", params.desde);
@@ -383,6 +385,7 @@ export const api = {
         if (params?.orden_parcelas) search.set("orden_parcelas", params.orden_parcelas);
         if (params?.orden_tratamientos) search.set("orden_tratamientos", params.orden_tratamientos);
         if (params?.orden_parcelas_modo) search.set("orden_parcelas_modo", params.orden_parcelas_modo);
+        if (params?.orden_tratamientos_modo) search.set("orden_tratamientos_modo", params.orden_tratamientos_modo);
         const q = search.toString();
         const fullUrl = `${url}/${cuadernoId}/export/excel${q ? `?${q}` : ""}`;
         const res = await fetch(fullUrl, { credentials: "include" });

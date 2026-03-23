@@ -41,6 +41,7 @@ export interface Parcela {
     provincia: string;                    // Provincia
     notas?: string;
     activa: boolean;
+    color_fila?: string;
 }
 
 // ============================================
@@ -58,6 +59,7 @@ export interface Producto {
     fecha_adquisicion?: string;           // Fecha compra
     fecha_caducidad?: string;             // Fecha caducidad
     proveedor?: string;                   // Proveedor
+    color_fila?: string;
 }
 
 // ============================================
@@ -120,6 +122,7 @@ export interface Fertilizacion {
     dosis: string;                        // Dosis (kg/ha, m3/ha)
     tipo_fertilizacion: string;           // Tipo
     observaciones?: string;
+    color_fila?: string;
 }
 
 // ============================================
@@ -137,6 +140,7 @@ export interface Cosecha {
     cliente_nif: string;
     cliente_direccion: string;
     cliente_rgseaa: string;
+    color_fila?: string;
 }
 
 // ============================================
