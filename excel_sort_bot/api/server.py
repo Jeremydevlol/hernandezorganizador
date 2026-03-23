@@ -22,11 +22,47 @@ import uvicorn
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from run import load_mapping, process_file
-from src.ai_processor import AIProcessor, resolve_date
-from src.parcel_manager import ParcelManager
-from src.template_fingerprint import fingerprint_workbook, load_registry, match_template
 from cuaderno.api import router as cuaderno_router
+
+# Carga diferida: run.py + asistente IA suben mucho el RSS al importar; cuaderno no los necesita al arranque.
+_sort_stack = None
+_chat_stack = None
+_ai_processor_singleton = None
+
+
+def _get_sort_stack():
+    global _sort_stack
+    if _sort_stack is None:
+        from run import load_mapping, process_file
+
+        _sort_stack = (load_mapping, process_file)
+    return _sort_stack
+
+
+def _get_chat_stack():
+    global _chat_stack
+    if _chat_stack is None:
+        from src.ai_processor import resolve_date
+        from src.parcel_manager import ParcelManager
+        from src.template_fingerprint import fingerprint_workbook, load_registry, match_template
+
+        _chat_stack = (
+            resolve_date,
+            ParcelManager,
+            fingerprint_workbook,
+            load_registry,
+            match_template,
+        )
+    return _chat_stack
+
+
+def _get_ai_processor():
+    global _ai_processor_singleton
+    if _ai_processor_singleton is None:
+        from src.ai_processor import AIProcessor
+
+        _ai_processor_singleton = AIProcessor()
+    return _ai_processor_singleton
 
 # ========================================
 # Configuración
@@ -82,9 +118,6 @@ committed_proposals: Dict[str, datetime] = {}
 
 PROPOSAL_TTL_MINUTES = 30
 COMMITTED_LOG_TTL_MINUTES = 60  # Mantener registro de commits por 1 hora
-
-# Procesador IA
-ai_processor = AIProcessor()
 
 # Límite de parcelas sin confirmación extra
 MAX_PARCELS_WITHOUT_CONFIRM = 20
@@ -186,9 +219,10 @@ async def process_excel(
     try:
         with open(input_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
-        
+
+        load_mapping, process_file = _get_sort_stack()
         mapping = load_mapping(str(MAPPING_PATH))
-        
+
         result = process_file(
             str(input_path),
             str(DEFAULT_TEMPLATE),
@@ -259,7 +293,9 @@ async def preview_treatment(
     
     # Guardar archivo temporal
     input_path = save_temp_file(file, prefix="preview")
-    
+
+    resolve_date, ParcelManager, fingerprint_workbook, load_registry, match_template = _get_chat_stack()
+
     try:
         # 0. TEMPLATE FINGERPRINT GATE
         fp = fingerprint_workbook(str(input_path), parcels_sheet_hint_contains=["2.1.", "PARCELAS"])
@@ -299,7 +335,7 @@ async def preview_treatment(
         context = pm.get_context_for_ai()
         
         # 2. Interpretar con IA
-        intent = ai_processor.interpret_command(message, context)
+        intent = _get_ai_processor().interpret_command(message, context)
         
         if "error" in intent:
             raise HTTPException(status_code=500, detail=intent["error"])
@@ -466,6 +502,7 @@ async def commit_treatment(
         raise HTTPException(status_code=404, detail="Archivo temporal expirado. Sube el archivo de nuevo.")
     
     try:
+        ParcelManager = _get_chat_stack()[1]
         # Cargar ParcelManager con el archivo guardado
         pm = ParcelManager(str(file_path))
         
@@ -524,6 +561,7 @@ async def cancel_proposal(proposal_id: str):
 async def get_info():
     """Devuelve información sobre la configuración actual"""
     try:
+        load_mapping, _ = _get_sort_stack()
         mapping = load_mapping(str(MAPPING_PATH))
         return {
             "template_exists": DEFAULT_TEMPLATE.exists(),

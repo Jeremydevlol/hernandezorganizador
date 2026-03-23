@@ -16,6 +16,8 @@ El `render.yaml` en la raíz del repo define el servicio. Al conectar el repo a 
 
 Variables de entorno en Render: `OPENAI_API_KEY`, `SUPABASE_URL`, `SUPABASE_KEY`, `STORAGE_MODE=supabase`
 
+**Memoria (OOM “used over 512MB”):** subir de plan de **facturación** a “Pro” no cambia solo la RAM del servicio. En el servicio web, **Instance type** debe ser al menos **Standard (2 GB RAM)**. Starter/free suelen ser **512 MB**, insuficientes para FastAPI + openpyxl + subidas grandes. En `render.yaml` está `plan: standard`; si el servicio se creó a mano, en el dashboard: **Settings → Instance type → Standard** (o superior). Si solo usas Cuaderno y no el organizador Excel pesado, puedes usar `uvicorn rte_server:app` (menor huella que `api.server:app`).
+
 ## Frontend en Vercel
 
 **Obligatorio — Root Directory:** en **Settings → General → Root Directory** pon **`excel_sort_bot/cuaderno-ui`** (donde están `next.config.ts`, `app/` y `package.json` del Cuaderno). Deja el **Build Command** por defecto (`npm run build` / detección Next) y **sin** “Output Directory” personalizado.
