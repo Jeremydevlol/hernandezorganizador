@@ -85,6 +85,14 @@ const ROW_COLOR_SWATCHES = ["#ffffff", "#fef3c7", "#fde68a", "#bbf7d0", "#bfdbfe
 type ParcelSortMode = "num_orden" | "cultivo_superficie" | "cultivo" | "alfabetico" | "superficie_desc" | "superficie_asc" | "termino_municipal" | "todo_az";
 type TratSortMode = "fecha_desc" | "fecha_asc" | "cultivo" | "parcela" | "producto";
 
+/** Filtro del desplegable: igualdad exacta (trim + minúsculas). Evita que "AVENA" incluya "AVENA/COLIFLOR". */
+function cultivoCoincideConFiltro(celdaCultivo: string, filtro: string): boolean {
+    const f = (filtro || "").trim().toLowerCase();
+    if (!f) return true;
+    const c = (celdaCultivo || "").trim().toLowerCase();
+    return c === f;
+}
+
 export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh, highlight, onRequestHighlight, focusSheetId = null, onFocusModeExit, editorActionsRef, onSendSelectionToChat }: EditorProps) {
     const [historico, setHistorico] = useState<HistoricoRow[]>([]);
     const [showAddModal, setShowAddModal] = useState(false);
@@ -234,7 +242,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
             const tratamientos = (data as any[]).filter((t: any) => {
                 if (!tratCultivoFilter) return true;
                 const cultivo = t.cultivo_especie || "";
-                return cultivo.toLowerCase().includes(tratCultivoFilter.toLowerCase());
+                return cultivoCoincideConFiltro(cultivo, tratCultivoFilter);
             });
             const sorted = [...tratamientos].sort((a: any, b: any) => {
                 const aFecha = String(a.fecha_aplicacion || "").toLowerCase();
@@ -270,7 +278,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
         const filtered = (data as any[]).filter((row: any) => {
             if (cultivoFilter) {
                 const cultivo = row.especie || row.cultivo || "";
-                if (!cultivo.toLowerCase().includes(cultivoFilter.toLowerCase())) return false;
+                if (!cultivoCoincideConFiltro(cultivo, cultivoFilter)) return false;
             }
             if (parcelaTratamientoFilter) {
                 const tieneTratamiento = parcelaIdsConTratamiento.has(row.id || "");
