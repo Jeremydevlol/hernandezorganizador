@@ -267,9 +267,9 @@ export const SHEET_CONFIG: Record<SheetType, {
     parcelas: {
         title: "2.1 Datos Parcelas",
         columns: [
-            { key: "nombre", label: "Nombre", width: 140, editable: true },
             { key: "num_orden", label: "Nº Orden", width: 70, type: "number" },
             { key: "codigo_provincia", label: "Prov.", width: 50, editable: true },
+            { key: "nombre", label: "Nombre", width: 140, editable: true },
             { key: "termino_municipal", label: "Término Municipal", width: 150, editable: true },
             { key: "num_poligono", label: "Polígono", width: 70, editable: true },
             { key: "num_parcela", label: "Parcela", width: 70, editable: true },

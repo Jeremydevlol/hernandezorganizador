@@ -418,9 +418,21 @@ class PDFGenerator:
     # TABLAS MODERNAS
     # ============================================
 
+    @staticmethod
+    def _hex_to_rgb(hex_str: str):
+        """Convierte '#RRGGBB' o 'RRGGBB' a tupla (R, G, B)."""
+        h = (hex_str or "").strip().lstrip("#")
+        if len(h) == 6:
+            try:
+                return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+            except ValueError:
+                pass
+        return None
+
     def _tabla_moderna(self, pdf: ModernPDF, data: List[List[str]], col_widths: tuple,
-                       font_size: int = 8):
-        """Tabla con cabecera del color primario, filas alternas, cabeceras repetidas."""
+                       font_size: int = 8, row_colors: list = None):
+        """Tabla con cabecera del color primario, filas alternas, cabeceras repetidas.
+        row_colors: lista paralela a data[1:] con color hex o None por fila."""
         if not data:
             return
         pdf.set_font("Helvetica", size=font_size)
@@ -433,8 +445,15 @@ class PDFGenerator:
             repeat_headings=True,
             line_height=pdf.font_size * 2.3,
         ) as t:
-            for row in data:
-                t.row(_sanitize_row(row))
+            for i, row_data in enumerate(data):
+                row_style = None
+                if i > 0 and row_colors:
+                    color_idx = i - 1
+                    if color_idx < len(row_colors) and row_colors[color_idx]:
+                        rgb = self._hex_to_rgb(row_colors[color_idx])
+                        if rgb:
+                            row_style = FontFace(fill_color=rgb)
+                r = t.row(_sanitize_row(row_data), style=row_style)
 
     def _tabla_info_moderna(self, pdf: ModernPDF, data: List[Tuple[str, str]],
                              col1_w: int = 55):
@@ -624,7 +643,8 @@ class PDFGenerator:
                                    hojas_a_incluir: Optional[List[str]] = None,
                                    orden_parcelas: Optional[List[str]] = None,
                                    orden_tratamientos: Optional[List[str]] = None,
-                                   orden_parcelas_modo: Optional[str] = None) -> str:
+                                   orden_parcelas_modo: Optional[str] = None,
+                                   incluir_base: Optional[dict] = None) -> str:
         """Genera el PDF del cuaderno completo con diseño moderno.
         Analiza los datos antes de exportar: omite secciones/hojas vacías.
         orden_parcelas/orden_tratamientos: IDs en el orden deseado (del editor).
@@ -694,30 +714,34 @@ class PDFGenerator:
             titular=_sanitize(cuaderno.titular),
         )
 
+        # Si no se pasa incluir_base, incluir todo por defecto
+        _ib = incluir_base or {}
+        def _base_ok(key: str) -> bool:
+            return _ib.get(key, True)
+
         # --- PORTADA ---
         self._portada(pdf, cuaderno)
 
         # --- DATOS DE EXPLOTACIÓN + RESUMEN ---
         pdf._is_cover = False
-        pdf.add_page()
+        seccion_num = 0
+        if _base_ok("info_general"):
+            pdf.add_page()
+            seccion_num += 1
+            self._seccion_header(pdf, seccion_num, "Datos de la Explotacion")
+            self._tabla_info_moderna(pdf, [
+                ("Nombre Explotacion", cuaderno.nombre_explotacion),
+                ("Titular", cuaderno.titular),
+                ("NIF/CIF", cuaderno.nif_titular),
+                ("Domicilio", cuaderno.domicilio),
+                ("Codigo Explotacion", cuaderno.codigo_explotacion),
+                ("Ano", str(cuaderno.año)),
+            ])
+            pdf.ln(6)
+            self._resumen_ejecutivo(pdf, cuaderno, num_tratamientos=len(tratamientos_validos))
 
-        seccion_num = 1
-        self._seccion_header(pdf, seccion_num, "Datos de la Explotacion")
-        self._tabla_info_moderna(pdf, [
-            ("Nombre Explotacion", cuaderno.nombre_explotacion),
-            ("Titular", cuaderno.titular),
-            ("NIF/CIF", cuaderno.nif_titular),
-            ("Domicilio", cuaderno.domicilio),
-            ("Codigo Explotacion", cuaderno.codigo_explotacion),
-            ("Ano", str(cuaderno.año)),
-        ])
-        pdf.ln(6)
-
-        # Dashboard con conteos reales (validados)
-        self._resumen_ejecutivo(pdf, cuaderno, num_tratamientos=len(tratamientos_validos))
-
-        # --- PARCELAS (solo si hay datos) ---
-        if parcelas_validas:
+        # --- PARCELAS (solo si hay datos y seleccionada) ---
+        if parcelas_validas and _base_ok("parcelas"):
             seccion_num += 1
             pdf.add_page()
             self._seccion_header(pdf, seccion_num, "Relacion de Parcelas")
@@ -726,6 +750,7 @@ class PDFGenerator:
 
             parcelas_data = [["Ord.", "Nombre / Referencia", "Ref. Catastral",
                               "Sup.(Ha)", "Cultivo", "Municipio"]]
+            parcelas_colors = []
             for i, p in enumerate(parcelas_validas, 1):
                 sup = p.superficie_ha or p.superficie_cultivada or 0
                 nombre = p.nombre or p.referencia_catastral or f"Parcela {i}"
@@ -741,16 +766,19 @@ class PDFGenerator:
                     cultivo_txt or "-",
                     p.municipio or p.termino_municipal or "-",
                 ])
-            self._tabla_moderna(pdf, parcelas_data, (15, 55, 48, 22, 50, 50), font_size=7)
+                parcelas_colors.append((getattr(p, "color_fila", None) or "").strip() or None)
+            self._tabla_moderna(pdf, parcelas_data, (15, 55, 48, 22, 50, 50), font_size=7,
+                                row_colors=parcelas_colors)
 
-        # --- PRODUCTOS (solo si hay datos) ---
-        if productos_validos:
+        # --- PRODUCTOS (solo si hay datos y seleccionada) ---
+        if productos_validos and _base_ok("productos"):
             seccion_num += 1
             pdf.add_page()
             self._seccion_header(pdf, seccion_num, "Registro de Productos Fitosanitarios")
             self._nota_info(pdf, f"{len(productos_validos)} producto(s) en inventario")
 
             prod_data = [["Producto", "N. Registro", "N. Lote", "Cantidad", "F. Adquisicion"]]
+            prod_colors = []
             for p in productos_validos:
                 cant_text = ""
                 if p.cantidad_adquirida:
@@ -762,10 +790,12 @@ class PDFGenerator:
                     cant_text or "-",
                     p.fecha_adquisicion or "-",
                 ])
-            self._tabla_moderna(pdf, prod_data, (70, 42, 40, 40, 42))
+                prod_colors.append((getattr(p, "color_fila", None) or "").strip() or None)
+            self._tabla_moderna(pdf, prod_data, (70, 42, 40, 40, 42),
+                                row_colors=prod_colors)
 
-        # --- TRATAMIENTOS (solo si hay datos) ---
-        if tratamientos_validos:
+        # --- TRATAMIENTOS (solo si hay datos y seleccionada) ---
+        if tratamientos_validos and _base_ok("tratamientos"):
             seccion_num += 1
             pdf.add_page()
             self._seccion_header(pdf, seccion_num, "Registro de Tratamientos Realizados")
@@ -782,6 +812,7 @@ class PDFGenerator:
 
             trat_data = [["Fecha", "Parcela(s)", "Producto", "N. Reg.",
                           "Dosis", "Plaga/Enferm.", "Operador"]]
+            trat_colors = []
             for t in tratamientos_validos:
                 parcelas_str = ", ".join(t.parcela_nombres[:2])
                 if len(t.parcela_nombres) > 2:
@@ -790,9 +821,10 @@ class PDFGenerator:
                     parcelas_str = f"Ord. {t.num_orden_parcelas}"
 
                 operador = t.operador or t.aplicador or ""
+                t_color = (getattr(t, "color_fila", None) or "").strip() or None
                 for prod in t.productos:
                     if not (prod.nombre_comercial and prod.nombre_comercial.strip()):
-                        continue  # Saltar productos vacíos dentro del tratamiento
+                        continue
                     trat_data.append([
                         t.fecha_aplicacion or "-",
                         parcelas_str or "-",
@@ -802,7 +834,9 @@ class PDFGenerator:
                         t.plaga_enfermedad or "-",
                         operador or "-",
                     ])
-            self._tabla_moderna(pdf, trat_data, (28, 40, 50, 30, 30, 38, 28), font_size=7)
+                    trat_colors.append(t_color)
+            self._tabla_moderna(pdf, trat_data, (28, 40, 50, 30, 30, 38, 28), font_size=7,
+                                row_colors=trat_colors)
 
         # --- HOJAS IMPORTADAS (solo las que tienen datos reales) ---
         if hojas_validas:
@@ -934,7 +968,9 @@ class PDFGenerator:
 
             trat_data = [["Fecha", "Producto", "N. Reg.", "N. Lote",
                           "Dosis", "Plaga/Enfermedad", "Operador"]]
+            hist_colors = []
             for t in tratamientos:
+                t_color = (getattr(t, "color_fila", None) or "").strip() or None
                 for prod in t.productos:
                     trat_data.append([
                         t.fecha_aplicacion or "-",
@@ -945,7 +981,9 @@ class PDFGenerator:
                         t.plaga_enfermedad or "-",
                         t.operador or t.aplicador or "-",
                     ])
-            self._tabla_moderna(pdf, trat_data, (30, 52, 34, 30, 34, 48, 36))
+                    hist_colors.append(t_color)
+            self._tabla_moderna(pdf, trat_data, (30, 52, 34, 30, 34, 48, 36),
+                                row_colors=hist_colors)
         else:
             self._mensaje_vacio(pdf, "No hay tratamientos registrados para esta parcela")
 

@@ -1148,85 +1148,62 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
         };
     }, [parcelSortMode, tratSortMode, sortedParcelasForExport, sortedTratamientosForExport]);
 
-    const exportPDF = async (params?: { desde?: string; hasta?: string }) => {
+    const _openSheetPicker = async (type: "pdf" | "excel", params?: { desde?: string; hasta?: string }) => {
         const baseParams = buildExportParams(params);
         try {
-            const checkUrl = api.getExportPDFUrl(cuaderno.id, { check_hojas_editadas: true, ...baseParams });
+            const checkUrl = type === "pdf"
+                ? api.getExportPDFUrl(cuaderno.id, { check_hojas_editadas: true, ...baseParams })
+                : api.getExportExcelUrl(cuaderno.id, { check_hojas_editadas: true, ...baseParams });
             const checkRes = await fetch(checkUrl);
             const data = await checkRes.json();
 
-            let queryParams: any = { ...baseParams };
-            const checkParams = new URL(checkUrl).searchParams;
-            checkParams.forEach((val, key) => queryParams[key] = val);
-            delete queryParams.check_hojas_editadas;
-
-            if (data?.tiene_hojas_editadas && data?.hojas_editadas?.length > 0) {
+            if (data?.hojas_editadas?.length > 0) {
                 setExportHojasModal({
                     hojas: data.hojas_editadas,
-                    type: "pdf",
-                    params: queryParams,
+                    type,
+                    params: baseParams,
                 });
                 setSelectedExportHojas(new Set(data.hojas_editadas.map((h: any) => h.sheet_id)));
                 return;
             }
-            window.open(api.getExportPDFUrl(cuaderno.id, queryParams), "_blank");
         } catch (e) {
-            console.error("Error checking pdf export:", e);
+            console.error(`Error checking ${type} export sheets:`, e);
+        }
+        // Fallback: exportar directamente
+        if (type === "pdf") {
             window.open(api.getExportPDFUrl(cuaderno.id, baseParams), "_blank");
+        } else {
+            api.downloadExportExcel(cuaderno.id, baseParams).catch(() =>
+                window.open(api.getExportExcelUrl(cuaderno.id, baseParams), "_blank")
+            );
         }
     };
 
-    const exportExcel = async (params?: { desde?: string; hasta?: string }) => {
-        const baseParams = buildExportParams(params);
-        try {
-            await api.downloadExportExcel(cuaderno.id, baseParams);
-        } catch (e) {
-            console.error("Error exporting excel:", e);
-            try {
-                window.open(api.getExportExcelUrl(cuaderno.id, baseParams), "_blank");
-            } catch {
-                alert("No se pudo exportar a Excel. Comprueba la conexión.");
-            }
+    const exportPDF = (params?: { desde?: string; hasta?: string }) => _openSheetPicker("pdf", params);
+    const exportExcel = (params?: { desde?: string; hasta?: string }) => _openSheetPicker("excel", params);
+
+    const _doExport = (type: "pdf" | "excel", queryParams: Record<string, unknown>) => {
+        if (type === "pdf") {
+            window.open(api.getExportPDFUrl(cuaderno.id, queryParams), "_blank");
+        } else {
+            api.downloadExportExcel(cuaderno.id, queryParams).catch(() =>
+                window.open(api.getExportExcelUrl(cuaderno.id, queryParams), "_blank")
+            );
         }
     };
 
     const confirmExportHojas = () => {
         if (!exportHojasModal) return;
         const { type, params } = exportHojasModal;
-        // Usar siempre el orden ACTUAL del editor (no el congelado al abrir el modal)
         const freshOrder = buildExportParams({ desde: params.desde, hasta: params.hasta });
-        const queryParams: Record<string, unknown> = {
+        _doExport(type, {
             ...params,
-            orden_parcelas_modo: freshOrder.orden_parcelas_modo,
-            orden_parcelas: freshOrder.orden_parcelas,
-            orden_tratamientos: freshOrder.orden_tratamientos,
-            orden_tratamientos_modo: freshOrder.orden_tratamientos_modo,
-            incluir_hojas: selectedExportHojas.size > 0 ? Array.from(selectedExportHojas).join(",") : undefined,
-        };
-        if (type === "pdf") {
-            window.open(api.getExportPDFUrl(cuaderno.id, queryParams), "_blank");
-        } else {
-            api.downloadExportExcel(cuaderno.id, queryParams).catch(() =>
-                window.open(api.getExportExcelUrl(cuaderno.id, queryParams), "_blank")
-            );
-        }
+            ...freshOrder,
+            incluir_hojas: selectedExportHojas.size > 0 ? Array.from(selectedExportHojas).join(",") : "",
+        });
         setExportHojasModal(null);
     };
 
-    const exportSinHojas = () => {
-        if (!exportHojasModal) return;
-        const { type, params } = exportHojasModal;
-        const freshOrder = buildExportParams({ desde: params.desde, hasta: params.hasta });
-        const queryParams = { ...params, incluir_hojas: "", orden_parcelas_modo: freshOrder.orden_parcelas_modo, orden_parcelas: freshOrder.orden_parcelas, orden_tratamientos: freshOrder.orden_tratamientos, orden_tratamientos_modo: freshOrder.orden_tratamientos_modo };
-        if (type === "pdf") {
-            window.open(api.getExportPDFUrl(cuaderno.id, queryParams), "_blank");
-        } else {
-            api.downloadExportExcel(cuaderno.id, queryParams).catch(() =>
-                window.open(api.getExportExcelUrl(cuaderno.id, queryParams), "_blank")
-            );
-        }
-        setExportHojasModal(null);
-    };
 
     const handleSaveCell = async (rowId: string, colKey: string, newValue: string) => {
         if (!BASE_EDITABLE_SHEETS.includes(effectiveSheet)) return;
@@ -2725,81 +2702,98 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                 </div>
             )}
 
-            {/* Modal: Seleccionar hojas editadas para exportar */}
-            {exportHojasModal && (
-                <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-                    <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setExportHojasModal(null)} />
-                    <div className="relative bg-[var(--bg-dark)] border border-gray-300 rounded-2xl shadow-2xl w-full max-w-lg flex flex-col overflow-hidden">
-                        <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between shrink-0">
-                            <div>
-                                <h3 className="text-sm font-semibold text-gray-900">
-                                    Hojas editadas para exportar {exportHojasModal.type === "pdf" ? "PDF" : "Excel"}
-                                </h3>
-                                <p className="text-xs text-gray-500 mt-1">
-                                    Hay {exportHojasModal.hojas.length} hoja(s) importada(s) editada(s). Selecciona cuáles incluir.
-                                </p>
+            {/* Modal: Seleccionar hojas para exportar */}
+            {exportHojasModal && (() => {
+                const hojasBase = exportHojasModal.hojas.filter((h: any) => h.tipo === "base");
+                const hojasImp = exportHojasModal.hojas.filter((h: any) => h.tipo === "importada");
+                const renderHoja = (h: any) => {
+                    const checked = selectedExportHojas.has(h.sheet_id);
+                    return (
+                        <label key={h.sheet_id} className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-gray-100 cursor-pointer transition-colors">
+                            <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => {
+                                    const next = new Set(selectedExportHojas);
+                                    checked ? next.delete(h.sheet_id) : next.add(h.sheet_id);
+                                    setSelectedExportHojas(next);
+                                }}
+                                className="accent-emerald-500"
+                            />
+                            <span className="text-sm text-gray-800 flex-1">{h.nombre || h.sheet_id}</span>
+                            <span className="text-xs text-gray-500">{h.num_filas || 0} filas</span>
+                        </label>
+                    );
+                };
+                return (
+                    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+                        <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setExportHojasModal(null)} />
+                        <div className="relative bg-[var(--bg-dark)] border border-gray-300 rounded-2xl shadow-2xl w-full max-w-lg flex flex-col overflow-hidden">
+                            <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between shrink-0">
+                                <div>
+                                    <h3 className="text-sm font-semibold text-gray-900">
+                                        Exportar {exportHojasModal.type === "pdf" ? "PDF" : "Excel"}
+                                    </h3>
+                                    <p className="text-xs text-gray-500 mt-1">
+                                        Selecciona las hojas que quieres incluir en la exportación.
+                                    </p>
+                                </div>
+                                <button onClick={() => setExportHojasModal(null)} className="p-2 rounded-lg hover:bg-gray-100 text-gray-500 hover:text-gray-700 transition-colors">
+                                    <X size={18} />
+                                </button>
                             </div>
-                            <button onClick={() => setExportHojasModal(null)} className="p-2 rounded-lg hover:bg-gray-100 text-gray-500 hover:text-gray-700 transition-colors">
-                                <X size={18} />
-                            </button>
-                        </div>
-                        <div className="flex-1 overflow-y-auto p-4 max-h-[50vh] space-y-1">
-                            <div className="flex gap-2 mb-3">
-                                <button
-                                    type="button"
-                                    onClick={() => setSelectedExportHojas(new Set(exportHojasModal.hojas.map((h) => h.sheet_id)))}
-                                    className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200 text-gray-700"
-                                >
-                                    Todas
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => setSelectedExportHojas(new Set())}
-                                    className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200 text-gray-700"
-                                >
-                                    Ninguna
-                                </button>
+                            <div className="flex-1 overflow-y-auto p-4 max-h-[50vh] space-y-1">
+                                <div className="flex gap-2 mb-3">
+                                    <button
+                                        type="button"
+                                        onClick={() => setSelectedExportHojas(new Set(exportHojasModal.hojas.map((h: any) => h.sheet_id)))}
+                                        className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200 text-gray-700"
+                                    >
+                                        Todas
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setSelectedExportHojas(new Set())}
+                                        className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200 text-gray-700"
+                                    >
+                                        Ninguna
+                                    </button>
+                                </div>
+                                {hojasBase.length > 0 && (
+                                    <>
+                                        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide px-3 pt-1 pb-1">Hojas del editor</p>
+                                        {hojasBase.map(renderHoja)}
+                                    </>
+                                )}
+                                {hojasImp.length > 0 && (
+                                    <>
+                                        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide px-3 pt-3 pb-1">Hojas importadas</p>
+                                        {hojasImp.map(renderHoja)}
+                                    </>
+                                )}
                             </div>
-                            {exportHojasModal.hojas.map((h) => {
-                                const checked = selectedExportHojas.has(h.sheet_id);
-                                return (
-                                    <label key={h.sheet_id} className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-gray-100 cursor-pointer transition-colors">
-                                        <input
-                                            type="checkbox"
-                                            checked={checked}
-                                            onChange={() => {
-                                                const next = new Set(selectedExportHojas);
-                                                checked ? next.delete(h.sheet_id) : next.add(h.sheet_id);
-                                                setSelectedExportHojas(next);
-                                            }}
-                                            className="accent-emerald-500"
-                                        />
-                                        <span className="text-sm text-gray-800 flex-1">{h.nombre || h.sheet_id}</span>
-                                        <span className="text-xs text-gray-500">{h.num_filas || 0} filas</span>
-                                    </label>
-                                );
-                            })}
-                        </div>
-                        <div className="px-6 py-3 border-t border-gray-200 flex items-center justify-between bg-gray-100 shrink-0">
-                            <span className="text-xs text-gray-500">{selectedExportHojas.size} hoja(s) seleccionada(s)</span>
-                            <div className="flex gap-2">
-                                <button
-                                    onClick={exportSinHojas}
-                                    className="px-4 py-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-sm text-gray-700 transition-colors"
-                                >
-                                    Exportar sin hojas
-                                </button>
-                                <button
-                                    onClick={confirmExportHojas}
-                                    className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-sm font-medium text-white transition-colors"
-                                >
-                                    Exportar con seleccionadas
-                                </button>
+                            <div className="px-6 py-3 border-t border-gray-200 flex items-center justify-between bg-gray-100 shrink-0">
+                                <span className="text-xs text-gray-500">{selectedExportHojas.size} de {exportHojasModal.hojas.length} hoja(s)</span>
+                                <div className="flex gap-2">
+                                    <button
+                                        onClick={() => setExportHojasModal(null)}
+                                        className="px-4 py-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-sm text-gray-700 transition-colors"
+                                    >
+                                        Cancelar
+                                    </button>
+                                    <button
+                                        onClick={confirmExportHojas}
+                                        disabled={selectedExportHojas.size === 0}
+                                        className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-sm font-medium text-white transition-colors"
+                                    >
+                                        Exportar ({selectedExportHojas.size})
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     </div>
-                </div>
-            )}
+                );
+            })()}
         </>
     );
 }
