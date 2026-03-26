@@ -26,7 +26,7 @@ interface AddRowModalProps {
     onSuccess: () => void;
     editTratamientoId?: string;
     initialParcelaIds?: string[];
-} 
+}
 
 export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSuccess, editTratamientoId, initialParcelaIds = [] }: AddRowModalProps) {
     const [loading, setLoading] = useState(false);
@@ -1101,12 +1101,10 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                         Fecha
                                     </label>
                                     <input
-                                        type="text"
+                                        type="date"
                                         name="fecha"
                                         value={formData.fecha || ""}
                                         onChange={handleChange}
-                                        onBlur={() => blurNormalizeDateField("fecha")}
-                                        placeholder="DD/MM/AAAA o 2/12/25"
                                         className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 text-sm focus:outline-none focus:border-green-500 transition-colors"
                                     />
                                 </div>

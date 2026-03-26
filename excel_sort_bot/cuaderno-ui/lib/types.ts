@@ -195,6 +195,7 @@ export interface Cuaderno {
 export interface CuadernoSummary {
     id: string;
     nombre_explotacion: string;
+    titular?: string;
     año: number;
     num_parcelas: number;
     num_tratamientos: number;

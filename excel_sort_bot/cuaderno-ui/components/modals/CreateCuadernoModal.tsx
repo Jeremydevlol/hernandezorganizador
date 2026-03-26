@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { X } from "lucide-react";
 import { Cuaderno } from "@/lib/types";
 
@@ -8,9 +8,11 @@ interface CreateCuadernoModalProps {
     isOpen: boolean;
     onClose: () => void;
     onCreate: (data: Partial<Cuaderno>) => void;
+    /** Si se abre desde una carpeta de año en el explorador, fija el año de campaña */
+    initialYear?: number;
 }
 
-export default function CreateCuadernoModal({ isOpen, onClose, onCreate }: CreateCuadernoModalProps) {
+export default function CreateCuadernoModal({ isOpen, onClose, onCreate, initialYear }: CreateCuadernoModalProps) {
     const [formData, setFormData] = useState({
         nombre_explotacion: "",
         titular: "",
@@ -20,6 +22,13 @@ export default function CreateCuadernoModal({ isOpen, onClose, onCreate }: Creat
         año: new Date().getFullYear(),
     });
     const [loading, setLoading] = useState(false);
+
+    useEffect(() => {
+        if (!isOpen) return;
+        if (initialYear != null && Number.isFinite(initialYear)) {
+            setFormData((prev) => ({ ...prev, año: initialYear }));
+        }
+    }, [isOpen, initialYear]);
 
     if (!isOpen) return null;
 

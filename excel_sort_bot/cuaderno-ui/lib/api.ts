@@ -388,7 +388,9 @@ export const api = {
         if (params?.orden_tratamientos_modo) search.set("orden_tratamientos_modo", params.orden_tratamientos_modo);
         const q = search.toString();
         const fullUrl = `${url}/${cuadernoId}/export/excel${q ? `?${q}` : ""}`;
-        const res = await fetch(fullUrl, { credentials: "include" });
+        // No usar credentials: "include": el backend tiene CORS allow_credentials=false; en dev
+        // (3000 → 8000) el navegador bloquea la respuesta y Safari muestra "Load failed".
+        const res = await fetch(fullUrl, { credentials: "omit" });
         if (!res.ok) throw new Error("Error al exportar Excel");
         const blob = await res.blob();
         const disposition = res.headers.get("Content-Disposition");

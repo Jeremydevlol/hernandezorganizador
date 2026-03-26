@@ -236,6 +236,37 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
         return ids;
     }, [cuaderno.tratamientos]);
 
+    /** Nº orden SIGPAC por id de parcela (para ordenar tratamientos igual que la hoja de parcelas) */
+    const parcelaNumOrdenById = useMemo(() => {
+        const m = new Map<string, number>();
+        for (const p of cuaderno.parcelas || []) {
+            if (p?.id) m.set(p.id, Number(p.num_orden) || 0);
+        }
+        return m;
+    }, [cuaderno.parcelas]);
+
+    const minNumOrdenTratamiento = useCallback(
+        (t: any) => {
+            let min = 1e9;
+            for (const pid of t.parcela_ids || []) {
+                if (!pid) continue;
+                const o = parcelaNumOrdenById.get(pid);
+                if (o !== undefined && o < min) min = o;
+            }
+            if (min === 1e9) {
+                const raw = String(t.num_orden_parcelas || "").trim();
+                if (raw) {
+                    for (const part of raw.split(/[,;\s]+/)) {
+                        const n = parseInt(part, 10);
+                        if (!isNaN(n) && n < min) min = n;
+                    }
+                }
+            }
+            return min === 1e9 ? 999999 : min;
+        },
+        [parcelaNumOrdenById]
+    );
+
     // ---- Data filtrada por cultivo y orden ----
     const displayData = useMemo(() => {
         if (effectiveSheet === "tratamientos") {
@@ -260,9 +291,13 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                     case "cultivo":
                         if (aCultivo !== bCultivo) return aCultivo.localeCompare(bCultivo, "es");
                         return bFecha.localeCompare(aFecha, "es");
-                    case "parcela":
+                    case "parcela": {
+                        const ao = minNumOrdenTratamiento(a);
+                        const bo = minNumOrdenTratamiento(b);
+                        if (ao !== bo) return ao - bo;
                         if (aParcela !== bParcela) return aParcela.localeCompare(bParcela, "es");
                         return aFecha.localeCompare(bFecha, "es");
+                    }
                     case "producto":
                         if (aProd !== bProd) return aProd.localeCompare(bProd, "es");
                         return bFecha.localeCompare(aFecha, "es");
@@ -333,7 +368,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
             }
         });
         return sorted;
-    }, [data, effectiveSheet, cultivoFilter, parcelaTratamientoFilter, parcelaIdsConTratamiento, parcelSortMode, tratCultivoFilter, tratSortMode]);
+    }, [data, effectiveSheet, cultivoFilter, parcelaTratamientoFilter, parcelaIdsConTratamiento, parcelSortMode, tratCultivoFilter, tratSortMode, minNumOrdenTratamiento]);
 
     // ---- Orden para exportar (parcelas con el orden actual del editor) ----
     const sortedParcelasForExport = useMemo(() => {
@@ -401,9 +436,13 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                 case "cultivo":
                     if (aCultivo !== bCultivo) return aCultivo.localeCompare(bCultivo, "es");
                     return bFecha.localeCompare(aFecha, "es");
-                case "parcela":
+                case "parcela": {
+                    const ao = minNumOrdenTratamiento(a);
+                    const bo = minNumOrdenTratamiento(b);
+                    if (ao !== bo) return ao - bo;
                     if (aParcela !== bParcela) return aParcela.localeCompare(bParcela, "es");
                     return aFecha.localeCompare(bFecha, "es");
+                }
                 case "producto":
                     if (aProd !== bProd) return aProd.localeCompare(bProd, "es");
                     return bFecha.localeCompare(aFecha, "es");
@@ -414,7 +453,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
             }
         });
         return tratamientos;
-    }, [cuaderno.tratamientos, tratSortMode]);
+    }, [cuaderno.tratamientos, tratSortMode, minNumOrdenTratamiento]);
 
     const parcelasFromSelectedTratamientos = useMemo(() => {
         if (selectedTratamientos.size === 0) return [];
@@ -1140,7 +1179,25 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
     const exportExcel = async (params?: { desde?: string; hasta?: string }) => {
         const baseParams = buildExportParams(params);
         try {
-            await api.downloadExportExcel(cuaderno.id, baseParams);
+            const checkUrl = api.getExportExcelUrl(cuaderno.id, { check_hojas_editadas: true, ...baseParams });
+            const checkRes = await fetch(checkUrl);
+            const data = await checkRes.json();
+
+            let queryParams: any = { ...baseParams };
+            const checkParams = new URL(checkUrl).searchParams;
+            checkParams.forEach((val, key) => queryParams[key] = val);
+            delete queryParams.check_hojas_editadas;
+
+            if (data?.tiene_hojas_editadas && data?.hojas_editadas?.length > 0) {
+                setExportHojasModal({
+                    hojas: data.hojas_editadas,
+                    type: "excel",
+                    params: queryParams,
+                });
+                setSelectedExportHojas(new Set(data.hojas_editadas.map((h: any) => h.sheet_id)));
+                return;
+            }
+            await api.downloadExportExcel(cuaderno.id, queryParams);
         } catch (e) {
             console.error("Error exporting excel:", e);
             try {
@@ -1589,7 +1646,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                     <option value="fecha_desc">Orden: Fecha (reciente primero)</option>
                                     <option value="fecha_asc">Orden: Fecha (antiguo primero)</option>
                                     <option value="cultivo">Orden: por cultivo</option>
-                                    <option value="parcela">Orden: por parcela</option>
+                                    <option value="parcela">Orden: parcela (Nº orden SIGPAC)</option>
                                     <option value="producto">Orden: por producto</option>
                                 </select>
                                 <div className="w-px h-5 bg-gray-200" />
