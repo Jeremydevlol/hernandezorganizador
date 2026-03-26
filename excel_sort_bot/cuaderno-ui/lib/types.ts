@@ -117,7 +117,6 @@ export interface Fertilizacion {
     cultivo_especie: string;
     cultivo_variedad: string;
     tipo_abono: string;                   // Tipo de abono/producto
-    num_albaran: string;                  // Nº albarán
     riqueza_npk: string;                  // Riqueza N/P/K
     dosis: string;                        // Dosis (kg/ha, m3/ha)
     tipo_fertilizacion: string;           // Tipo

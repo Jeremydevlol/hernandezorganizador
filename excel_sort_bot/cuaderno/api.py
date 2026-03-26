@@ -111,7 +111,6 @@ class FertilizacionCreate(BaseModel):
     cultivo_especie: str = ""
     cultivo_variedad: str = ""
     tipo_abono: str = ""
-    num_albaran: str = ""
     riqueza_npk: str = ""
     dosis: str = ""
     tipo_fertilizacion: str = ""
@@ -762,7 +761,6 @@ async def crear_fertilizacion(cuaderno_id: str, data: FertilizacionCreate):
         cultivo_especie=data.cultivo_especie,
         cultivo_variedad=data.cultivo_variedad,
         tipo_abono=data.tipo_abono,
-        num_albaran=data.num_albaran,
         riqueza_npk=data.riqueza_npk,
         dosis=data.dosis,
         tipo_fertilizacion=data.tipo_fertilizacion,

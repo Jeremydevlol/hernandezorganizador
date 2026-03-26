@@ -285,7 +285,6 @@ class Fertilizacion:
     cultivo_especie: str = ""
     cultivo_variedad: str = ""
     tipo_abono: str = ""
-    num_albaran: str = ""
     riqueza_npk: str = ""               # N/P/K (ej: "20-10-10")
     dosis: str = ""
     tipo_fertilizacion: str = ""
@@ -301,7 +300,6 @@ class Fertilizacion:
             "cultivo_especie": self.cultivo_especie,
             "cultivo_variedad": self.cultivo_variedad,
             "tipo_abono": self.tipo_abono,
-            "num_albaran": self.num_albaran,
             "riqueza_npk": self.riqueza_npk,
             "dosis": self.dosis,
             "tipo_fertilizacion": self.tipo_fertilizacion,

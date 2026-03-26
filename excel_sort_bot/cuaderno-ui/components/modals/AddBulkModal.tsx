@@ -93,7 +93,6 @@ export default function AddBulkModal({ isOpen, onClose, sheet, cuaderno, onSucce
                         cultivo_especie: row.cultivo_especie || "",
                         cultivo_variedad: row.cultivo_variedad || "",
                         tipo_abono: row.tipo_abono || "",
-                        num_albaran: row.num_albaran || "",
                         riqueza_npk: row.riqueza_npk || "",
                         dosis: row.dosis || "",
                         tipo_fertilizacion: row.tipo_fertilizacion || "",

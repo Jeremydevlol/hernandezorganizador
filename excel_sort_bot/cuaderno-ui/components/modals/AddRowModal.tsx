@@ -175,14 +175,19 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                 });
             } else if (sheet === "fertilizantes") {
                 const parcelaIds = Array.isArray(formData.parcela_ids) ? formData.parcela_ids : [];
+                const cultivoAuto = [...new Set(
+                    parcelaIds.map((id: string) => {
+                        const p = parcelasOrdenadas.find((x) => x.id === id);
+                        return p?.especie || p?.cultivo || "";
+                    }).filter(Boolean)
+                )].join(", ");
                 await api.createFertilizacion(cuaderno.id, {
                     fecha_inicio: formData.fecha_inicio || "",
                     fecha_fin: formData.fecha_fin || "",
                     parcela_ids: parcelaIds,
-                    cultivo_especie: formData.cultivo_especie || "",
+                    cultivo_especie: cultivoAuto,
                     cultivo_variedad: formData.cultivo_variedad || "",
                     tipo_abono: formData.tipo_abono || "",
-                    num_albaran: formData.num_albaran || "",
                     riqueza_npk: formData.riqueza_npk || "",
                     dosis: formData.dosis || "",
                     tipo_fertilizacion: formData.tipo_fertilizacion || "",
@@ -977,15 +982,22 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
                                     <label className="block text-xs font-medium text-gray-600 mb-1.5">
-                                        Cultivo/Especie
+                                        Cultivo (automático)
                                     </label>
                                     <input
                                         type="text"
-                                        name="cultivo_especie"
-                                        value={formData.cultivo_especie || ""}
-                                        onChange={handleChange}
-                                        placeholder="Ej: Trigo, Olivo"
-                                        className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                        readOnly
+                                        value={(() => {
+                                            const ids = Array.isArray(formData.parcela_ids) ? formData.parcela_ids : [];
+                                            const cultivos = [...new Set(
+                                                ids.map((id: string) => {
+                                                    const p = parcelasOrdenadas.find((x) => x.id === id);
+                                                    return p?.especie || p?.cultivo || "";
+                                                }).filter(Boolean)
+                                            )];
+                                            return cultivos.join(", ") || "Selecciona parcelas";
+                                        })()}
+                                        className="w-full px-3 py-2.5 rounded-lg bg-gray-50 border border-gray-200 text-gray-600 text-sm cursor-default"
                                     />
                                 </div>
                                 <div>
@@ -1030,33 +1042,18 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                     />
                                 </div>
                             </div>
-                            <div className="grid grid-cols-2 gap-4">
-                                <div>
-                                    <label className="block text-xs font-medium text-gray-600 mb-1.5">
-                                        Nº Albarán
-                                    </label>
-                                    <input
-                                        type="text"
-                                        name="num_albaran"
-                                        value={formData.num_albaran || ""}
-                                        onChange={handleChange}
-                                        placeholder="Nº albarán"
-                                        className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-xs font-medium text-gray-600 mb-1.5">
-                                        Tipo Fertilización
-                                    </label>
-                                    <input
-                                        type="text"
-                                        name="tipo_fertilizacion"
-                                        value={formData.tipo_fertilizacion || ""}
-                                        onChange={handleChange}
-                                        placeholder="Fondo, cobertera..."
-                                        className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
-                                    />
-                                </div>
+                            <div>
+                                <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                                    Tipo Fertilización
+                                </label>
+                                <input
+                                    type="text"
+                                    name="tipo_fertilizacion"
+                                    value={formData.tipo_fertilizacion || ""}
+                                    onChange={handleChange}
+                                    placeholder="Fondo, cobertera..."
+                                    className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
+                                />
                             </div>
                             <div>
                                 <label className="block text-xs font-medium text-gray-600 mb-1.5">
