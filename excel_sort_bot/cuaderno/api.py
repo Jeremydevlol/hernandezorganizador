@@ -930,16 +930,6 @@ def _sanitize_filename(name: str, max_len: int = 80) -> str:
     return s[:max_len].strip() or "cuaderno"
 
 
-def _hoja_tiene_datos_para_export(h: HojaExcel) -> bool:
-    """Hoja importada con al menos una fila con celdas no vacías (PDF y Excel)."""
-    if not h.datos or not h.columnas:
-        return False
-    return any(
-        any(c is not None and str(c).strip() for c in fila)
-        for fila in h.datos
-    )
-
-
 @router.get("/{cuaderno_id}/export/pdf")
 async def exportar_pdf_cuaderno(
     cuaderno_id: str,
@@ -964,6 +954,15 @@ async def exportar_pdf_cuaderno(
         raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
     
     # Detectar hojas editadas (origen = "importado_editable") que NO estén vacías
+    def _hoja_tiene_datos(h):
+        """Verifica que la hoja tenga al menos una fila con datos reales."""
+        if not h.datos or not h.columnas:
+            return False
+        return any(
+            any(c is not None and str(c).strip() for c in fila)
+            for fila in h.datos
+        )
+
     hojas_editadas = [
         {
             "sheet_id": h.sheet_id,
@@ -973,7 +972,7 @@ async def exportar_pdf_cuaderno(
             "columnas": h.columnas[:10]  # Primeras 10 columnas como muestra
         }
         for h in cuaderno.hojas_originales
-        if h.origen == "importado_editable" and _hoja_tiene_datos_para_export(h)
+        if h.origen == "importado_editable" and _hoja_tiene_datos(h)
     ]
     
     # Si solo se quiere verificar hojas editadas, devolver JSON
@@ -1108,43 +1107,26 @@ async def exportar_excel_cuaderno(
     cuaderno_id: str,
     desde: Optional[str] = Query(None, description="Solo tratamientos desde (YYYY-MM-DD)"),
     hasta: Optional[str] = Query(None, description="Solo tratamientos hasta (YYYY-MM-DD)"),
-    incluir_hojas: Optional[str] = Query(
-        None,
-        description="IDs de hojas importadas a incluir (coma). Ausente = todas las hojas editadas con datos; '' = ninguna (igual que /export/pdf)",
-    ),
+    incluir_hojas: Optional[str] = Query(None, description="IDs de hojas a incluir separados por coma; '' = ninguna"),
     orden_parcelas: Optional[str] = Query(None, description="IDs de parcelas en el orden deseado (separados por coma)"),
     orden_tratamientos: Optional[str] = Query(None, description="IDs de tratamientos en el orden deseado (separados por coma)"),
     orden_parcelas_modo: Optional[str] = Query(None, description="Modo de orden: num_orden, cultivo, alfabetico, etc."),
     orden_tratamientos_modo: Optional[str] = Query(
         None,
-        description="Modo orden tratamientos del editor (ej. parcela)",
+        description="Modo orden tratamientos del editor (ej. parcela): inserta fila en blanco entre grupos de parcela en la hoja Tratamientos",
     ),
-    check_hojas_editadas: Optional[bool] = Query(False, description="Solo verificar si hay hojas editadas sin exportar"),
 ):
     """
-    Exporta el cuaderno a Excel con formato oficial del Ministerio de Agricultura.
-    Incluye los mismos criterios de datos que el PDF (parcelas/tratamientos/hojas editadas),
-    más hojas de datos del editor (Productos, Fertilizaciones, Cosecha) y las hojas importadas elegidas.
-
-    Si check_hojas_editadas=true, solo devuelve info sin generar Excel.
+    Exporta el cuaderno completo a un archivo Excel (.xlsx).
+    Genera una hoja por sección: Parcelas, Productos, Tratamientos, Fertilizantes, Cosecha.
     """
     storage = get_storage()
     cuaderno = storage.cargar(cuaderno_id)
+    
     if not cuaderno:
         raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
 
-    if check_hojas_editadas:
-        hojas_editadas = [
-            {"sheet_id": h.sheet_id, "nombre": h.nombre, "num_filas": len(h.datos) if h.datos else 0}
-            for h in cuaderno.hojas_originales
-            if h.origen == "importado_editable" and _hoja_tiene_datos_para_export(h)
-        ]
-        return JSONResponse({
-            "tiene_hojas_editadas": len(hojas_editadas) > 0,
-            "hojas_editadas": hojas_editadas,
-            "mensaje": f"Hay {len(hojas_editadas)} hoja(s) editada(s) que puedes incluir en el Excel" if hojas_editadas else "No hay hojas editadas"
-        })
-
+    # Ordenar parcelas y tratamientos según el orden del editor
     parcelas_ordenadas = list(cuaderno.parcelas)
     if orden_parcelas_modo:
         parcelas_ordenadas = sorted(
@@ -1169,32 +1151,396 @@ async def exportar_excel_cuaderno(
                 tratamientos_ordenados,
                 key=lambda t: (id_to_idx.get(t.id, 99999), t.fecha_aplicacion or "")
             )
-
-    if incluir_hojas is not None:
-        sheet_ids_excel = [s.strip() for s in incluir_hojas.split(",") if s.strip()]
-    else:
-        sheet_ids_excel = [
-            h.sheet_id
-            for h in cuaderno.hojas_originales
-            if h.origen == "importado_editable" and _hoja_tiene_datos_para_export(h)
-        ]
-    incluir_hojas_csv = ",".join(sheet_ids_excel)
-
+    
     try:
-        from .excel_generator import generar_excel_oficial
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
     except ImportError:
         raise HTTPException(status_code=500, detail="openpyxl no instalado. Ejecuta: pip install openpyxl")
 
-    wb = generar_excel_oficial(
-        cuaderno,
-        parcelas_ordenadas=parcelas_ordenadas,
-        tratamientos_ordenados=tratamientos_ordenados,
-        desde=desde,
-        hasta=hasta,
-        incluir_hojas_csv=incluir_hojas_csv,
-        orden_tratamientos_modo=orden_tratamientos_modo,
-    )
+    wb = Workbook()
 
+    # ================================================================
+    # ESTILOS
+    # ================================================================
+    GREEN_DARK  = "1B5E20"
+    GREEN_MID   = "2E7D32"
+    GREEN_LIGHT = "E8F5E9"
+    GRAY_BG     = "F5F5F5"
+    WHITE       = "FFFFFF"
+
+    header_font = Font(name="Calibri", bold=True, size=11, color=WHITE)
+    header_fill = PatternFill(start_color=GREEN_MID, end_color=GREEN_MID, fill_type="solid")
+    header_align = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    thin_border = Border(
+        left=Side(style="thin", color="C0C0C0"), right=Side(style="thin", color="C0C0C0"),
+        top=Side(style="thin", color="C0C0C0"), bottom=Side(style="thin", color="C0C0C0"),
+    )
+    title_font = Font(name="Calibri", bold=True, size=16, color=GREEN_DARK)
+    subtitle_font = Font(name="Calibri", bold=True, size=10, color="666666")
+    label_font = Font(name="Calibri", bold=True, size=11)
+    value_font = Font(name="Calibri", size=11)
+    total_font = Font(name="Calibri", bold=True, size=11, color=GREEN_DARK)
+    even_fill = PatternFill(start_color=GREEN_LIGHT, end_color=GREEN_LIGHT, fill_type="solid")
+    data_align = Alignment(vertical="center", wrap_text=False)
+    data_align_wrap = Alignment(vertical="center", wrap_text=True)
+    num_align = Alignment(horizontal="right", vertical="center")
+    num_format_2d = "#,##0.00"
+    date_format_es = "dd/mm/yyyy"
+
+    def _fill_from_color_hex(hex_str: Optional[str]):
+        if not hex_str or not str(hex_str).strip():
+            return None
+        h = str(hex_str).strip().lstrip("#").upper()
+        if len(h) == 6 and all(c in "0123456789ABCDEF" for c in h):
+            return PatternFill(start_color=h, end_color=h, fill_type="solid")
+        return None
+
+    def _style_header_row(ws, row_num, num_cols):
+        for col in range(1, num_cols + 1):
+            c = ws.cell(row=row_num, column=col)
+            c.font = header_font
+            c.fill = header_fill
+            c.alignment = header_align
+            c.border = thin_border
+
+    def _write_data_row(ws, row_num, values, col_types=None, *, row_fill_hex: Optional[str] = None, use_zebra: bool = True):
+        """col_types: list of 'str' | 'num' | 'date' | None per column."""
+        is_even = (row_num % 2 == 0)
+        row_fill = _fill_from_color_hex(row_fill_hex)
+        for col_idx, raw_val in enumerate(values, 1):
+            ct = col_types[col_idx - 1] if col_types and col_idx - 1 < len(col_types) else None
+            val = _parse_date_for_excel(raw_val) if ct == "date" else raw_val
+            cell = ws.cell(row=row_num, column=col_idx, value=val)
+            cell.border = thin_border
+            if ct == "num":
+                cell.alignment = num_align
+                if isinstance(val, (int, float)):
+                    cell.number_format = num_format_2d
+            elif ct == "date":
+                cell.alignment = data_align
+                if isinstance(val, date):
+                    cell.number_format = date_format_es
+            else:
+                cell.alignment = data_align
+            if row_fill:
+                cell.fill = row_fill
+            elif use_zebra and is_even:
+                cell.fill = even_fill
+
+    def _write_blank_separator_row(ws, row_num: int, num_cols: int):
+        """Fila vacía entre grupos de parcela (misma idea que la banda verde en el editor)."""
+        for col in range(1, num_cols + 1):
+            c = ws.cell(row=row_num, column=col)
+            c.value = None
+            c.border = thin_border
+
+    def _auto_width(ws, num_cols, data_start_row=2, max_width=55, min_width=10):
+        for col in range(1, num_cols + 1):
+            letter = get_column_letter(col)
+            header_len = len(str(ws.cell(row=data_start_row - 1, column=col).value or ""))
+            max_data_len = header_len
+            for row in range(data_start_row, min(ws.max_row + 1, data_start_row + 100)):
+                val = ws.cell(row=row, column=col).value
+                if val is not None:
+                    max_data_len = max(max_data_len, min(len(str(val)), max_width))
+            ws.column_dimensions[letter].width = max(min_width, min(max_data_len + 4, max_width))
+
+    def _add_autofilter(ws, num_cols, header_row=1):
+        last_col = get_column_letter(num_cols)
+        ws.auto_filter.ref = f"A{header_row}:{last_col}{ws.max_row}"
+
+    def _freeze(ws, cell="A2"):
+        ws.freeze_panes = cell
+
+    # ================================================================
+    # 1. INFORMACIÓN GENERAL
+    # ================================================================
+    ws_info = wb.active
+    ws_info.title = "Información General"
+    ws_info.sheet_properties.tabColor = GREEN_MID
+    ws_info.column_dimensions["A"].width = 28
+    ws_info.column_dimensions["B"].width = 55
+
+    ws_info.cell(row=1, column=1, value="CUADERNO DE EXPLOTACIÓN AGRÍCOLA").font = title_font
+    ws_info.merge_cells("A1:B1")
+    ws_info.cell(row=2, column=1, value=f"Exportado: {datetime.now().strftime('%d/%m/%Y %H:%M')}").font = subtitle_font
+
+    info_data = [
+        ("Explotación", cuaderno.nombre_explotacion),
+        ("Titular", cuaderno.titular),
+        ("NIF / CIF", cuaderno.nif_titular),
+        ("Domicilio", cuaderno.domicilio),
+        ("Código Explotación", cuaderno.codigo_explotacion),
+        ("Año", cuaderno.año),
+        ("", ""),
+        ("Nº Parcelas", len(cuaderno.parcelas)),
+        ("Nº Productos registrados", len(cuaderno.productos)),
+        ("Nº Tratamientos", len(cuaderno.tratamientos)),
+        ("Nº Fertilizaciones", len(getattr(cuaderno, 'fertilizaciones', None) or [])),
+        ("Nº Cosechas", len(getattr(cuaderno, 'cosechas', None) or [])),
+        ("Superficie total (ha)", round(sum(
+            p.superficie_cultivada or p.superficie_ha or p.superficie_sigpac or 0
+            for p in cuaderno.parcelas
+        ), 2)),
+    ]
+    for i, (label, val) in enumerate(info_data, start=4):
+        c_label = ws_info.cell(row=i, column=1, value=label)
+        c_label.font = label_font
+        c_value = ws_info.cell(row=i, column=2, value=val)
+        c_value.font = value_font
+        if isinstance(val, (int, float)) and val != 0:
+            c_value.alignment = num_align
+
+    # ================================================================
+    # 2. PARCELAS
+    # ================================================================
+    ws_parc = wb.create_sheet("Parcelas")
+    ws_parc.sheet_properties.tabColor = "4CAF50"
+    parc_headers = [
+        "Nº Orden", "Nombre", "Provincia", "Término Municipal",
+        "Polígono", "Parcela", "Recinto", "Uso SIGPAC",
+        "Sup. SIGPAC (ha)", "Sup. Cultivada (ha)", "Especie", "Variedad",
+        "Ecorégimen", "S/R",
+    ]
+    parc_types = ["num", "str", "str", "str", "str", "str", "str", "str", "num", "num", "str", "str", "str", "str"]
+    for c, h in enumerate(parc_headers, 1):
+        ws_parc.cell(row=1, column=c, value=h)
+    _style_header_row(ws_parc, 1, len(parc_headers))
+
+    for r, p in enumerate(parcelas_ordenadas, 2):
+        _cf = (getattr(p, "color_fila", None) or "").strip() or None
+        _write_data_row(ws_parc, r, [
+            p.num_orden, p.nombre, p.codigo_provincia or p.provincia,
+            p.termino_municipal or p.municipio,
+            p.num_poligono, p.num_parcela, p.num_recinto, p.uso_sigpac,
+            p.superficie_sigpac or None, p.superficie_cultivada or p.superficie_ha or None,
+            p.especie or p.cultivo, p.variedad, p.ecoregimen, p.secano_regadio,
+        ], parc_types, row_fill_hex=_cf)
+
+    total_r = len(parcelas_ordenadas) + 2
+    ws_parc.cell(row=total_r, column=8, value="TOTAL:").font = total_font
+    total_sup_sigpac = round(sum(p.superficie_sigpac or 0 for p in parcelas_ordenadas), 2)
+    total_sup_cult = round(sum(p.superficie_cultivada or p.superficie_ha or p.superficie_sigpac or 0 for p in parcelas_ordenadas), 2)
+    c_ts = ws_parc.cell(row=total_r, column=9, value=total_sup_sigpac)
+    c_ts.font = total_font; c_ts.number_format = num_format_2d; c_ts.alignment = num_align
+    c_tc = ws_parc.cell(row=total_r, column=10, value=total_sup_cult)
+    c_tc.font = total_font; c_tc.number_format = num_format_2d; c_tc.alignment = num_align
+
+    _auto_width(ws_parc, len(parc_headers))
+    _add_autofilter(ws_parc, len(parc_headers))
+    _freeze(ws_parc)
+
+    # ================================================================
+    # 3. PRODUCTOS FITOSANITARIOS
+    # ================================================================
+    ws_prod = wb.create_sheet("Productos")
+    ws_prod.sheet_properties.tabColor = "FF9800"
+    prod_headers = [
+        "Nombre Comercial", "Nº Registro", "Materia Activa", "Formulación",
+        "Nº Lote", "Cantidad", "Unidad", "F. Adquisición", "F. Caducidad", "Proveedor",
+    ]
+    prod_types = ["str", "str", "str", "str", "str", "num", "str", "date", "date", "str"]
+    for c, h in enumerate(prod_headers, 1):
+        ws_prod.cell(row=1, column=c, value=h)
+    _style_header_row(ws_prod, 1, len(prod_headers))
+    for r, p in enumerate(sorted(cuaderno.productos, key=lambda x: (x.nombre_comercial or "").upper()), 2):
+        _cf = (getattr(p, "color_fila", None) or "").strip() or None
+        _write_data_row(ws_prod, r, [
+            p.nombre_comercial, p.numero_registro, p.materia_activa, p.formulacion,
+            p.numero_lote, p.cantidad_adquirida or None, p.unidad,
+            p.fecha_adquisicion, p.fecha_caducidad, p.proveedor,
+        ], prod_types, row_fill_hex=_cf)
+    _auto_width(ws_prod, len(prod_headers))
+    _add_autofilter(ws_prod, len(prod_headers))
+    _freeze(ws_prod)
+
+    # ================================================================
+    # 4. TRATAMIENTOS FITOSANITARIOS
+    # ================================================================
+    ws_trat = wb.create_sheet("Tratamientos")
+    ws_trat.sheet_properties.tabColor = "F44336"
+    trat_headers = [
+        "Nº Orden Parcelas", "Cultivo / Especie", "Variedad", "Sup. Tratada (ha)",
+        "Fecha Aplicación", "Problema Fitosanitario",
+        "Producto", "Nº Registro", "Nº Lote", "Dosis", "Unidad Dosis", "Caldo/ha",
+        "Aplicador", "Equipo", "Eficacia", "Observaciones",
+    ]
+    trat_types = [
+        "str", "str", "str", "num",
+        "date", "str",
+        "str", "str", "str", "num", "str", "num",
+        "str", "str", "str", "str",
+    ]
+    for c, h in enumerate(trat_headers, 1):
+        ws_trat.cell(row=1, column=c, value=h)
+    _style_header_row(ws_trat, 1, len(trat_headers))
+
+    tratamientos = tratamientos_ordenados
+    if desde or hasta:
+        if desde:
+            tratamientos = [t for t in tratamientos if (t.fecha_aplicacion or "") >= desde]
+        if hasta:
+            tratamientos = [t for t in tratamientos if (t.fecha_aplicacion or "") <= hasta]
+
+    modo_parcela_export = (orden_tratamientos_modo or "").strip().lower() == "parcela"
+    row = 2
+    prev_parcela_key: Optional[str] = None
+    for t in tratamientos:
+        parcela_key = _trat_parcela_group_key(t)
+        if modo_parcela_export and prev_parcela_key is not None and parcela_key != prev_parcela_key:
+            _write_blank_separator_row(ws_trat, row, len(trat_headers))
+            row += 1
+        prev_parcela_key = parcela_key
+
+        parcela_ref = t.num_orden_parcelas or ", ".join(t.parcela_nombres) or ""
+        productos = t.productos if t.productos else [ProductoAplicado()]
+        color_hex = (getattr(t, "color_fila", None) or "").strip() or None
+        for pi, prod in enumerate(productos):
+            _write_data_row(ws_trat, row, [
+                parcela_ref if pi == 0 else "",
+                t.cultivo_especie if pi == 0 else "",
+                t.cultivo_variedad if pi == 0 else "",
+                t.superficie_tratada if pi == 0 else None,
+                t.fecha_aplicacion if pi == 0 else "",
+                (t.problema_fitosanitario or t.plaga_enfermedad) if pi == 0 else "",
+                prod.nombre_comercial, prod.numero_registro, prod.numero_lote,
+                prod.dosis if prod.dosis else None,
+                prod.unidad_dosis,
+                prod.caldo_hectarea if prod.caldo_hectarea else None,
+                (t.aplicador or t.operador) if pi == 0 else "",
+                t.equipo if pi == 0 else "",
+                t.eficacia if pi == 0 else "",
+                t.observaciones if pi == 0 else "",
+            ], trat_types, row_fill_hex=color_hex, use_zebra=False)
+            row += 1
+
+    _auto_width(ws_trat, len(trat_headers))
+    _add_autofilter(ws_trat, len(trat_headers))
+    _freeze(ws_trat)
+
+    # ================================================================
+    # 5. FERTILIZACIONES
+    # ================================================================
+    fertilizaciones = getattr(cuaderno, 'fertilizaciones', None) or []
+    if fertilizaciones:
+        ws_fert = wb.create_sheet("Fertilizaciones")
+        ws_fert.sheet_properties.tabColor = "795548"
+        fert_headers = [
+            "Fecha Inicio", "Fecha Fin", "Nº Orden Parcelas", "Cultivo",
+            "Tipo Abono", "Nº Albarán", "Riqueza N/P/K", "Dosis",
+            "Tipo Fertilización", "Observaciones",
+        ]
+        fert_types = ["date", "date", "str", "str", "str", "str", "str", "str", "str", "str"]
+        for c, h in enumerate(fert_headers, 1):
+            ws_fert.cell(row=1, column=c, value=h)
+        _style_header_row(ws_fert, 1, len(fert_headers))
+        for r, f in enumerate(fertilizaciones, 2):
+            _cf = (getattr(f, "color_fila", None) or "").strip() or None
+            _write_data_row(ws_fert, r, [
+                f.fecha_inicio, f.fecha_fin, f.num_orden_parcelas, f.cultivo_especie,
+                f.tipo_abono, f.num_albaran, f.riqueza_npk, f.dosis,
+                f.tipo_fertilizacion, f.observaciones,
+            ], fert_types, row_fill_hex=_cf)
+        _auto_width(ws_fert, len(fert_headers))
+        _add_autofilter(ws_fert, len(fert_headers))
+        _freeze(ws_fert)
+
+    # ================================================================
+    # 6. COSECHAS
+    # ================================================================
+    cosechas = getattr(cuaderno, 'cosechas', None) or []
+    if cosechas:
+        ws_cos = wb.create_sheet("Cosechas")
+        ws_cos.sheet_properties.tabColor = "607D8B"
+        cos_headers = [
+            "Fecha", "Producto", "Cantidad (kg)", "Nº Orden Parcelas",
+            "Nº Albarán", "Nº Lote", "Cliente", "NIF Cliente",
+            "Dirección Cliente", "RGSEAA",
+        ]
+        cos_types = ["date", "str", "num", "str", "str", "str", "str", "str", "str", "str"]
+        for c, h in enumerate(cos_headers, 1):
+            ws_cos.cell(row=1, column=c, value=h)
+        _style_header_row(ws_cos, 1, len(cos_headers))
+        for r, co in enumerate(cosechas, 2):
+            _cf = (getattr(co, "color_fila", None) or "").strip() or None
+            _write_data_row(ws_cos, r, [
+                co.fecha, co.producto, co.cantidad_kg or None, co.num_orden_parcelas,
+                co.num_albaran, co.num_lote, co.cliente_nombre, co.cliente_nif,
+                getattr(co, 'cliente_direccion', ''), getattr(co, 'cliente_rgseaa', ''),
+            ], cos_types, row_fill_hex=_cf)
+        total_cos_r = len(cosechas) + 2
+        ws_cos.cell(row=total_cos_r, column=2, value="TOTAL kg:").font = total_font
+        c_tkg = ws_cos.cell(row=total_cos_r, column=3, value=round(sum(co.cantidad_kg or 0 for co in cosechas), 2))
+        c_tkg.font = total_font; c_tkg.number_format = num_format_2d; c_tkg.alignment = num_align
+        _auto_width(ws_cos, len(cos_headers))
+        _add_autofilter(ws_cos, len(cos_headers))
+        _freeze(ws_cos)
+
+    # ================================================================
+    # 7. HOJAS IMPORTADAS (TODAS, como en el editor)
+    # ================================================================
+    hojas_a_exportar = list(cuaderno.hojas_originales or [])
+    if incluir_hojas is not None:
+        ids_incluir = [s.strip() for s in incluir_hojas.split(",") if s.strip()]
+        if ids_incluir:
+            hojas_a_exportar = [h for h in hojas_a_exportar if h.sheet_id in ids_incluir]
+        elif incluir_hojas.strip() == "":
+            hojas_a_exportar = []
+
+    used_names = {ws.title for ws in wb.worksheets}
+    for hoja in hojas_a_exportar:
+        has_cols = bool(hoja.columnas)
+        has_data = bool(hoja.datos and any(
+            any(c is not None and str(c).strip() for c in fila)
+            for fila in hoja.datos
+        ))
+        if not has_cols and not has_data:
+            continue
+        safe_name = re.sub(r'[\[\]:*?/\\]', '', hoja.nombre or "Hoja")[:31]
+        if not safe_name.strip():
+            safe_name = "Hoja"
+        counter = 2
+        original_name = safe_name
+        while safe_name in used_names:
+            safe_name = f"{original_name[:27]} ({counter})"[:31]
+            counter += 1
+        used_names.add(safe_name)
+
+        ws_imp = wb.create_sheet(safe_name)
+        ws_imp.sheet_properties.tabColor = "7B1FA2"
+        start_row = 1
+        if has_cols:
+            for c, col_name in enumerate(hoja.columnas, 1):
+                ws_imp.cell(row=1, column=c, value=col_name)
+            _style_header_row(ws_imp, 1, len(hoja.columnas))
+            start_row = 2
+
+        if hoja.datos:
+            for r, fila in enumerate(hoja.datos, start_row):
+                for c, v in enumerate(fila, 1):
+                    cell = ws_imp.cell(row=r, column=c, value=v)
+                    cell.border = thin_border
+                    cell.alignment = data_align
+                    if r % 2 == 0:
+                        cell.fill = even_fill
+
+        num_cols_imp = max(
+            len(hoja.columnas or []),
+            max((len(f) for f in (hoja.datos or [])), default=0),
+            1
+        )
+        _auto_width(ws_imp, num_cols_imp, data_start_row=start_row)
+        if has_cols:
+            _add_autofilter(ws_imp, num_cols_imp)
+        _freeze(ws_imp)
+
+    # ================================================================
+    # GUARDAR Y ENVIAR
+    # ================================================================
+    # Usar tempfile (funciona en producción: Render, Heroku, etc.)
+    # storage.base_dir no existe en SupabaseStorage
     output_dir = Path(tempfile.gettempdir()) / "cuaderno_exports"
     output_dir.mkdir(parents=True, exist_ok=True)
     base_name = _sanitize_filename(cuaderno.nombre_explotacion)
@@ -1206,7 +1552,10 @@ async def exportar_excel_cuaderno(
     try:
         wb.save(str(output_path))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error guardando Excel: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error guardando Excel: {str(e)}"
+        )
 
     return FileResponse(
         path=str(output_path),
