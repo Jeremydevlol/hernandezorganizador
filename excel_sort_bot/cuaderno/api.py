@@ -1737,8 +1737,8 @@ async def exportar_excel_cuaderno(
         ws_fert.sheet_properties.tabColor = "795548"
 
         fert_col_headers = [
-            "Fecha Inicio",     # 1
-            "Fecha Fin",        # 2
+            "Mes Inicio",      # 1
+            "Mes Fin",          # 2
             "Parcelas",         # 3
             "Cultivo",          # 4
             "Tipo Abono",       # 5
@@ -1746,7 +1746,7 @@ async def exportar_excel_cuaderno(
             "Dosis",            # 7
             "Tipo",             # 8
         ]
-        fert_col_types  = ["date", "date", "str", "str", "str", "str", "str", "str"]
+        fert_col_types  = ["str", "str", "str", "str", "str", "str", "str", "str"]
         fert_col_widths = [14, 14, 14, 18, 24, 12, 16, 16]
 
         fert_data_rows = []

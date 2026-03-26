@@ -125,6 +125,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
     const [loadingTratamientos, setLoadingTratamientos] = useState(false);
     const [openTreatFromSelection, setOpenTreatFromSelection] = useState(false);
     const [openTreatFromTratSelection, setOpenTreatFromTratSelection] = useState(false);
+    const [openFertFromSelection, setOpenFertFromSelection] = useState(false);
     // ---- Selección de celdas para Chat ----
     const [selectedCells, setSelectedCells] = useState<Set<string>>(new Set()); // "rowIdx:colKey"
     const [selectionAnchor, setSelectionAnchor] = useState<{ rowIdx: number; colIdx: number } | null>(null);
@@ -1617,6 +1618,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                     onClick={() => {
                                         setOpenTreatFromSelection(false);
                                         setOpenTreatFromTratSelection(false);
+                                        setOpenFertFromSelection(false);
                                         setShowAddModal(true);
                                     }}
                                     className="flex items-center gap-1.5 px-3 py-2 rounded-md bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-medium transition-colors ml-auto sm:ml-0"
@@ -1808,11 +1810,18 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                 </div>
                                 <div className="w-px h-5 bg-gray-200 hidden sm:block" />
                                 <button
-                                    onClick={() => { setOpenTreatFromSelection(true); setShowAddModal(true); }}
+                                    onClick={() => { setOpenTreatFromSelection(true); setOpenFertFromSelection(false); setShowAddModal(true); }}
                                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium transition-colors"
                                 >
                                     <Plus size={13} />
                                     Añadir tratamiento
+                                </button>
+                                <button
+                                    onClick={() => { setOpenFertFromSelection(true); setOpenTreatFromSelection(false); setShowAddModal(true); }}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-medium transition-colors"
+                                >
+                                    <Plus size={13} />
+                                    Añadir fertilizante
                                 </button>
                                 <button
                                     onClick={sendParcelaCheckboxesToChat}
@@ -2429,16 +2438,17 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
             />
             <AddRowModal
                 isOpen={showAddModal || !!editTratamientoId}
-                onClose={() => { setShowAddModal(false); setEditTratamientoId(null); setOpenTreatFromSelection(false); setOpenTreatFromTratSelection(false); }}
-                sheet={openTreatFromSelection || openTreatFromTratSelection ? "tratamientos" : effectiveSheet}
+                onClose={() => { setShowAddModal(false); setEditTratamientoId(null); setOpenTreatFromSelection(false); setOpenTreatFromTratSelection(false); setOpenFertFromSelection(false); }}
+                sheet={openTreatFromSelection || openTreatFromTratSelection ? "tratamientos" : openFertFromSelection ? "fertilizantes" : effectiveSheet}
                 cuaderno={cuaderno}
                 editTratamientoId={editTratamientoId ?? undefined}
-                initialParcelaIds={openTreatFromTratSelection ? parcelasFromSelectedTratamientos : (openTreatFromSelection ? Array.from(selectedParcelas) : [])}
+                initialParcelaIds={openTreatFromTratSelection ? parcelasFromSelectedTratamientos : ((openTreatFromSelection || openFertFromSelection) ? Array.from(selectedParcelas) : [])}
                 onSuccess={() => {
                     setShowAddModal(false);
                     setEditTratamientoId(null);
                     setOpenTreatFromSelection(false);
                     setOpenTreatFromTratSelection(false);
+                    setOpenFertFromSelection(false);
                     setSelectedParcelas(new Set());
                     setSelectedTratamientos(new Set());
                     onRefresh();

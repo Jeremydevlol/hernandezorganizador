@@ -69,7 +69,8 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                 eficacia: "BUENA",
             };
             if (sheet === "fertilizantes") {
-                base.fecha_inicio = fechaAFormatoDDMM(new Date().toISOString().split("T")[0]);
+                const now = new Date();
+                base.fecha_inicio = `${String(now.getMonth() + 1).padStart(2, "0")}/${now.getFullYear()}`;
                 base.fecha_fin = "";
                 base.cultivo_especie = "";
                 base.tipo_abono = "";
@@ -175,8 +176,8 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
             } else if (sheet === "fertilizantes") {
                 const parcelaIds = Array.isArray(formData.parcela_ids) ? formData.parcela_ids : [];
                 await api.createFertilizacion(cuaderno.id, {
-                    fecha_inicio: fechaAFormatoISO(String(formData.fecha_inicio || "")) || formData.fecha_inicio || "",
-                    fecha_fin: fechaAFormatoISO(String(formData.fecha_fin || "")) || formData.fecha_fin || "",
+                    fecha_inicio: formData.fecha_inicio || "",
+                    fecha_fin: formData.fecha_fin || "",
                     parcela_ids: parcelaIds,
                     cultivo_especie: formData.cultivo_especie || "",
                     cultivo_variedad: formData.cultivo_variedad || "",
@@ -939,12 +940,17 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                         Fecha Inicio
                                     </label>
                                     <input
-                                        type="text"
+                                        type="month"
                                         name="fecha_inicio"
-                                        value={formData.fecha_inicio || ""}
-                                        onChange={handleChange}
-                                        onBlur={() => blurNormalizeDateField("fecha_inicio")}
-                                        placeholder="DD/MM/AAAA o 2/12/25"
+                                        value={(() => {
+                                            const v = formData.fecha_inicio || "";
+                                            const m = v.match(/^(\d{1,2})\/(\d{4})$/);
+                                            return m ? `${m[2]}-${m[1].padStart(2, "0")}` : v;
+                                        })()}
+                                        onChange={(e) => {
+                                            const [y, m] = (e.target.value || "").split("-");
+                                            setFormData((prev: any) => ({ ...prev, fecha_inicio: y && m ? `${m}/${y}` : "" }));
+                                        }}
                                         className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 text-sm focus:outline-none focus:border-green-500 transition-colors"
                                     />
                                 </div>
@@ -953,12 +959,17 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                         Fecha Fin
                                     </label>
                                     <input
-                                        type="text"
+                                        type="month"
                                         name="fecha_fin"
-                                        value={formData.fecha_fin || ""}
-                                        onChange={handleChange}
-                                        onBlur={() => blurNormalizeDateField("fecha_fin")}
-                                        placeholder="DD/MM/AAAA o 2/12/25"
+                                        value={(() => {
+                                            const v = formData.fecha_fin || "";
+                                            const m = v.match(/^(\d{1,2})\/(\d{4})$/);
+                                            return m ? `${m[2]}-${m[1].padStart(2, "0")}` : v;
+                                        })()}
+                                        onChange={(e) => {
+                                            const [y, m] = (e.target.value || "").split("-");
+                                            setFormData((prev: any) => ({ ...prev, fecha_fin: y && m ? `${m}/${y}` : "" }));
+                                        }}
                                         className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 text-sm focus:outline-none focus:border-green-500 transition-colors"
                                     />
                                 </div>

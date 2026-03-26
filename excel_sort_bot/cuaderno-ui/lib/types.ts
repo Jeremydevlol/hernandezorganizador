@@ -201,6 +201,13 @@ export interface CuadernoSummary {
     num_tratamientos: number;
 }
 
+export interface Carpeta {
+    id: string;
+    nombre: string;
+    parent_id: string | null;
+    orden: number;
+}
+
 // ============================================
 // SELECCIÓN DE CELDAS (para Chat IA)
 // ============================================
@@ -328,8 +335,8 @@ export const SHEET_CONFIG: Record<SheetType, {
     fertilizantes: {
         title: "Registro Fertilizantes",
         columns: [
-            { key: "fecha_inicio", label: "Fecha Inicio", width: 100, type: "date" },
-            { key: "fecha_fin", label: "Fecha Fin", width: 100, type: "date" },
+            { key: "fecha_inicio", label: "Mes Inicio", width: 100 },
+            { key: "fecha_fin", label: "Mes Fin", width: 100 },
             { key: "num_orden_parcelas", label: "Parcelas", width: 80 },
             { key: "cultivo_especie", label: "Cultivo", width: 120 },
             { key: "tipo_abono", label: "Tipo Abono", width: 150, editable: true },
