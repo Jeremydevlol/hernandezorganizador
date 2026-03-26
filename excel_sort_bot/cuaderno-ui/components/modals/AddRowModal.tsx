@@ -54,7 +54,7 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                     eficacia: tratamiento.eficacia || "BUENA",
                     observaciones: tratamiento.observaciones || "",
                 });
-            }).catch(() => setFormData({}));a
+            }).catch(() => setFormData({}));
         } else if (isOpen && !editTratamientoId) {
             const base: Record<string, any> = {
                 fecha_aplicacion: fechaAFormatoDDMM(new Date().toISOString().split("T")[0]),
