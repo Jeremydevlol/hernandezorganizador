@@ -669,14 +669,16 @@ class CuadernoExplotacion:
                     prod_aplicado.numero_lote = prod_aplicado.numero_lote or producto.numero_lote
 
     def ordenar_tratamientos(self) -> None:
-        """Ordena tratamientos por parcela (num_orden) y luego por fecha."""
+        """Ordena por cultivo, luego Nº parcela, luego fecha (cronológico)."""
         def sort_key(t: Tratamiento):
+            cultivo = (t.cultivo_especie or "").strip().lower()
             try:
-                orden = int(t.num_orden_parcelas.split(",")[0]) if t.num_orden_parcelas else 9999
+                orden = int(str(t.num_orden_parcelas).split(",")[0].strip()) if t.num_orden_parcelas else 9999
             except (ValueError, IndexError):
                 orden = 9999
-            fecha = t.fecha_aplicacion or "9999-99-99"
-            return (orden, fecha)
+            fecha = t.fecha_aplicacion or ""
+            # id: orden estable entre filas con mismo cultivo/fecha/parcela
+            return (cultivo, orden, fecha, t.id or "")
         self.tratamientos.sort(key=sort_key)
 
     def copiar_tratamiento_a_parcelas(self, tratamiento_id: str, parcela_ids: List[str]) -> List[Tratamiento]:

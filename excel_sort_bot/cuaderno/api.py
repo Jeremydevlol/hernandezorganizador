@@ -568,12 +568,19 @@ async def listar_tratamientos(cuaderno_id: str,
     if not cuaderno:
         raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
     
-    # Ordenar por fecha descendente
-    tratamientos = sorted(
-        cuaderno.tratamientos, 
-        key=lambda t: t.fecha_aplicacion, 
-        reverse=True
-    )
+    def _orden_trat_list(t: Tratamiento):
+        try:
+            o = int(str(t.num_orden_parcelas).split(",")[0].strip()) if str(t.num_orden_parcelas or "").strip() else 9999
+        except (ValueError, TypeError, IndexError):
+            o = 9999
+        return (
+            (t.cultivo_especie or "").strip().lower(),
+            o,
+            t.fecha_aplicacion or "",
+            t.id or "",
+        )
+
+    tratamientos = sorted(cuaderno.tratamientos, key=_orden_trat_list)
     
     # Paginación
     total = len(tratamientos)
@@ -1564,13 +1571,15 @@ async def exportar_excel_cuaderno(
         "Cultivo / Especie",                   # 11
         "Ecorégimen",                          # 12
         "Secano /\nRegadío",                   # 13
+        "Zonas\nvulnerables",                  # 14
     ]
-    parc_col_types  = ["num", "str", "str", "str", "str", "str", "str", "str", "num", "num", "str", "str", "str"]
-    parc_col_widths = [10, 10, 22, 30, 12, 12, 10, 10, 14, 14, 20, 12, 12]
+    parc_col_types  = ["num", "str", "str", "str", "str", "str", "str", "str", "num", "num", "str", "str", "str", "str"]
+    parc_col_widths = [10, 10, 22, 30, 12, 12, 10, 10, 14, 14, 20, 12, 12, 14]
 
     parc_data_rows = []
     parc_row_colors = []
     for p in parcelas_ordenadas:
+        zn = getattr(p, "zona_nitratos", False)
         parc_data_rows.append([
             p.num_orden,
             p.codigo_provincia or getattr(p, "provincia", "") or "",
@@ -1585,6 +1594,7 @@ async def exportar_excel_cuaderno(
             p.especie or p.cultivo or "",
             p.ecoregimen,
             p.secano_regadio,
+            "Sí" if zn else "No",
         ])
         parc_row_colors.append((getattr(p, "color_fila", None) or "").strip() or None)
 
@@ -1598,7 +1608,7 @@ async def exportar_excel_cuaderno(
         section_subtitle="2.1 DATOS IDENTIFICATIVOS Y AGRONÓMICOS DE LAS PARCELAS",
         group_headers=[
             ("REFERENCIAS SIGPAC", 1, 8),
-            ("DATOS AGRONÓMICOS", 9, 13),
+            ("DATOS AGRONÓMICOS", 9, 14),
         ],
         col_headers=parc_col_headers,
         col_types=parc_col_types,
@@ -1668,7 +1678,7 @@ async def exportar_excel_cuaderno(
         "Dosis",                # 10
         "Eficacia",             # 11
     ]
-    trat_col_types  = ["str", "str", "num", "date", "str", "str", "str", "str", "str", "num", "str"]
+    trat_col_types  = ["str", "str", "num", "date", "str", "str", "str", "str", "str", "str", "str"]
     trat_col_widths = [14, 18, 14, 14, 20, 14, 14, 24, 14, 12, 12]
 
     num_trat_cols = len(trat_col_headers)
@@ -1721,7 +1731,7 @@ async def exportar_excel_cuaderno(
                 t.equipo if pi == 0 else "",
                 prod.nombre_comercial,
                 prod.numero_registro,
-                prod.dosis if prod.dosis else None,
+                (f"{prod.dosis} {prod.unidad_dosis}".strip() if prod.dosis else None),
                 t.eficacia if pi == 0 else "",
             ], trat_col_types, row_fill_hex=color_hex, use_zebra=True)
             row += 1
@@ -2099,6 +2109,8 @@ _PARCELAS_COLUMN_MAP = {
     "Crop": "especie",
     "Ecoregimen": "ecoregimen",
     "Secano Regadio": "secano_regadio",
+    "Parcela Ubicada En Zonas Vulnerables": "zona_vulnerables_raw",
+    "Parcela ubicada en zonas vulnerables": "zona_vulnerables_raw",
 }
 
 _TRATAMIENTOS_COLUMN_MAP = {
@@ -2168,6 +2180,40 @@ _TRATAMIENTOS_RAW_ALIASES = {
 }
 
 
+def _parse_si_no_zona(val) -> bool:
+    """Interpreta celdas S/N, Sí/No, 1/0 para 'parcela en zonas vulnerables'."""
+    if val is None:
+        return False
+    s = str(val).strip().lower()
+    if not s:
+        return False
+    if s in ("sí", "si", "s", "yes", "true", "1", "x", "v", "bien"):
+        return True
+    if s in ("no", "n", "false", "0"):
+        return False
+    return False
+
+
+def _parse_dosis_y_unidad(val) -> tuple:
+    """(valor numérico, unidad). Unidades: L/Ha, Kg/Ha, ml/H, g/Ha."""
+    if val is None:
+        return 0.0, "L/Ha"
+    raw = str(val).strip()
+    if not raw:
+        return 0.0, "L/Ha"
+    s_compact = re.sub(r"\s+", "", raw.lower())
+    unidad = "L/Ha"
+    if "ml/h" in s_compact:
+        unidad = "ml/H"
+    elif "kg/ha" in s_compact:
+        unidad = "Kg/Ha"
+    elif "g/ha" in s_compact:
+        unidad = "g/Ha"
+    elif "l/ha" in s_compact:
+        unidad = "L/Ha"
+    return _parse_dosis(val), unidad
+
+
 def _parse_dosis(val) -> float:
     """Extrae valor numérico de dosis desde formatos como '3,50 l', '3.5 L/Ha', '3'."""
     if val is None:
@@ -2175,8 +2221,19 @@ def _parse_dosis(val) -> float:
     s = str(val).strip()
     if not s:
         return 0.0
-    # Quitar unidades: l, kg, l/ha, kg/ha, L/Ha, etc.
-    s = re.sub(r'\s*(l|kg|litros|kilos|l/ha|kg/ha|l/ha\.?|kg/ha\.?)\s*$', '', s, flags=re.IGNORECASE)
+    # Quitar unidades (primero compuestas para no dejar restos tipo "/ha")
+    s = re.sub(
+        r'\s*(l/ha\.?|kg/ha\.?|ml/h|g/ha)\s*$',
+        '',
+        s,
+        flags=re.IGNORECASE,
+    )
+    s = re.sub(
+        r'\s*(l|kg|litros|kilos|ml|g)\s*$',
+        '',
+        s,
+        flags=re.IGNORECASE,
+    )
     s = s.strip()
     s = s.replace(",", ".")
     # Extraer primer número (p.ej. "3.5 - 4" -> 3.5)
@@ -2209,6 +2266,8 @@ _PARCELAS_RAW_ALIASES = {
     "especie/\nvariedad": "especie",
     "ecoregimen/\npráctica\n(4)": "ecoregimen",
     "secano/\nregadío": "secano_regadio",
+    "parcela ubicada en zonas vulnerables": "zona_vulnerables_raw",
+    "parcela ubicada en zonas vulnerables (s/n)": "zona_vulnerables_raw",
 }
 
 
@@ -2319,6 +2378,9 @@ def _extraer_parcelas_directas(hojas: List[dict]) -> List[Parcela]:
                 cultivo=especie,
                 ecoregimen=str(d.get("ecoregimen", "")).strip(),
                 secano_regadio=str(d.get("secano_regadio", "")).strip(),
+                zona_nitratos=_parse_si_no_zona(d.get("zona_vulnerables_raw"))
+                if "zona_vulnerables_raw" in d
+                else False,
             )
             if num_orden in vistos:
                 continue
@@ -2328,8 +2390,20 @@ def _extraer_parcelas_directas(hojas: List[dict]) -> List[Parcela]:
 
 
 def _extraer_tratamientos_directos(hojas: List[dict], parcelas: List[Parcela]) -> List[Tratamiento]:
-    """Extrae tratamientos directamente de hojas conocidas sin GPT. 1 línea = 1 registro."""
+    """
+    Extrae tratamientos desde hojas conocidas sin GPT.
+    Si una fila lista varios Nº de parcela (p. ej. '3,4'), genera un registro por parcela
+    con el cultivo tomado de la parcela (evita mezclar cultivos en una sola línea).
+    """
     tratamientos = []
+    orden_to_parcela: Dict[int, Parcela] = {}
+    for p in parcelas:
+        try:
+            no = int(float(getattr(p, "num_orden", 0) or 0))
+        except (TypeError, ValueError):
+            continue
+        if no > 0:
+            orden_to_parcela[no] = p
     for hoja in hojas:
         nombre_hoja = hoja.get("nombre", "")
         es_trat = any(known in nombre_hoja for known in _KNOWN_TRATAMIENTOS_SHEETS)
@@ -2362,6 +2436,79 @@ def _extraer_tratamientos_directos(hojas: List[dict], parcelas: List[Parcela]) -
                     fecha = fecha_raw
 
             id_parcelas_str = str(d.get("id_parcelas", "")).strip()
+            sup = 0.0
+            try:
+                sup = float(str(d.get("superficie_tratada", 0)).replace(",", "."))
+            except (ValueError, TypeError):
+                pass
+            dosis, unidad_dosis = _parse_dosis_y_unidad(d.get("dosis"))
+            nro_reg = str(d.get("nro_registro", "")).strip()
+
+            especie_excel = str(d.get("especie", "")).strip()
+
+            def _append_uno(
+                pid_list: List[str],
+                pnombres: List[str],
+                num_ord_str: str,
+                cultivo: str,
+                sup_trat: float,
+            ) -> None:
+                prod_aplicado = ProductoAplicado(
+                    nombre_comercial=producto,
+                    numero_registro=nro_reg,
+                    dosis=dosis,
+                    unidad_dosis=unidad_dosis,
+                )
+                tratamientos.append(
+                    Tratamiento(
+                        fecha_aplicacion=fecha,
+                        parcela_ids=pid_list,
+                        parcela_nombres=pnombres,
+                        num_orden_parcelas=num_ord_str,
+                        cultivo_especie=cultivo,
+                        superficie_tratada=sup_trat,
+                        problema_fitosanitario=str(d.get("problema_fito", "")).strip(),
+                        aplicador=str(d.get("aplicador", "")).strip(),
+                        equipo=str(d.get("equipo", "")).strip(),
+                        productos=[prod_aplicado],
+                        eficacia=str(d.get("eficacia", "")).strip(),
+                        observaciones=str(d.get("observaciones", "")).strip(),
+                        estado=EstadoTratamiento.APLICADO,
+                    )
+                )
+
+            if id_parcelas_str:
+                ordenes = [x.strip() for x in id_parcelas_str.replace(";", ",").split(",") if x.strip()]
+                filas_parcela = []
+                for o in ordenes:
+                    try:
+                        orden_num = int(float(o))
+                    except (ValueError, TypeError):
+                        continue
+                    parc = orden_to_parcela.get(orden_num)
+                    if parc:
+                        cultivo_p = (parc.especie or parc.cultivo or "").strip().upper()
+                        cultivo = cultivo_p or especie_excel
+                        sup_p = sup
+                        try:
+                            sup_c = float(
+                                parc.superficie_cultivada
+                                or parc.superficie_ha
+                                or parc.superficie_sigpac
+                                or 0
+                            )
+                            if sup_c > 0:
+                                sup_p = round(sup_c, 2)
+                        except (TypeError, ValueError):
+                            pass
+                        filas_parcela.append(
+                            ([parc.id], [parc.nombre], str(orden_num), cultivo, sup_p)
+                        )
+                if filas_parcela:
+                    for pid_list, pnombres, num_ord_str, cultivo, sup_trat in filas_parcela:
+                        _append_uno(pid_list, pnombres, num_ord_str, cultivo, sup_trat)
+                    continue
+
             parcela_ids = []
             parcela_nombres = []
             if id_parcelas_str:
@@ -2372,40 +2519,16 @@ def _extraer_tratamientos_directos(hojas: List[dict], parcelas: List[Parcela]) -
                     except (ValueError, TypeError):
                         continue
                     for p in parcelas:
-                        if p.num_orden == orden_num:
+                        try:
+                            pno = int(float(getattr(p, "num_orden", 0) or 0))
+                        except (TypeError, ValueError):
+                            continue
+                        if pno == orden_num:
                             parcela_ids.append(p.id)
                             parcela_nombres.append(p.nombre)
                             break
 
-            sup = 0.0
-            try:
-                sup = float(str(d.get("superficie_tratada", 0)).replace(",", "."))
-            except (ValueError, TypeError):
-                pass
-            dosis = _parse_dosis(d.get("dosis"))
-
-            prod_aplicado = ProductoAplicado(
-                nombre_comercial=producto,
-                numero_registro=str(d.get("nro_registro", "")).strip(),
-                dosis=dosis,
-                unidad_dosis="L/Ha",
-            )
-            t = Tratamiento(
-                fecha_aplicacion=fecha,
-                parcela_ids=parcela_ids,
-                parcela_nombres=parcela_nombres,
-                num_orden_parcelas=id_parcelas_str,
-                cultivo_especie=str(d.get("especie", "")).strip(),
-                superficie_tratada=sup,
-                problema_fitosanitario=str(d.get("problema_fito", "")).strip(),
-                aplicador=str(d.get("aplicador", "")).strip(),
-                equipo=str(d.get("equipo", "")).strip(),
-                productos=[prod_aplicado],
-                eficacia=str(d.get("eficacia", "")).strip(),
-                observaciones=str(d.get("observaciones", "")).strip(),
-                estado=EstadoTratamiento.APLICADO,
-            )
-            tratamientos.append(t)
+            _append_uno(parcela_ids, parcela_nombres, id_parcelas_str, especie_excel, sup)
     return tratamientos
 
 

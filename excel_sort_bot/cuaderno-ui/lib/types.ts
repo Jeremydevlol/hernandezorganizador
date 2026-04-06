@@ -286,6 +286,7 @@ export const SHEET_CONFIG: Record<SheetType, {
             { key: "especie", label: "Cultivo", width: 120, editable: true },
             { key: "ecoregimen", label: "Ecoreg.", width: 60 },
             { key: "secano_regadio", label: "S/R", width: 40 },
+            { key: "zona_nitratos", label: "Zonas vuln.", width: 90, editable: true },
         ],
     },
     productos: {
@@ -312,7 +313,7 @@ export const SHEET_CONFIG: Record<SheetType, {
             { key: "equipo", label: "Equipo", width: 70, editable: true },
             { key: "nombre_comercial", label: "Producto", width: 140, editable: true },
             { key: "numero_registro", label: "Nº Registro", width: 90, editable: true },
-            { key: "dosis", label: "Dosis", width: 80, type: "number", editable: true },
+            { key: "dosis", label: "Dosis", width: 100, type: "text", editable: true },
             { key: "eficacia", label: "Eficacia", width: 70, editable: true },
         ],
     },

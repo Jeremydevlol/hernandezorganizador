@@ -33,7 +33,7 @@ import {
 } from "lucide-react";
 import { Cuaderno, SheetType, SHEET_CONFIG, HistoricoRow, HojaExcel, CellSelection } from "@/lib/types";
 import { fechaFlexibleAISO, formatDateTableES } from "@/lib/dateSpanish";
-import { parseDecimalInput } from "@/lib/parseDecimal";
+import { parseDecimalInput, parseTratamientoDosisInput } from "@/lib/parseDecimal";
 import { api } from "@/lib/api";
 import AddRowModal from "./modals/AddRowModal";
 import AddBulkModal from "./modals/AddBulkModal";
@@ -189,13 +189,20 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                     const prod = t.productos?.[0] || {};
                     const probProd = String((prod as any).problema_fitosanitario || (prod as any).plaga_enfermedad || "").trim();
                     const probTrat = String(t.problema_fitosanitario || t.plaga_enfermedad || "").trim();
+                    const d = (prod as any).dosis;
+                    const u = String((prod as any).unidad_dosis || "").trim();
+                    let dosisStr = "";
+                    if (d !== "" && d !== undefined && d !== null) {
+                        const ds = typeof d === "number" ? String(d) : String(d);
+                        dosisStr = u ? `${ds} ${u}` : ds;
+                    }
                     return {
                         ...t,
                         parcela_nombres: t.parcela_nombres?.join(", ") || "",
                         nombre_comercial: (prod as any).nombre_comercial || "",
                         numero_registro: (prod as any).numero_registro || "",
-                        dosis: (prod as any).dosis ?? "",
-                        unidad_dosis: (prod as any).unidad_dosis || "",
+                        dosis: dosisStr,
+                        unidad_dosis: u,
                         problema_fitosanitario: probTrat || probProd,
                     };
                 });
@@ -293,11 +300,13 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                         if (aCultivo !== bCultivo) return aCultivo.localeCompare(bCultivo, "es");
                         return bFecha.localeCompare(aFecha, "es");
                     case "parcela": {
+                        if (aCultivo !== bCultivo) return aCultivo.localeCompare(bCultivo, "es", { sensitivity: "base" });
                         const ao = minNumOrdenTratamiento(a);
                         const bo = minNumOrdenTratamiento(b);
                         if (ao !== bo) return ao - bo;
                         if (aParcela !== bParcela) return aParcela.localeCompare(bParcela, "es");
-                        return aFecha.localeCompare(bFecha, "es");
+                        if (aFecha !== bFecha) return aFecha.localeCompare(bFecha, "es");
+                        return (a.id || "").localeCompare(b.id || "");
                     }
                     case "producto":
                         if (aProd !== bProd) return aProd.localeCompare(bProd, "es");
@@ -438,11 +447,13 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                     if (aCultivo !== bCultivo) return aCultivo.localeCompare(bCultivo, "es");
                     return bFecha.localeCompare(aFecha, "es");
                 case "parcela": {
+                    if (aCultivo !== bCultivo) return aCultivo.localeCompare(bCultivo, "es", { sensitivity: "base" });
                     const ao = minNumOrdenTratamiento(a);
                     const bo = minNumOrdenTratamiento(b);
                     if (ao !== bo) return ao - bo;
                     if (aParcela !== bParcela) return aParcela.localeCompare(bParcela, "es");
-                    return aFecha.localeCompare(bFecha, "es");
+                    if (aFecha !== bFecha) return aFecha.localeCompare(bFecha, "es");
+                    return (a.id || "").localeCompare(b.id || "");
                 }
                 case "producto":
                     if (aProd !== bProd) return aProd.localeCompare(bProd, "es");
@@ -1209,9 +1220,43 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
     const handleSaveCell = async (rowId: string, colKey: string, newValue: string) => {
         if (!BASE_EDITABLE_SHEETS.includes(effectiveSheet)) return;
         setEditingCell(null);
-        let valueToSend: string | number = newValue;
+        if (effectiveSheet === "tratamientos" && colKey === "dosis") {
+            const { num, unit } = parseTratamientoDosisInput(newValue);
+            const t = (cuaderno.tratamientos || []).find((x: { id?: string }) => x.id === rowId);
+            const oldProd = t?.productos?.[0] as { dosis?: number; unidad_dosis?: string } | undefined;
+            const oldDosis = typeof oldProd?.dosis === "number" && Number.isFinite(oldProd.dosis)
+                ? oldProd.dosis
+                : Number(oldProd?.dosis) || 0;
+            const oldUnit = String(oldProd?.unidad_dosis || "L/Ha");
+            setSaving(true);
+            try {
+                await api.patchCell(cuaderno.id, { sheet_id: "tratamientos", row: rowId, column: "dosis", value: num });
+                try {
+                    await api.patchCell(cuaderno.id, { sheet_id: "tratamientos", row: rowId, column: "unidad_dosis", value: unit });
+                } catch (e2) {
+                    try {
+                        await api.patchCell(cuaderno.id, { sheet_id: "tratamientos", row: rowId, column: "dosis", value: oldDosis });
+                    } catch (e3) {
+                        console.error("Rollback de dosis falló tras error al guardar unidad:", e3);
+                    }
+                    throw e2;
+                }
+                setLastSavedAt(Date.now());
+                onRefresh();
+            } catch (e) {
+                console.error("Error guardando celda:", e);
+                alert("No se pudo guardar la dosis. Revisa la conexión e inténtalo de nuevo.");
+            } finally {
+                setSaving(false);
+            }
+            return;
+        }
+        let valueToSend: string | number | boolean = newValue;
         const colCfg = config.columns.find((c) => c.key === colKey);
-        if (colCfg?.type === "date") {
+        if (effectiveSheet === "parcelas" && colKey === "zona_nitratos") {
+            const s = newValue.trim().toLowerCase();
+            valueToSend = ["sí", "si", "s", "1", "yes", "true"].includes(s);
+        } else if (colCfg?.type === "date") {
             const iso = fechaFlexibleAISO(newValue);
             if (iso) valueToSend = iso;
         } else if (colCfg?.type === "number") {
@@ -1606,7 +1651,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                     <option value="fecha_desc">Orden: Fecha (reciente primero)</option>
                                     <option value="fecha_asc">Orden: Fecha (antiguo primero)</option>
                                     <option value="cultivo">Orden: por cultivo</option>
-                                    <option value="parcela">Orden: parcela (Nº orden SIGPAC)</option>
+                                    <option value="parcela">Orden: cultivo → parcela (Nº orden) → fecha</option>
                                     <option value="producto">Orden: por producto</option>
                                 </select>
                                 <div className="w-px h-5 bg-gray-200" />
@@ -2143,6 +2188,8 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                                 const raw = row[col.key];
                                                 const display = col.key === "estado"
                                                     ? null
+                                                    : col.key === "zona_nitratos" && effectiveSheet === "parcelas"
+                                                        ? (raw === true || raw === "true" ? "Sí" : raw === false || raw === "false" ? "No" : "—")
                                                     : col.key === "num_orden_parcelas" && effectiveSheet === "tratamientos"
                                                         ? (
                                                             <div className="flex items-center justify-between group/link h-full w-full">
@@ -2182,7 +2229,11 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                                             // Doble-click = entrar en modo edición
                                                             if (isBaseSheetEditable && row.id && col.editable !== false) {
                                                                 setEditingCell({ rowId: row.id, colKey: col.key });
-                                                                setEditValue(raw !== null && raw !== undefined && raw !== "" ? String(raw) : "");
+                                                                if (col.key === "zona_nitratos" && effectiveSheet === "parcelas") {
+                                                                    setEditValue(raw === true || raw === "true" ? "Sí" : raw === false || raw === "false" ? "No" : "");
+                                                                } else {
+                                                                    setEditValue(raw !== null && raw !== undefined && raw !== "" ? String(raw) : "");
+                                                                }
                                                             }
                                                         }}
                                                         className={`px-3 py-2 text-gray-700 border-b border-r border-gray-200 cursor-pointer select-none transition-colors ${isCellSelected
