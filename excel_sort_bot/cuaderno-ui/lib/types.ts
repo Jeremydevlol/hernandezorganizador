@@ -63,6 +63,23 @@ export interface Producto {
 }
 
 // ============================================
+// PRODUCTO DEL CATÁLOGO GLOBAL (compartido entre cuadernos)
+// ============================================
+export interface CatalogoProducto {
+    id: string;
+    nombre_comercial: string;
+    numero_registro: string;
+    materia_activa: string;
+    formulacion: string;
+    tipo: string;           // fitosanitario | fertilizante | ...
+    unidad: string;         // L, Kg, etc.
+    proveedor: string;
+    notas: string;
+    created_at?: string;
+    updated_at?: string;
+}
+
+// ============================================
 // PRODUCTO APLICADO EN TRATAMIENTO
 // ============================================
 export interface ProductoAplicado {

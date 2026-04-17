@@ -1951,6 +1951,28 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                     <div className="px-4 py-2.5 border-b border-gray-200 bg-gradient-to-r from-amber-500/5 to-transparent flex items-center justify-between shrink-0">
                         <span className="text-sm text-gray-700">{currentRowSelectionCount} producto(s) seleccionado(s)</span>
                         <div className="flex items-center gap-2 flex-wrap">
+                            <button
+                                type="button"
+                                onClick={async () => {
+                                    const ids = Array.from(selectedProductos);
+                                    if (ids.length === 0) return;
+                                    let ok = 0;
+                                    let fail = 0;
+                                    for (const pid of ids) {
+                                        try {
+                                            await api.publicarProductoEnCatalogo(cuaderno.id, pid);
+                                            ok++;
+                                        } catch {
+                                            fail++;
+                                        }
+                                    }
+                                    alert(`Catálogo global: ${ok} publicado(s)${fail ? `, ${fail} fallido(s)` : ""}.`);
+                                }}
+                                className="px-2.5 py-1 rounded bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700 transition-colors"
+                                title="Copia los productos seleccionados al catálogo global (compartido entre todos los cuadernos)"
+                            >
+                                Publicar al catálogo global
+                            </button>
                             <div className="flex items-center gap-1" title="Color de fila">
                                 <Palette size={14} className="text-gray-500" />
                                 {ROW_COLOR_SWATCHES.map((hex) => (

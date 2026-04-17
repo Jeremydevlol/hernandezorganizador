@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo, useRef } from "react";
 import { X } from "lucide-react";
-import { Cuaderno, SheetType } from "@/lib/types";
+import { Cuaderno, SheetType, CatalogoProducto } from "@/lib/types";
 import { api } from "@/lib/api";
 import { fechaFlexibleAISO, fechaFlexibleADDMMYYYY, isoToDisplayDDMM, normalizeSpanishDateInput } from "@/lib/dateSpanish";
 import { parseDecimalInput } from "@/lib/parseDecimal";
@@ -50,6 +50,11 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
     const [fertProdInput, setFertProdInput] = useState("");
     const [fertProductDropdownOpen, setFertProductDropdownOpen] = useState(false);
     const productInputRef = useRef<HTMLInputElement>(null);
+
+    // Catálogo global: cache único de resultados de la última búsqueda que se
+    // reusa para primario/secundarios/fertilizante (la query es la misma).
+    const [catalogoQuery, setCatalogoQuery] = useState("");
+    const [catalogoResults, setCatalogoResults] = useState<CatalogoProducto[]>([]);
 
     useEffect(() => {
         if (isOpen && sheet === "tratamientos" && editTratamientoId) {
@@ -137,6 +142,67 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
         return (cuaderno.productos || []).filter(
             (p) => (p.nombre_comercial || "").toLowerCase().includes(qq)
         );
+    };
+
+    /** Cargar resultados del catálogo global con debounce. Evita llamadas por cada tecla. */
+    useEffect(() => {
+        if (!isOpen) return;
+        if (sheet !== "tratamientos" && sheet !== "fertilizantes") return;
+        const handle = setTimeout(async () => {
+            try {
+                const { productos } = await api.searchCatalogoProductos(catalogoQuery, 15);
+                setCatalogoResults(Array.isArray(productos) ? productos : []);
+            } catch {
+                setCatalogoResults([]);
+            }
+        }, 200);
+        return () => clearTimeout(handle);
+    }, [isOpen, sheet, catalogoQuery]);
+
+    /**
+     * Filtra los resultados del catálogo global para una búsqueda concreta,
+     * excluyendo los que ya existen en el inventario del cuaderno (mismo nombre+registro).
+     */
+    const catalogoFiltradoPorTexto = (q: string): CatalogoProducto[] => {
+        const qq = (q || "").trim().toLowerCase();
+        const localClaves = new Set(
+            (cuaderno.productos || []).map(
+                (p) => `${(p.nombre_comercial || "").trim().toLowerCase()}||${(p.numero_registro || "").trim().toLowerCase()}`
+            )
+        );
+        const results = catalogoResults.filter((c) => {
+            const clave = `${(c.nombre_comercial || "").trim().toLowerCase()}||${(c.numero_registro || "").trim().toLowerCase()}`;
+            if (localClaves.has(clave)) return false;
+            if (!qq) return true;
+            return (
+                (c.nombre_comercial || "").toLowerCase().includes(qq) ||
+                (c.numero_registro || "").toLowerCase().includes(qq) ||
+                (c.materia_activa || "").toLowerCase().includes(qq)
+            );
+        });
+        return results.slice(0, 8);
+    };
+
+    /**
+     * Selecciona un producto del catálogo global: lo importa al inventario del cuaderno
+     * y devuelve los campos ya listos para meter en el formulario.
+     */
+    const importarCatalogoProducto = async (catalogoId: string): Promise<{ id: string; nombre_comercial: string; numero_registro: string; numero_lote: string } | null> => {
+        try {
+            const resp = await api.importarProductoDesdeCatalogo(cuaderno.id, catalogoId);
+            const p = resp?.producto || {};
+            // Refrescar la lista global del cuaderno en segundo plano.
+            try { onSuccess(); } catch { /* noop */ }
+            return {
+                id: p.id || "",
+                nombre_comercial: p.nombre_comercial || "",
+                numero_registro: p.numero_registro || "",
+                numero_lote: p.numero_lote || "",
+            };
+        } catch (err: any) {
+            alert(`No se pudo importar del catálogo: ${err?.message || err}`);
+            return null;
+        }
     };
 
     const parcelasOrdenadas = useMemo(() => {
@@ -677,6 +743,7 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                     onChange={(e) => {
                                         const v = e.target.value;
                                         setProductInputValue(v);
+                                        setCatalogoQuery(v);
                                         setProductDropdownOpen(true);
                                         setFormData((prev) => ({
                                             ...prev,
@@ -686,18 +753,20 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                             numero_lote: prev.producto_id ? "" : prev.numero_lote,
                                         }));
                                     }}
-                                    onFocus={() => setProductDropdownOpen(true)}
+                                    onFocus={() => { setProductDropdownOpen(true); setCatalogoQuery(productInputValue); }}
                                     onBlur={() => setTimeout(() => setProductDropdownOpen(false), 150)}
                                     placeholder="Seleccionar producto existente o escribir para crear uno nuevo"
                                     className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 text-sm focus:outline-none focus:border-green-500 transition-colors"
                                 />
-                                {productDropdownOpen && (
-                                    <div className="absolute z-10 mt-1 w-full max-h-48 overflow-y-auto rounded-lg bg-white border border-gray-300 shadow-xl">
+                                {productDropdownOpen && (() => {
+                                    const cat = catalogoFiltradoPorTexto(productInputValue);
+                                    return (
+                                    <div className="absolute z-10 mt-1 w-full max-h-56 overflow-y-auto rounded-lg bg-white border border-gray-300 shadow-xl">
                                         {productosFiltrados.length > 0 ? (
                                             <>
                                                 {!productInputValue.trim() && (
                                                     <div className="px-3 py-1.5 text-[11px] text-gray-500 border-b border-gray-300">
-                                                        {productosFiltrados.length} producto(s) en la hoja — selecciona o escribe para crear
+                                                        {productosFiltrados.length} producto(s) en este cuaderno
                                                     </div>
                                                 )}
                                                 {productosFiltrados.map((p) => (
@@ -727,11 +796,46 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                             </>
                                         ) : (
                                             <div className="px-3 py-2 text-sm text-gray-500">
-                                                No hay coincidencias. Guarda el tratamiento para crear &quot;{productInputValue || "..."}&quot; en la hoja de Productos
+                                                No hay coincidencias en este cuaderno. Usa el catálogo global o guarda para crear &quot;{productInputValue || "..."}&quot;.
                                             </div>
                                         )}
+                                        {cat.length > 0 && (
+                                            <>
+                                                <div className="px-3 py-1.5 text-[11px] text-indigo-700 bg-indigo-50 border-y border-indigo-200">
+                                                    Catálogo global ({cat.length})
+                                                </div>
+                                                {cat.map((c) => (
+                                                    <button
+                                                        key={`cat-${c.id}`}
+                                                        type="button"
+                                                        onMouseDown={async (e) => {
+                                                            e.preventDefault();
+                                                            const imported = await importarCatalogoProducto(c.id);
+                                                            if (!imported) return;
+                                                            setProductInputValue(imported.nombre_comercial);
+                                                            setFormData((prev) => ({
+                                                                ...prev,
+                                                                producto_id: imported.id,
+                                                                nombre_comercial: imported.nombre_comercial,
+                                                                numero_registro: imported.numero_registro,
+                                                                numero_lote: imported.numero_lote,
+                                                            }));
+                                                            setProductDropdownOpen(false);
+                                                        }}
+                                                        className="w-full px-3 py-2 text-left text-sm text-gray-800 hover:bg-indigo-50 transition-colors flex items-center gap-2"
+                                                    >
+                                                        <span className="inline-block px-1.5 py-0.5 text-[10px] font-semibold rounded bg-indigo-100 text-indigo-700">GLOBAL</span>
+                                                        <span>{c.nombre_comercial}</span>
+                                                        {c.numero_registro && (
+                                                            <span className="text-gray-500 text-xs">({c.numero_registro})</span>
+                                                        )}
+                                                    </button>
+                                                ))}
+                                            </>
+                                        )}
                                     </div>
-                                )}
+                                    );
+                                })()}
                             </div>
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
@@ -809,22 +913,26 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                                         type="text"
                                                         value={p.nombre_comercial || ""}
                                                         onChange={(e) => {
+                                                            const v = e.target.value;
                                                             const list = [...(formData.productos_lista || [])];
                                                             list[idx + 1] = {
                                                                 ...list[idx + 1],
-                                                                nombre_comercial: e.target.value,
+                                                                nombre_comercial: v,
                                                                 producto_id: "",
                                                             };
                                                             setFormData((prev) => ({ ...prev, productos_lista: list }));
                                                             setSecDropdownOpen(idx);
+                                                            setCatalogoQuery(v);
                                                         }}
-                                                        onFocus={() => setSecDropdownOpen(idx)}
-                                                        onBlur={() => setTimeout(() => setSecDropdownOpen((o) => (o === idx ? null : o)), 150)}
-                                                        placeholder="Producto (inventario o nuevo)"
+                                                        onFocus={() => { setSecDropdownOpen(idx); setCatalogoQuery(p.nombre_comercial || ""); }}
+                                                        onBlur={() => setTimeout(() => setSecDropdownOpen((o) => (o === idx ? null : o)), 200)}
+                                                        placeholder="Producto (inventario o catálogo)"
                                                         className="w-full px-2 py-1.5 rounded border border-gray-300 text-sm"
                                                     />
-                                                    {secDropdownOpen === idx && (
-                                                        <div className="absolute z-20 mt-1 w-full max-h-40 overflow-y-auto rounded-lg bg-white border border-gray-300 shadow-xl">
+                                                    {secDropdownOpen === idx && (() => {
+                                                        const secCat = catalogoFiltradoPorTexto(p.nombre_comercial || "");
+                                                        return (
+                                                        <div className="absolute z-20 mt-1 w-full max-h-48 overflow-y-auto rounded-lg bg-white border border-gray-300 shadow-xl">
                                                             {secFiltered.length > 0 ? (
                                                                 secFiltered.map((pr) => (
                                                                     <button
@@ -852,10 +960,46 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                                                     </button>
                                                                 ))
                                                             ) : (
-                                                                <div className="px-3 py-2 text-xs text-gray-500">Sin coincidencias</div>
+                                                                <div className="px-3 py-2 text-xs text-gray-500">Sin coincidencias en este cuaderno</div>
+                                                            )}
+                                                            {secCat.length > 0 && (
+                                                                <>
+                                                                    <div className="px-3 py-1 text-[10px] text-indigo-700 bg-indigo-50 border-y border-indigo-200">
+                                                                        Catálogo global ({secCat.length})
+                                                                    </div>
+                                                                    {secCat.map((c) => (
+                                                                        <button
+                                                                            key={`seccat-${c.id}`}
+                                                                            type="button"
+                                                                            onMouseDown={async (e) => {
+                                                                                e.preventDefault();
+                                                                                const imported = await importarCatalogoProducto(c.id);
+                                                                                if (!imported) return;
+                                                                                const list = [...(formData.productos_lista || [])];
+                                                                                list[idx + 1] = {
+                                                                                    ...list[idx + 1],
+                                                                                    producto_id: imported.id,
+                                                                                    nombre_comercial: imported.nombre_comercial,
+                                                                                    numero_registro: imported.numero_registro,
+                                                                                    numero_lote: imported.numero_lote || list[idx + 1]?.numero_lote,
+                                                                                };
+                                                                                setFormData((prev) => ({ ...prev, productos_lista: list }));
+                                                                                setSecDropdownOpen(null);
+                                                                            }}
+                                                                            className="w-full px-3 py-2 text-left text-sm text-gray-800 hover:bg-indigo-50 flex items-center gap-2"
+                                                                        >
+                                                                            <span className="inline-block px-1.5 py-0.5 text-[10px] font-semibold rounded bg-indigo-100 text-indigo-700">GLOBAL</span>
+                                                                            <span>{c.nombre_comercial}</span>
+                                                                            {c.numero_registro && (
+                                                                                <span className="text-gray-500 text-xs">({c.numero_registro})</span>
+                                                                            )}
+                                                                        </button>
+                                                                    ))}
+                                                                </>
                                                             )}
                                                         </div>
-                                                    )}
+                                                        );
+                                                    })()}
                                                 </div>
                                                 <input
                                                     type="text"
@@ -1105,18 +1249,23 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                     type="text"
                                     value={fertProdInput}
                                     onChange={(e) => {
-                                        setFertProdInput(e.target.value);
+                                        const v = e.target.value;
+                                        setFertProdInput(v);
                                         setFertProductDropdownOpen(true);
+                                        setCatalogoQuery(v);
                                     }}
-                                    onFocus={() => setFertProductDropdownOpen(true)}
-                                    onBlur={() => setTimeout(() => setFertProductDropdownOpen(false), 180)}
+                                    onFocus={() => { setFertProductDropdownOpen(true); setCatalogoQuery(fertProdInput); }}
+                                    onBlur={() => setTimeout(() => setFertProductDropdownOpen(false), 200)}
                                     placeholder="Nombre comercial — rellena abono y N/P/K si la formulación es tipo 10-20-10"
                                     className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 text-sm focus:outline-none focus:border-green-500 transition-colors"
                                 />
-                                {fertProductDropdownOpen && (
-                                    <div className="absolute z-10 mt-1 w-full max-h-44 overflow-y-auto rounded-lg bg-white border border-gray-300 shadow-xl">
-                                        {productosFiltradosPorTexto(fertProdInput).length > 0 ? (
-                                            productosFiltradosPorTexto(fertProdInput).map((pr) => (
+                                {fertProductDropdownOpen && (() => {
+                                    const fertLocales = productosFiltradosPorTexto(fertProdInput);
+                                    const fertCat = catalogoFiltradoPorTexto(fertProdInput);
+                                    return (
+                                    <div className="absolute z-10 mt-1 w-full max-h-56 overflow-y-auto rounded-lg bg-white border border-gray-300 shadow-xl">
+                                        {fertLocales.length > 0 ? (
+                                            fertLocales.map((pr) => (
                                                 <button
                                                     key={pr.id}
                                                     type="button"
@@ -1140,10 +1289,44 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                                 </button>
                                             ))
                                         ) : (
-                                            <div className="px-3 py-2 text-sm text-gray-500">Sin coincidencias</div>
+                                            <div className="px-3 py-2 text-sm text-gray-500">Sin coincidencias en este cuaderno</div>
+                                        )}
+                                        {fertCat.length > 0 && (
+                                            <>
+                                                <div className="px-3 py-1 text-[10px] text-indigo-700 bg-indigo-50 border-y border-indigo-200">
+                                                    Catálogo global ({fertCat.length})
+                                                </div>
+                                                {fertCat.map((c) => (
+                                                    <button
+                                                        key={`fertcat-${c.id}`}
+                                                        type="button"
+                                                        onMouseDown={async (e) => {
+                                                            e.preventDefault();
+                                                            const imported = await importarCatalogoProducto(c.id);
+                                                            if (!imported) return;
+                                                            const npk = (c.formulacion || "").trim();
+                                                            setFormData((prev) => ({
+                                                                ...prev,
+                                                                tipo_abono: imported.nombre_comercial || prev.tipo_abono,
+                                                                riqueza_npk: formulacionPareceNpk(npk) ? npk : prev.riqueza_npk,
+                                                            }));
+                                                            setFertProdInput(imported.nombre_comercial || "");
+                                                            setFertProductDropdownOpen(false);
+                                                        }}
+                                                        className="w-full px-3 py-2 text-left text-sm text-gray-800 hover:bg-indigo-50 flex items-center gap-2"
+                                                    >
+                                                        <span className="inline-block px-1.5 py-0.5 text-[10px] font-semibold rounded bg-indigo-100 text-indigo-700">GLOBAL</span>
+                                                        <span>{c.nombre_comercial}</span>
+                                                        {c.formulacion && (
+                                                            <span className="text-gray-500 text-xs">({c.formulacion})</span>
+                                                        )}
+                                                    </button>
+                                                ))}
+                                            </>
                                         )}
                                     </div>
-                                )}
+                                    );
+                                })()}
                             </div>
                             <div className="grid grid-cols-2 gap-4">
                                 <div>

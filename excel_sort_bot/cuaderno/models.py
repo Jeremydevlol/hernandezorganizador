@@ -582,7 +582,24 @@ class CuadernoExplotacion:
         """
         Añade un tratamiento (registro único, sin desglose).
         Para el flujo normal usar agregar_tratamiento_desglosado.
+
+        Invariante de seguridad: si la fila referencia parcelas de cultivos
+        distintos, la desglosamos automáticamente en una fila por parcela para
+        no mezclar cultivos (p.ej. girasol + garbanzos en una misma línea).
         """
+        pids = [pid for pid in (tratamiento.parcela_ids or []) if pid]
+        if len(pids) > 1:
+            cultivos = set()
+            for pid in pids:
+                p = self.obtener_parcela(pid)
+                if p:
+                    c = (p.especie or p.cultivo or "").strip().upper()
+                    if c:
+                        cultivos.add(c)
+            if len(cultivos) > 1:
+                creados = self.agregar_tratamiento_desglosado(tratamiento)
+                return creados[0] if creados else tratamiento
+
         self._sincronizar_campos_tratamiento(tratamiento)
         self._enriquecer_productos(tratamiento)
         self.tratamientos.append(tratamiento)
@@ -856,10 +873,11 @@ class CuadernoExplotacion:
             if (p.especie or p.cultivo or "").strip()
         })
         if not tratamiento.cultivo_especie:
-            if len(especies) == 1:
+            # Nunca dejar "MIXTO": si hay varias parcelas con cultivos distintos,
+            # usamos el primero (alfabético). La invariante real (1 tratamiento = 1 cultivo)
+            # se garantiza mediante reparar_tratamientos_multi_cultivo().
+            if especies:
                 tratamiento.cultivo_especie = especies[0]
-            elif len(especies) > 1:
-                tratamiento.cultivo_especie = "MIXTO"
 
         if not tratamiento.superficie_tratada or tratamiento.superficie_tratada <= 0:
             total_sup = sum(
@@ -907,6 +925,99 @@ class CuadernoExplotacion:
                 return True
         return False
     
+    def reparar_tratamientos_multi_cultivo(self) -> int:
+        """
+        Invariante estructural: un tratamiento = una única parcela (y por tanto
+        un único cultivo). Cualquier tratamiento existente con parcelas de cultivos
+        distintos se divide en N tratamientos (uno por parcela), preservando
+        fecha, productos, operador, observaciones, etc.
+
+        También parte los tratamientos con varias parcelas aunque sean del mismo
+        cultivo, para normalizar la estructura (1 línea por parcela × producto).
+
+        Es idempotente: si ya está todo separado, no cambia nada.
+        Devuelve el número de tratamientos que se han dividido.
+        """
+        nuevos: List[Tratamiento] = []
+        reparados = 0
+        cambios = False
+        for t in self.tratamientos:
+            pids = [pid for pid in (t.parcela_ids or []) if pid]
+            if len(pids) <= 1:
+                nuevos.append(t)
+                continue
+
+            parcelas = [self.obtener_parcela(pid) for pid in pids]
+            parcelas_validas = [(pid, p) for pid, p in zip(pids, parcelas) if p]
+            if not parcelas_validas:
+                nuevos.append(t)
+                continue
+
+            cultivos = {
+                (p.especie or p.cultivo or "").strip().upper()
+                for _, p in parcelas_validas
+                if (p.especie or p.cultivo or "").strip()
+            }
+
+            # Si todas las parcelas comparten el mismo cultivo, no rompemos
+            # agrupaciones legítimas (p.ej. un tratamiento a varias parcelas de trigo).
+            if len(cultivos) <= 1:
+                nuevos.append(t)
+                continue
+
+            # Hay cultivos distintos → partir en una fila por parcela.
+            reparados += 1
+            cambios = True
+            for pid, p in parcelas_validas:
+                sup = float(p.superficie_cultivada or p.superficie_ha or p.superficie_sigpac or 0)
+                cultivo = (p.especie or p.cultivo or "").strip().upper()
+                orden = str(p.num_orden) if isinstance(p.num_orden, int) and p.num_orden > 0 else ""
+                productos_copia = [
+                    ProductoAplicado(
+                        producto_id=prod.producto_id,
+                        nombre_comercial=prod.nombre_comercial,
+                        numero_registro=prod.numero_registro,
+                        numero_lote=getattr(prod, "numero_lote", "") or "",
+                        problema_fitosanitario=getattr(prod, "problema_fitosanitario", "") or "",
+                        dosis=prod.dosis,
+                        unidad_dosis=prod.unidad_dosis,
+                        caldo_hectarea=prod.caldo_hectarea,
+                        notas=prod.notas,
+                    )
+                    for prod in (t.productos or [])
+                ]
+                nuevo = Tratamiento(
+                    parcela_ids=[pid],
+                    parcela_nombres=[p.nombre] if p.nombre else [],
+                    num_orden_parcelas=orden,
+                    cultivo_especie=cultivo or t.cultivo_especie,
+                    cultivo_variedad=t.cultivo_variedad or p.variedad,
+                    superficie_tratada=round(sup, 2) if sup else t.superficie_tratada,
+                    fecha_aplicacion=t.fecha_aplicacion,
+                    problema_fitosanitario=t.problema_fitosanitario,
+                    plaga_enfermedad=t.plaga_enfermedad,
+                    aplicador=t.aplicador,
+                    operador=t.operador,
+                    equipo=t.equipo,
+                    productos=productos_copia,
+                    eficacia=t.eficacia,
+                    observaciones=t.observaciones,
+                    justificacion=t.justificacion,
+                    metodo_aplicacion=t.metodo_aplicacion,
+                    condiciones_climaticas=t.condiciones_climaticas,
+                    hora_inicio=t.hora_inicio,
+                    hora_fin=t.hora_fin,
+                    estado=t.estado,
+                    color_fila=t.color_fila,
+                )
+                nuevos.append(nuevo)
+
+        if cambios:
+            self.tratamientos = nuevos
+            self.ordenar_tratamientos()
+            self._actualizar_modificacion()
+        return reparados
+
     def _actualizar_modificacion(self):
         """Actualiza fecha de modificación"""
         self.fecha_modificacion = datetime.now().isoformat()

@@ -22,6 +22,7 @@ from .models import (
     Fertilizacion, Cosecha
 )
 from .storage import get_storage
+from .productos_catalogo import get_catalogo
 from .pdf_generator import PDFGenerator, _sort_key_parcela
 from .file_processor import FileProcessor, get_processor
 
@@ -73,6 +74,34 @@ class ProductoCreate(BaseModel):
     proveedor: str = ""
     fecha_caducidad: str = ""
     notas: str = ""
+
+
+class CatalogoProductoCreate(BaseModel):
+    """Producto en el catálogo global (compartido entre todos los cuadernos)."""
+    nombre_comercial: str
+    numero_registro: str = ""
+    materia_activa: str = ""
+    formulacion: str = ""
+    tipo: str = "fitosanitario"
+    unidad: str = "L"
+    proveedor: str = ""
+    notas: str = ""
+
+
+class CatalogoProductoUpdate(BaseModel):
+    nombre_comercial: Optional[str] = None
+    numero_registro: Optional[str] = None
+    materia_activa: Optional[str] = None
+    formulacion: Optional[str] = None
+    tipo: Optional[str] = None
+    unidad: Optional[str] = None
+    proveedor: Optional[str] = None
+    notas: Optional[str] = None
+
+
+class ImportarDesdeCatalogoRequest(BaseModel):
+    """Importa un producto del catálogo global al inventario del cuaderno."""
+    catalogo_id: str
 
 
 class ProductoAplicadoCreate(BaseModel):
@@ -551,6 +580,139 @@ async def eliminar_producto(cuaderno_id: str, producto_id: str):
         raise HTTPException(status_code=404, detail="Producto no encontrado")
     storage.guardar(cuaderno)
     return {"success": True, "message": "Producto eliminado"}
+
+
+# ============================================
+# CATÁLOGO GLOBAL DE PRODUCTOS (compartido)
+# ============================================
+
+@router.get("/catalogo/productos")
+async def listar_catalogo_productos(q: str = "", limit: int = Query(default=50, le=200)):
+    """Busca productos en el catálogo GLOBAL (compartido entre todos los cuadernos)."""
+    try:
+        productos = get_catalogo().listar(q=q, limit=limit)
+        return {"productos": productos, "total": len(productos)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error listando catálogo: {e}")
+
+
+@router.post("/catalogo/productos")
+async def crear_catalogo_producto(data: CatalogoProductoCreate):
+    """Crea o actualiza (upsert por nombre+registro) un producto en el catálogo global."""
+    if not (data.nombre_comercial or "").strip():
+        raise HTTPException(status_code=400, detail="nombre_comercial es obligatorio")
+    try:
+        producto = get_catalogo().upsert(data.model_dump())
+        return {"success": True, "producto": producto}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error creando producto en catálogo: {e}")
+
+
+@router.put("/catalogo/productos/{producto_id}")
+async def actualizar_catalogo_producto(producto_id: str, data: CatalogoProductoUpdate):
+    """Actualiza un producto del catálogo global."""
+    patch = {k: v for k, v in data.model_dump().items() if v is not None}
+    try:
+        actualizado = get_catalogo().actualizar(producto_id, patch)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error actualizando catálogo: {e}")
+    if not actualizado:
+        raise HTTPException(status_code=404, detail="Producto no encontrado en catálogo")
+    return {"success": True, "producto": actualizado}
+
+
+@router.delete("/catalogo/productos/{producto_id}")
+async def eliminar_catalogo_producto(producto_id: str):
+    """Elimina un producto del catálogo global."""
+    try:
+        ok = get_catalogo().eliminar(producto_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error eliminando del catálogo: {e}")
+    if not ok:
+        raise HTTPException(status_code=404, detail="Producto no encontrado en catálogo")
+    return {"success": True, "message": "Producto eliminado del catálogo global"}
+
+
+@router.post("/{cuaderno_id}/productos/{producto_id}/publicar-catalogo")
+async def publicar_producto_en_catalogo(cuaderno_id: str, producto_id: str):
+    """Publica un producto del inventario del cuaderno en el catálogo global (upsert)."""
+    storage = get_storage()
+    cuaderno = storage.cargar(cuaderno_id)
+    if not cuaderno:
+        raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
+    prod = cuaderno.obtener_producto(producto_id)
+    if not prod:
+        raise HTTPException(status_code=404, detail="Producto no encontrado en el cuaderno")
+    try:
+        publicado = get_catalogo().upsert({
+            "nombre_comercial": prod.nombre_comercial,
+            "numero_registro": prod.numero_registro,
+            "materia_activa": prod.materia_activa,
+            "formulacion": prod.formulacion,
+            "tipo": prod.tipo.value if hasattr(prod.tipo, "value") else str(prod.tipo or "fitosanitario"),
+            "unidad": prod.unidad or "L",
+            "proveedor": prod.proveedor,
+            "notas": prod.notas,
+        })
+        return {"success": True, "producto": publicado, "message": "Publicado en el catálogo global"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error publicando en catálogo: {e}")
+
+
+@router.post("/{cuaderno_id}/catalogo/importar")
+async def importar_desde_catalogo(cuaderno_id: str, data: ImportarDesdeCatalogoRequest):
+    """
+    Importa un producto del catálogo global al inventario del cuaderno.
+    Si ya existe uno equivalente (mismo nombre+registro), lo reusa en vez de duplicar.
+    Devuelve el producto resultante dentro del cuaderno.
+    """
+    storage = get_storage()
+    cuaderno = storage.cargar(cuaderno_id)
+    if not cuaderno:
+        raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
+
+    cat = get_catalogo().obtener(data.catalogo_id)
+    if not cat:
+        raise HTTPException(status_code=404, detail="Producto no encontrado en el catálogo")
+
+    def _clave(nombre: str, registro: str) -> str:
+        return f"{(nombre or '').strip().lower()}||{(registro or '').strip().lower()}"
+
+    clave_cat = _clave(cat.get("nombre_comercial", ""), cat.get("numero_registro", ""))
+    existente = next(
+        (p for p in cuaderno.productos if _clave(p.nombre_comercial, p.numero_registro) == clave_cat),
+        None,
+    )
+    if existente:
+        return {
+            "success": True,
+            "producto": existente.to_dict(),
+            "reused": True,
+            "message": "Ya existía en el cuaderno; reutilizado.",
+        }
+
+    try:
+        tipo_val = cat.get("tipo") or "fitosanitario"
+        producto = ProductoFitosanitario(
+            nombre_comercial=cat.get("nombre_comercial", ""),
+            numero_registro=cat.get("numero_registro", ""),
+            materia_activa=cat.get("materia_activa", ""),
+            formulacion=cat.get("formulacion", ""),
+            tipo=TipoProducto(tipo_val) if tipo_val in [t.value for t in TipoProducto] else TipoProducto.FITOSANITARIO,
+            unidad=cat.get("unidad", "L") or "L",
+            proveedor=cat.get("proveedor", ""),
+            notas=cat.get("notas", ""),
+        )
+        cuaderno.agregar_producto(producto)
+        storage.guardar(cuaderno)
+        return {
+            "success": True,
+            "producto": producto.to_dict(),
+            "reused": False,
+            "message": "Producto importado del catálogo global",
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error importando del catálogo: {e}")
 
 
 # ============================================

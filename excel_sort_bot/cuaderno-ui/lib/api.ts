@@ -1,6 +1,8 @@
 // API client for Cuaderno de Explotación v2.0
 // Con soporte para upload de archivos y procesamiento GPT-4o
 
+import type { CatalogoProducto } from "@/lib/types";
+
 function getApiBase(): string {
     if (process.env.NEXT_PUBLIC_API_URL) {
         return `${process.env.NEXT_PUBLIC_API_URL}/api/cuaderno`;
@@ -283,6 +285,56 @@ export const api = {
         request<{ success: boolean }>(`/${cuadernoId}/productos/${productoId}`, {
             method: "DELETE",
         }),
+
+    // ============================================
+    // CATÁLOGO GLOBAL DE PRODUCTOS (compartido)
+    // ============================================
+
+    /** Buscar productos en el catálogo global compartido entre todos los cuadernos. */
+    searchCatalogoProductos: (q: string = "", limit: number = 20) => {
+        const search = new URLSearchParams();
+        if (q) search.set("q", q);
+        if (limit) search.set("limit", String(limit));
+        const qs = search.toString();
+        return request<{ productos: CatalogoProducto[]; total: number }>(
+            `/catalogo/productos${qs ? `?${qs}` : ""}`
+        );
+    },
+
+    /** Crea o actualiza un producto del catálogo global (upsert por nombre+registro). */
+    createCatalogoProducto: (data: Partial<CatalogoProducto> & { nombre_comercial: string }) =>
+        request<{ success: boolean; producto: CatalogoProducto }>(`/catalogo/productos`, {
+            method: "POST",
+            body: JSON.stringify(data),
+        }),
+
+    updateCatalogoProducto: (productoId: string, data: Partial<CatalogoProducto>) =>
+        request<{ success: boolean; producto: CatalogoProducto }>(`/catalogo/productos/${productoId}`, {
+            method: "PUT",
+            body: JSON.stringify(data),
+        }),
+
+    deleteCatalogoProducto: (productoId: string) =>
+        request<{ success: boolean }>(`/catalogo/productos/${productoId}`, {
+            method: "DELETE",
+        }),
+
+    /** Publica un producto del cuaderno en el catálogo global (upsert). */
+    publicarProductoEnCatalogo: (cuadernoId: string, productoId: string) =>
+        request<{ success: boolean; producto: CatalogoProducto; message?: string }>(
+            `/${cuadernoId}/productos/${productoId}/publicar-catalogo`,
+            { method: "POST" }
+        ),
+
+    /** Importa un producto del catálogo global al inventario del cuaderno. */
+    importarProductoDesdeCatalogo: (cuadernoId: string, catalogoId: string) =>
+        request<{ success: boolean; producto: any; reused: boolean; message?: string }>(
+            `/${cuadernoId}/catalogo/importar`,
+            {
+                method: "POST",
+                body: JSON.stringify({ catalogo_id: catalogoId }),
+            }
+        ),
 
     // Tratamientos
     createTratamiento: (cuadernoId: string, data: any) =>

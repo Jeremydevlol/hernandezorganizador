@@ -50,7 +50,17 @@ class LocalStorage:
         filepath = self._get_filepath(cuaderno_id)
         if not filepath.exists():
             return None
-        return CuadernoExplotacion.cargar(str(filepath))
+        cuaderno = CuadernoExplotacion.cargar(str(filepath))
+        # Auto-reparación de tratamientos que mezclan parcelas de cultivos distintos.
+        # Es idempotente: si no hay nada que reparar, no reescribe el fichero.
+        try:
+            reparados = cuaderno.reparar_tratamientos_multi_cultivo()
+            if reparados > 0:
+                cuaderno.guardar(str(filepath))
+                print(f"[auto-repair] Cuaderno {cuaderno_id}: {reparados} tratamiento(s) multi-cultivo divididos.")
+        except Exception as e:
+            print(f"[auto-repair] Error reparando cuaderno {cuaderno_id}: {e}")
+        return cuaderno
 
     def listar(self) -> List[Dict]:
         cuadernos = []
@@ -188,7 +198,17 @@ class SupabaseStorage:
         if not result.data:
             return None
         json_data = result.data[0]["data"]
-        return CuadernoExplotacion.from_dict(json_data)
+        cuaderno = CuadernoExplotacion.from_dict(json_data)
+        # Auto-reparación de tratamientos que mezclan parcelas de cultivos distintos.
+        # Idempotente: solo escribe en Supabase si hubo cambios reales.
+        try:
+            reparados = cuaderno.reparar_tratamientos_multi_cultivo()
+            if reparados > 0:
+                self.guardar(cuaderno)
+                print(f"[auto-repair] Cuaderno {cuaderno_id}: {reparados} tratamiento(s) multi-cultivo divididos.")
+        except Exception as e:
+            print(f"[auto-repair] Error reparando cuaderno {cuaderno_id}: {e}")
+        return cuaderno
 
     def listar(self) -> List[Dict]:
         result = self.client.table(self.table).select(
