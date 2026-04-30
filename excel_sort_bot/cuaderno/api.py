@@ -1024,6 +1024,7 @@ def _collect_productos_desde_cuadernos(q: str = "") -> List[Dict[str, Any]]:
     """
     Recolecta productos directamente desde todos los cuadernos (sin depender del
     backend del catálogo global), deduplicando por nombre+registro+unidad.
+    Usa caché en memoria cuando está disponible para evitar round-trips a Supabase.
     """
     storage = get_storage()
     q_norm = (q or "").strip().lower()
@@ -1032,6 +1033,36 @@ def _collect_productos_desde_cuadernos(q: str = "") -> List[Dict[str, Any]]:
     for meta in storage.listar():
         cid = meta.get("id")
         if not cid:
+            continue
+        # Intentar servir desde caché en memoria antes de ir a Supabase
+        cached = _cache_get(f"cuaderno::{cid}")
+        if cached is not None:
+            productos_raw = cached.get("cuaderno", {}).get("productos", [])
+            for p in productos_raw:
+                nombre = (p.get("nombre_comercial") or "").strip()
+                registro = (p.get("numero_registro") or "").strip()
+                materia = (p.get("materia_activa") or "").strip()
+                formulacion = (p.get("formulacion") or "").strip()
+                unidad = (p.get("unidad") or "L").strip()
+                proveedor = (p.get("proveedor") or "").strip()
+                notas = (p.get("notas") or "").strip()
+                if q_norm and not any(q_norm in (v or "").lower() for v in (nombre, registro, materia, formulacion, proveedor, notas)):
+                    continue
+                key = f"{nombre.lower()}||{registro.lower()}||{unidad.lower()}"
+                if key not in agg:
+                    agg[key] = {
+                        "id": f"cuaderno::{key}",
+                        "nombre_comercial": nombre,
+                        "numero_registro": registro,
+                        "materia_activa": materia,
+                        "formulacion": formulacion,
+                        "tipo": p.get("tipo") or "fitosanitario",
+                        "unidad": unidad,
+                        "proveedor": proveedor,
+                        "notas": notas,
+                        "created_at": "",
+                        "updated_at": "",
+                    }
             continue
         cuaderno = storage.cargar(cid)
         if not cuaderno:
@@ -1082,7 +1113,7 @@ def _collect_productos_desde_cuadernos(q: str = "") -> List[Dict[str, Any]]:
 
 
 @router.get("/catalog/global/productos")
-async def listar_catalogo_productos(q: str = "", limit: int = Query(default=50, le=200)):
+async def listar_catalogo_productos(background_tasks: BackgroundTasks, q: str = "", limit: int = Query(default=50, le=200)):
     """Busca productos en el catálogo GLOBAL (compartido entre todos los cuadernos)."""
     global _LAST_CATALOGO_SYNC_TS
     cache_key = f"catalog_global::{(q or '').strip().lower()}::{int(limit or 50)}"
@@ -1091,11 +1122,11 @@ async def listar_catalogo_productos(q: str = "", limit: int = Query(default=50, 
         return cached
 
     try:
-        # Evita sync completo en cada request (costoso con muchos cuadernos).
+        # Sync en background (no bloquea la petición): se ejecuta después de responder.
         now = time.time()
-        if now - _LAST_CATALOGO_SYNC_TS > 20:
-            _sync_catalogo_desde_cuadernos()
+        if now - _LAST_CATALOGO_SYNC_TS > 60:
             _LAST_CATALOGO_SYNC_TS = now
+            background_tasks.add_task(_sync_catalogo_desde_cuadernos)
         productos_catalogo = get_catalogo().listar(q=q, limit=limit)
     except Exception:
         productos_catalogo = []
@@ -1112,7 +1143,7 @@ async def listar_catalogo_productos(q: str = "", limit: int = Query(default=50, 
                 merged[key] = p
         productos = sorted(merged.values(), key=lambda r: (r.get("nombre_comercial") or "").lower())[: max(1, int(limit or 50))]
         payload = {"productos": productos, "total": len(productos)}
-        _cache_set(cache_key, payload, ttl_sec=10)
+        _cache_set(cache_key, payload, ttl_sec=30)
         return payload
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error listando catálogo: {e}")
@@ -1677,7 +1708,17 @@ async def get_stock_global():
         cid = meta.get("id")
         if not cid:
             continue
-        cuaderno = storage.cargar(cid)
+        # Usar caché en memoria primero para evitar round-trips a Supabase
+        cached_c = _cache_get(f"cuaderno::{cid}")
+        if cached_c is not None:
+            cdata = cached_c.get("cuaderno", {})
+            from .models import CuadernoExplotacion
+            try:
+                cuaderno = CuadernoExplotacion.from_dict(cdata)
+            except Exception:
+                cuaderno = storage.cargar(cid)
+        else:
+            cuaderno = storage.cargar(cid)
         if not cuaderno:
             continue
 
