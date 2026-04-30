@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { X } from "lucide-react";
 import { Cuaderno, SheetType, CatalogoProducto } from "@/lib/types";
 import { api } from "@/lib/api";
+import SignatureModal from "./SignatureModal";
 import { fechaFlexibleAISO, fechaFlexibleADDMMYYYY, isoToDisplayDDMM, normalizeSpanishDateInput } from "@/lib/dateSpanish";
 import { parseDecimalInput } from "@/lib/parseDecimal";
 
@@ -52,6 +53,11 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
     const [fertProductDropdownOpen, setFertProductDropdownOpen] = useState(false);
     const productInputRef = useRef<HTMLInputElement>(null);
     const importingGlobalRef = useRef(false);
+
+    // Firmas del asesor y del cliente (base64 PNG)
+    const [firmaAsesor, setFirmaAsesor] = useState<string>("");
+    const [firmaCliente, setFirmaCliente] = useState<string>("");
+    const [sigModalOpen, setSigModalOpen] = useState<"asesor" | "cliente" | null>(null);
 
     // Sugerencias únicas de problemática/plaga de tratamientos existentes
     const plagaSugerencias = useMemo(() => {
@@ -176,7 +182,7 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
         if (sheet !== "tratamientos" && sheet !== "fertilizantes") return;
         const handle = setTimeout(async () => {
             try {
-                const { productos } = await api.searchCatalogoProductos(catalogoQuery, 15);
+                const { productos } = await api.searchCatalogoProductos(catalogoQuery, 200);
                 setCatalogoResults(Array.isArray(productos) ? productos : []);
             } catch {
                 setCatalogoResults([]);
@@ -186,19 +192,12 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
     }, [isOpen, sheet, catalogoQuery]);
 
     /**
-     * Filtra los resultados del catálogo global para una búsqueda concreta,
-     * excluyendo los que ya existen en el inventario del cuaderno (mismo nombre+registro).
+     * Filtra los resultados del catálogo global para una búsqueda concreta.
+     * Muestra todos los globales disponibles; los ya importados aparecen marcados.
      */
     const catalogoFiltradoPorTexto = (q: string): CatalogoProducto[] => {
         const qq = (q || "").trim().toLowerCase();
-        const localClaves = new Set(
-            (cuaderno.productos || []).map(
-                (p) => `${(p.nombre_comercial || "").trim().toLowerCase()}||${(p.numero_registro || "").trim().toLowerCase()}`
-            )
-        );
         const results = catalogoResults.filter((c) => {
-            const clave = `${(c.nombre_comercial || "").trim().toLowerCase()}||${(c.numero_registro || "").trim().toLowerCase()}`;
-            if (localClaves.has(clave)) return false;
             if (!qq) return true;
             return (
                 (c.nombre_comercial || "").toLowerCase().includes(qq) ||
@@ -206,7 +205,7 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                 (c.materia_activa || "").toLowerCase().includes(qq)
             );
         });
-        return results.slice(0, 8);
+        return results.slice(0, 100);
     };
 
     /**
@@ -217,8 +216,8 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
         try {
             const resp = await api.importarProductoDesdeCatalogo(cuaderno.id, catalogoId);
             const p = resp?.producto || {};
-            // Refrescar la lista global del cuaderno en segundo plano.
-            try { onSuccess(); } catch { /* noop */ }
+            // No llamar onSuccess() aquí: cerraría el modal mientras el usuario
+            // sigue rellenando el formulario. El refresh ocurrirá al guardar.
             return {
                 id: p.id || "",
                 nombre_comercial: p.nombre_comercial || "",
@@ -443,6 +442,7 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                     setLoading(false);
                     return;
                 }
+                const asesorado = String(formData.asesorado || "") === "true";
                 const payload = {
                     fecha_aplicacion: fechaAFormatoISO(formData.fecha_aplicacion || "") || new Date().toISOString().split("T")[0],
                     parcela_ids: parcelaIds,
@@ -452,6 +452,13 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                     equipo: formData.equipo || "1",
                     eficacia: formData.eficacia || "BUENA",
                     observaciones: formData.observaciones || "",
+                    // Asesoramiento
+                    asesorado,
+                    nombre_asesor_trat: asesorado ? (formData.nombre_asesor_trat || "") : "",
+                    num_colegiado_asesor: asesorado ? (formData.num_colegiado_asesor || "") : "",
+                    fecha_recomendacion_asesor: asesorado ? (fechaAFormatoISO(formData.fecha_recomendacion_asesor || "") || "") : "",
+                    firma_asesor: asesorado ? firmaAsesor : "",
+                    firma_cliente: asesorado ? firmaCliente : "",
                 };
                 if (editTratamientoId) {
                     await api.updateTratamiento(cuaderno.id, editTratamientoId, payload);
@@ -1259,6 +1266,122 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                     <option value="MALA">MALA</option>
                                 </select>
                             </div>
+
+                            {/* ── Sección asesoramiento ── */}
+                            <div className="border border-blue-200 rounded-xl bg-blue-50/50 p-4 space-y-3">
+                                <label className="flex items-center gap-2 cursor-pointer select-none">
+                                    <input
+                                        type="checkbox"
+                                        name="asesorado"
+                                        checked={String(formData.asesorado) === "true"}
+                                        onChange={(e) =>
+                                            setFormData((prev: any) => ({ ...prev, asesorado: e.target.checked ? "true" : "false" }))
+                                        }
+                                        className="w-4 h-4 rounded border-gray-400 text-blue-600 focus:ring-blue-500"
+                                    />
+                                    <span className="text-sm font-medium text-blue-800">Tratamiento asesorado</span>
+                                    <span className="text-xs text-blue-500 bg-blue-100 px-2 py-0.5 rounded-full">Hoja 3.2</span>
+                                </label>
+
+                                {String(formData.asesorado) === "true" && (
+                                    <div className="space-y-3 pt-1">
+                                        <div className="grid grid-cols-2 gap-3">
+                                            <div>
+                                                <label className="block text-xs font-medium text-gray-600 mb-1">Nombre del asesor *</label>
+                                                <input
+                                                    type="text"
+                                                    name="nombre_asesor_trat"
+                                                    value={formData.nombre_asesor_trat || ""}
+                                                    onChange={handleChange}
+                                                    placeholder="Nombre completo"
+                                                    className="w-full px-3 py-2 rounded-lg bg-white border border-gray-300 text-gray-900 text-sm focus:outline-none focus:border-blue-500 transition-colors"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs font-medium text-gray-600 mb-1">Nº colegiado</label>
+                                                <input
+                                                    type="text"
+                                                    name="num_colegiado_asesor"
+                                                    value={formData.num_colegiado_asesor || ""}
+                                                    onChange={handleChange}
+                                                    placeholder="Ej: CAM-12345"
+                                                    className="w-full px-3 py-2 rounded-lg bg-white border border-gray-300 text-gray-900 text-sm focus:outline-none focus:border-blue-500 transition-colors"
+                                                />
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-medium text-gray-600 mb-1">Fecha de recomendación</label>
+                                            <input
+                                                type="text"
+                                                name="fecha_recomendacion_asesor"
+                                                value={formData.fecha_recomendacion_asesor || ""}
+                                                onChange={handleChange}
+                                                onBlur={() => blurNormalizeDateField("fecha_recomendacion_asesor")}
+                                                placeholder="DD/MM/AAAA"
+                                                className="w-full px-3 py-2 rounded-lg bg-white border border-gray-300 text-gray-900 text-sm focus:outline-none focus:border-blue-500 transition-colors"
+                                            />
+                                        </div>
+
+                                        {/* Firmas */}
+                                        <div className="grid grid-cols-2 gap-3 pt-1">
+                                            <div className="space-y-1">
+                                                <p className="text-xs font-medium text-gray-600">Firma del asesor</p>
+                                                {firmaAsesor ? (
+                                                    <div className="relative group">
+                                                        <img
+                                                            src={firmaAsesor}
+                                                            alt="Firma asesor"
+                                                            className="w-full h-16 object-contain border border-gray-200 rounded-lg bg-white"
+                                                        />
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setSigModalOpen("asesor")}
+                                                            className="absolute inset-0 flex items-center justify-center bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity rounded-lg text-white text-xs font-medium"
+                                                        >
+                                                            Cambiar
+                                                        </button>
+                                                    </div>
+                                                ) : (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setSigModalOpen("asesor")}
+                                                        className="w-full h-16 flex items-center justify-center gap-1.5 border-2 border-dashed border-blue-300 rounded-lg text-blue-600 text-xs font-medium hover:bg-blue-50 transition-colors"
+                                                    >
+                                                        ✍️ Firmar asesor
+                                                    </button>
+                                                )}
+                                            </div>
+                                            <div className="space-y-1">
+                                                <p className="text-xs font-medium text-gray-600">Firma del titular</p>
+                                                {firmaCliente ? (
+                                                    <div className="relative group">
+                                                        <img
+                                                            src={firmaCliente}
+                                                            alt="Firma titular"
+                                                            className="w-full h-16 object-contain border border-gray-200 rounded-lg bg-white"
+                                                        />
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setSigModalOpen("cliente")}
+                                                            className="absolute inset-0 flex items-center justify-center bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity rounded-lg text-white text-xs font-medium"
+                                                        >
+                                                            Cambiar
+                                                        </button>
+                                                    </div>
+                                                ) : (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setSigModalOpen("cliente")}
+                                                        className="w-full h-16 flex items-center justify-center gap-1.5 border-2 border-dashed border-blue-300 rounded-lg text-blue-600 text-xs font-medium hover:bg-blue-50 transition-colors"
+                                                    >
+                                                        ✍️ Firmar titular
+                                                    </button>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
                         </>
                     )}
 
@@ -1762,6 +1885,20 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                     </button>
                 </div>
             </div>
+
+            {/* Modal de firma (se monta encima del modal principal) */}
+            {sigModalOpen && (
+                <SignatureModal
+                    title={sigModalOpen === "asesor" ? "Firma del asesor" : "Firma del titular"}
+                    existingSignature={sigModalOpen === "asesor" ? firmaAsesor : firmaCliente}
+                    onConfirm={(dataUrl) => {
+                        if (sigModalOpen === "asesor") setFirmaAsesor(dataUrl);
+                        else setFirmaCliente(dataUrl);
+                        setSigModalOpen(null);
+                    }}
+                    onClose={() => setSigModalOpen(null)}
+                />
+            )}
         </div>
     );
 }

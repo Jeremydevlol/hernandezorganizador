@@ -404,6 +404,13 @@ class TratamientoCreate(BaseModel):
     hora_inicio: str = ""
     hora_fin: str = ""
     observaciones: str = ""
+    # Asesoramiento
+    asesorado: bool = False
+    nombre_asesor_trat: str = ""
+    num_colegiado_asesor: str = ""
+    fecha_recomendacion_asesor: str = ""
+    firma_asesor: str = ""
+    firma_cliente: str = ""
 
 
 class FertilizacionCreate(BaseModel):
@@ -460,6 +467,13 @@ class TratamientoUpdate(BaseModel):
     hora_inicio: Optional[str] = None
     hora_fin: Optional[str] = None
     observaciones: Optional[str] = None
+    # Asesoramiento
+    asesorado: Optional[bool] = None
+    nombre_asesor_trat: Optional[str] = None
+    num_colegiado_asesor: Optional[str] = None
+    fecha_recomendacion_asesor: Optional[str] = None
+    firma_asesor: Optional[str] = None
+    firma_cliente: Optional[str] = None
     color_fila: Optional[str] = None
 
 
@@ -1390,7 +1404,13 @@ async def crear_tratamiento(cuaderno_id: str, data: TratamientoCreate, backgroun
         eficacia=(data.eficacia or "BUENA").strip(),
         hora_inicio=data.hora_inicio,
         hora_fin=data.hora_fin,
-        observaciones=data.observaciones
+        observaciones=data.observaciones,
+        asesorado=data.asesorado,
+        nombre_asesor_trat=data.nombre_asesor_trat or "",
+        num_colegiado_asesor=data.num_colegiado_asesor or "",
+        fecha_recomendacion_asesor=data.fecha_recomendacion_asesor or "",
+        firma_asesor=data.firma_asesor or "",
+        firma_cliente=data.firma_cliente or "",
     )
     
     creados = cuaderno.agregar_tratamiento_desglosado(plantilla)
@@ -1411,11 +1431,31 @@ async def crear_tratamiento(cuaderno_id: str, data: TratamientoCreate, backgroun
                 consumo = float(prod_data.dosis or 0) * superficie_total
                 prod_obj.cantidad_adquirida = max(0.0, round(prod_obj.cantidad_adquirida - consumo, 4))
 
-    # 2. Actualizar caché con el estado nuevo ANTES de responder
+    # 2. Auto-publicar productos en catálogo global si no existen ya
+    #    Se hace best-effort en background para no añadir latencia
+    def _sync_prods_al_catalogo_global():
+        catalogo = get_catalogo()
+        for prod in productos_aplicados:
+            nombre = (prod.nombre_comercial or "").strip()
+            if not nombre:
+                continue
+            try:
+                catalogo.upsert({
+                    "nombre_comercial": nombre,
+                    "numero_registro": prod.numero_registro or "",
+                    "numero_lote": prod.numero_lote or "",
+                    "tipo": "fitosanitario",
+                })
+            except Exception:
+                pass
+
+    background_tasks.add_task(_sync_prods_al_catalogo_global)
+
+    # 3. Actualizar caché con el estado nuevo ANTES de responder
     #    → el próximo GET sirve datos frescos sin ir a Supabase
     _cache_set(cache_key, {"cuaderno": cuaderno.to_dict()}, ttl_sec=120)
 
-    # 3. Persistir en Supabase en segundo plano (no bloquea la respuesta)
+    # 4. Persistir en Supabase en segundo plano (no bloquea la respuesta)
     background_tasks.add_task(storage.guardar, cuaderno)
 
     return {

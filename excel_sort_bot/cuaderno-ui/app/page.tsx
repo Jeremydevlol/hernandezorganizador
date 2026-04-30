@@ -116,9 +116,17 @@ export default function Home() {
   }, [loadCuadernos]);
 
   // Tras inactividad (p. ej. Render free tier) el backend puede dormir: al volver a la pestaña reintentamos la lista.
+  // Se usa un throttle de 5 minutos para no refrescar si el usuario solo cambia de pestaña un momento.
+  const lastVisibleReloadRef = useRef<number>(0);
   useEffect(() => {
     const onVisible = () => {
-      if (document.visibilityState === "visible") loadCuadernos();
+      if (document.visibilityState === "visible") {
+        const now = Date.now();
+        if (now - lastVisibleReloadRef.current > 5 * 60 * 1000) {
+          lastVisibleReloadRef.current = now;
+          loadCuadernos();
+        }
+      }
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);

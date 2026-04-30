@@ -234,6 +234,13 @@ class Tratamiento:
     operador: str = ""                       # Alias de aplicador
     fecha_creacion: str = field(default_factory=lambda: datetime.now().isoformat())
     color_fila: str = ""                     # Color de fondo para marcar (hex, ej: #fef3c7). Vacío = blanco
+    # Asesoramiento vinculado al tratamiento
+    asesorado: bool = False
+    nombre_asesor_trat: str = ""            # Nombre del asesor que recomienda
+    num_colegiado_asesor: str = ""          # Nº colegiado / habilitación del asesor
+    fecha_recomendacion_asesor: str = ""    # Fecha de la recomendación
+    firma_asesor: str = ""                  # Firma del asesor (base64 PNG)
+    firma_cliente: str = ""                 # Firma del cliente/titular (base64 PNG)
     
     def to_dict(self) -> Dict:
         return {
@@ -261,7 +268,14 @@ class Tratamiento:
             "plaga_enfermedad": self.plaga_enfermedad or self.problema_fitosanitario,
             "operador": self.operador or self.aplicador,
             "fecha_creacion": self.fecha_creacion,
-            "color_fila": self.color_fila or ""
+            "color_fila": self.color_fila or "",
+            # Asesoramiento
+            "asesorado": self.asesorado,
+            "nombre_asesor_trat": self.nombre_asesor_trat or "",
+            "num_colegiado_asesor": self.num_colegiado_asesor or "",
+            "fecha_recomendacion_asesor": self.fecha_recomendacion_asesor or "",
+            "firma_asesor": self.firma_asesor or "",
+            "firma_cliente": self.firma_cliente or "",
         }
     
     @classmethod
