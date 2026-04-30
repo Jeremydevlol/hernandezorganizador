@@ -48,10 +48,41 @@ from cuaderno.api import router as cuaderno_router
 # APP SETUP
 # ============================================
 
+from contextlib import asynccontextmanager
+import asyncio
+
+def _warmup_cache():
+    """Pre-carga todos los cuadernos en memoria al arrancar el servidor."""
+    try:
+        from cuaderno.storage import get_storage
+        from cuaderno.api import _cache_set
+        storage = get_storage()
+        metas = storage.listar()
+        for meta in metas:
+            cid = meta.get("id")
+            if not cid:
+                continue
+            try:
+                cuaderno = storage.cargar(cid)
+                if cuaderno:
+                    _cache_set(f"cuaderno::{cid}", {"cuaderno": cuaderno.to_dict()}, ttl_sec=120)
+            except Exception:
+                continue
+        print(f"🔥 Cache warmup: {len(metas)} cuadernos precargados")
+    except Exception as e:
+        print(f"⚠️  Cache warmup error: {e}")
+
+@asynccontextmanager
+async def lifespan(app):
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(None, _warmup_cache)
+    yield
+
 app = FastAPI(
     title="RTE + Cuaderno de Explotación",
     description="Sistema de edición de Excel con IA y Cuaderno de Explotación Agrícola",
-    version="2.1"
+    version="2.1",
+    lifespan=lifespan
 )
 
 # CORS — no mezclar allow_origins=["*"] con allow_credentials=True (los navegadores lo rechazan).

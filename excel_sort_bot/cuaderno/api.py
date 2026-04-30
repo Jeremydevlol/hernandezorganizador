@@ -619,7 +619,7 @@ async def obtener_cuaderno(cuaderno_id: str, background_tasks: BackgroundTasks):
         raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
 
     payload = {"cuaderno": cuaderno.to_dict()}
-    _cache_set(cache_key, payload, ttl_sec=30)
+    _cache_set(cache_key, payload, ttl_sec=120)
 
     # Normalización en segundo plano: pasamos el objeto ya cargado (evita segundo storage.cargar)
     background_tasks.add_task(_normalizar_y_guardar_bg_obj, cuaderno, storage)
@@ -1341,13 +1341,21 @@ def _validar_tratamiento_create(data: TratamientoCreate, cuaderno: CuadernoExplo
 
 
 @router.post("/{cuaderno_id}/tratamientos")
-async def crear_tratamiento(cuaderno_id: str, data: TratamientoCreate):
+async def crear_tratamiento(cuaderno_id: str, data: TratamientoCreate, background_tasks: BackgroundTasks):
     """
     Registra un nuevo tratamiento desglosado: 1 línea por parcela × 1 línea por producto.
+    Cache-first load + persist en background → respuesta inmediata.
     """
     storage = get_storage()
-    cuaderno = storage.cargar(cuaderno_id)
-    
+
+    # 1. Intentar cargar desde caché para evitar round-trip a Supabase (~8s)
+    cache_key = f"cuaderno::{cuaderno_id}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        cuaderno = CuadernoExplotacion.from_dict(cached["cuaderno"])
+    else:
+        cuaderno = storage.cargar(cuaderno_id)
+
     if not cuaderno:
         raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
     
@@ -1403,8 +1411,13 @@ async def crear_tratamiento(cuaderno_id: str, data: TratamientoCreate):
                 consumo = float(prod_data.dosis or 0) * superficie_total
                 prod_obj.cantidad_adquirida = max(0.0, round(prod_obj.cantidad_adquirida - consumo, 4))
 
-    storage.guardar(cuaderno)
-    
+    # 2. Actualizar caché con el estado nuevo ANTES de responder
+    #    → el próximo GET sirve datos frescos sin ir a Supabase
+    _cache_set(cache_key, {"cuaderno": cuaderno.to_dict()}, ttl_sec=120)
+
+    # 3. Persistir en Supabase en segundo plano (no bloquea la respuesta)
+    background_tasks.add_task(storage.guardar, cuaderno)
+
     return {
         "success": True,
         "tratamientos": [t.to_dict() for t in creados],
@@ -1776,7 +1789,7 @@ async def get_stock_global():
 
     productos.sort(key=lambda x: (x["nombre_comercial"] or "").lower())
     payload = {"productos": productos, "total": len(productos)}
-    _cache_set(cache_key, payload, ttl_sec=6)
+    _cache_set(cache_key, payload, ttl_sec=300)
     return payload
 
 

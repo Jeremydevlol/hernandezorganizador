@@ -51,6 +51,7 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
     const [fertProdInput, setFertProdInput] = useState("");
     const [fertProductDropdownOpen, setFertProductDropdownOpen] = useState(false);
     const productInputRef = useRef<HTMLInputElement>(null);
+    const importingGlobalRef = useRef(false);
 
     // Sugerencias únicas de problemática/plaga de tratamientos existentes
     const plagaSugerencias = useMemo(() => {
@@ -875,7 +876,7 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                         }));
                                     }}
                                     onFocus={() => { setProductDropdownOpen(true); setCatalogoQuery(productInputValue); }}
-                                    onBlur={() => setTimeout(() => setProductDropdownOpen(false), 150)}
+                                    onBlur={() => setTimeout(() => { if (!importingGlobalRef.current) setProductDropdownOpen(false); }, 150)}
                                     placeholder="Seleccionar producto existente o escribir para crear uno nuevo"
                                     className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 text-sm focus:outline-none focus:border-green-500 transition-colors"
                                 />
@@ -931,7 +932,9 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                                         type="button"
                                                         onMouseDown={async (e) => {
                                                             e.preventDefault();
+                                                            importingGlobalRef.current = true;
                                                             const imported = await importarCatalogoProducto(c.id);
+                                                            importingGlobalRef.current = false;
                                                             if (!imported) return;
                                                             setProductInputValue(imported.nombre_comercial);
                                                             setFormData((prev) => ({
@@ -1046,7 +1049,7 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                                             setCatalogoQuery(v);
                                                         }}
                                                         onFocus={() => { setSecDropdownOpen(idx); setCatalogoQuery(p.nombre_comercial || ""); }}
-                                                        onBlur={() => setTimeout(() => setSecDropdownOpen((o) => (o === idx ? null : o)), 200)}
+                                                        onBlur={() => setTimeout(() => { if (!importingGlobalRef.current) setSecDropdownOpen((o) => (o === idx ? null : o)); }, 200)}
                                                         placeholder="Producto (inventario o catálogo)"
                                                         className="w-full px-2 py-1.5 rounded border border-gray-300 text-sm"
                                                     />
@@ -1094,7 +1097,9 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                                                             type="button"
                                                                             onMouseDown={async (e) => {
                                                                                 e.preventDefault();
+                                                                                importingGlobalRef.current = true;
                                                                                 const imported = await importarCatalogoProducto(c.id);
+                                                                                importingGlobalRef.current = false;
                                                                                 if (!imported) return;
                                                                                 const list = [...(formData.productos_lista || [])];
                                                                                 list[idx + 1] = {
@@ -1425,7 +1430,9 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                                         type="button"
                                                         onMouseDown={async (e) => {
                                                             e.preventDefault();
+                                                            importingGlobalRef.current = true;
                                                             const imported = await importarCatalogoProducto(c.id);
+                                                            importingGlobalRef.current = false;
                                                             if (!imported) return;
                                                             const npk = (c.formulacion || "").trim();
                                                             setFormData((prev) => ({
