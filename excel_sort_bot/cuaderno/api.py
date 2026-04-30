@@ -101,6 +101,17 @@ def _cache_invalidate(prefixes: List[str]) -> None:
             _FAST_CACHE.pop(k, None)
 
 
+def _invalidar_cuaderno(cuaderno_id: str) -> None:
+    """Invalida la caché del cuaderno y de la lista. Llamar tras cualquier escritura."""
+    _cache_invalidate([f"cuaderno::{cuaderno_id}", "cuadernos_list::"])
+
+
+def _guardar_cuaderno(storage, cuaderno) -> None:
+    """Guarda y limpia caché automáticamente. Usar en lugar de storage.guardar()."""
+    storage.guardar(cuaderno)
+    _invalidar_cuaderno(cuaderno.id)
+
+
 CULTIVOS_ASESORAMIENTO_OBLIGATORIO = ("PATATA", "REMOLACHA")
 TIPO_ASESORAMIENTO_AUTO = "AUTO_SUPERFICIE_ESPECIAL"
 
@@ -492,8 +503,14 @@ class CellPatch(BaseModel):
 # ============================================
 
 async def _listar_cuadernos_payload():
+    cache_key = "cuadernos_list::"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
     storage = get_storage()
-    return {"cuadernos": storage.listar()}
+    payload = {"cuadernos": storage.listar()}
+    _cache_set(cache_key, payload, ttl_sec=20)
+    return payload
 
 
 @router.get("/catalog/cuadernos")
@@ -522,7 +539,8 @@ async def crear_cuaderno(data: CuadernoCreate):
     
     storage = get_storage()
     storage.crear(cuaderno)
-    
+    _cache_invalidate(["cuadernos_list::"])
+
     return {
         "success": True,
         "cuaderno_id": cuaderno.id,
@@ -530,16 +548,23 @@ async def crear_cuaderno(data: CuadernoCreate):
     }
 
 
-@router.get("/{cuaderno_id}")
-async def obtener_cuaderno(cuaderno_id: str):
-    """Obtiene un cuaderno completo"""
-    storage = get_storage()
-    cuaderno = storage.cargar(cuaderno_id)
-    
-    if not cuaderno:
-        raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
-
+def _reparar_y_normalizar(cuaderno, storage) -> bool:
+    """
+    Ejecuta TODAS las reparaciones y normalizaciones sobre un objeto cuaderno ya cargado.
+    Devuelve True si hubo algún cambio (el llamador debe guardar).
+    """
     changed = False
+    # --- Reparaciones de datos (antes vivían en storage.cargar, bloqueando cada petición) ---
+    try:
+        r1 = cuaderno.reparar_tratamientos_multi_cultivo()
+        r2 = cuaderno.reparar_tratamientos_num_orden_multi_parcela()
+        r3 = cuaderno.reestablecer_num_orden_individual_tratamientos()
+        if r1 + r2 + r3 > 0:
+            print(f"[repair_bg] {cuaderno.id}: multi-cultivo={r1} num_orden={r2} individual={r3}")
+            changed = True
+    except Exception as e:
+        print(f"[repair_bg] Error reparando {cuaderno.id}: {e}")
+    # --- Normalizaciones de la API ---
     if _normalizar_parcelas_cultivo_variante(cuaderno):
         changed = True
     if _desglosar_asesoramientos_multi_parcela(cuaderno):
@@ -548,10 +573,58 @@ async def obtener_cuaderno(cuaderno_id: str):
         changed = True
     if _asegurar_asesoramiento_automatico(cuaderno):
         changed = True
-    if changed:
-        storage.guardar(cuaderno)
+    return changed
 
-    return {"cuaderno": cuaderno.to_dict()}
+
+def _normalizar_y_guardar_bg(cuaderno_id: str) -> None:
+    """
+    Tarea de fondo que recibe solo el ID. Usada cuando no tenemos el objeto en memoria.
+    Carga, repara/normaliza y guarda si hubo cambios.
+    """
+    try:
+        storage = get_storage()
+        cuaderno = storage.cargar(cuaderno_id)
+        if not cuaderno:
+            return
+        if _reparar_y_normalizar(cuaderno, storage):
+            _guardar_cuaderno(storage, cuaderno)
+    except Exception as e:
+        print(f"[normalizar_bg] Error en cuaderno {cuaderno_id}: {e}")
+
+
+def _normalizar_y_guardar_bg_obj(cuaderno, storage) -> None:
+    """
+    Tarea de fondo que recibe el objeto ya cargado (evita un segundo storage.cargar).
+    Usada desde GET /{cuaderno_id} donde el objeto ya está en memoria.
+    """
+    try:
+        if _reparar_y_normalizar(cuaderno, storage):
+            _guardar_cuaderno(storage, cuaderno)
+    except Exception as e:
+        print(f"[normalizar_bg_obj] Error en cuaderno {cuaderno.id}: {e}")
+
+
+@router.get("/{cuaderno_id}")
+async def obtener_cuaderno(cuaderno_id: str, background_tasks: BackgroundTasks):
+    """Obtiene un cuaderno completo. Sirve desde caché en-memoria; normaliza en segundo plano."""
+    cache_key = f"cuaderno::{cuaderno_id}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    storage = get_storage()
+    cuaderno = storage.cargar(cuaderno_id)
+
+    if not cuaderno:
+        raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
+
+    payload = {"cuaderno": cuaderno.to_dict()}
+    _cache_set(cache_key, payload, ttl_sec=30)
+
+    # Normalización en segundo plano: pasamos el objeto ya cargado (evita segundo storage.cargar)
+    background_tasks.add_task(_normalizar_y_guardar_bg_obj, cuaderno, storage)
+
+    return payload
 
 
 @router.delete("/{cuaderno_id}")
@@ -559,10 +632,11 @@ async def eliminar_cuaderno(cuaderno_id: str):
     """Elimina un cuaderno (mueve a backup)"""
     storage = get_storage()
     success = storage.eliminar(cuaderno_id)
-    
+
     if not success:
         raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
-    
+
+    _invalidar_cuaderno(cuaderno_id)
     return {"success": True, "message": "Cuaderno eliminado (backup creado)"}
 
 
@@ -697,7 +771,7 @@ async def actualizar_celda(cuaderno_id: str, data: CellPatch):
         _normalizar_parcelas_cultivo_variante(cuaderno)
         _asegurar_asesoramiento_automatico(cuaderno)
 
-    storage.guardar(cuaderno)
+    _guardar_cuaderno(storage, cuaderno)
     return {"success": True, "timestamp": datetime.now().isoformat()}
 
 
@@ -753,8 +827,8 @@ async def crear_parcela(cuaderno_id: str, data: ParcelaCreate):
 
     cuaderno.agregar_parcela(parcela)
     _asegurar_asesoramiento_automatico(cuaderno)
-    storage.guardar(cuaderno)
-    
+    _guardar_cuaderno(storage, cuaderno)
+
     return {
         "success": True,
         "parcela": parcela.to_dict(),
@@ -784,8 +858,8 @@ async def actualizar_parcela(cuaderno_id: str, parcela_id: str, data: ParcelaUpd
 
     _asegurar_asesoramiento_automatico(cuaderno)
     cuaderno._actualizar_modificacion()
-    storage.guardar(cuaderno)
-    
+    _guardar_cuaderno(storage, cuaderno)
+
     return {
         "success": True,
         "parcela": parcela.to_dict(),
@@ -803,7 +877,7 @@ async def eliminar_parcela(cuaderno_id: str, parcela_id: str):
     if not cuaderno.eliminar_parcela(parcela_id):
         raise HTTPException(status_code=404, detail="Parcela no encontrada")
     _asegurar_asesoramiento_automatico(cuaderno)
-    storage.guardar(cuaderno)
+    _guardar_cuaderno(storage, cuaderno)
     return {"success": True, "message": "Parcela eliminada"}
 
 
@@ -870,7 +944,7 @@ async def crear_producto(cuaderno_id: str, data: ProductoCreate):
     )
     
     cuaderno.agregar_producto(producto)
-    storage.guardar(cuaderno)
+    _guardar_cuaderno(storage, cuaderno)
     # Publicar automáticamente en catálogo global (best-effort).
     try:
         get_catalogo().upsert({
@@ -904,7 +978,7 @@ async def eliminar_producto(cuaderno_id: str, producto_id: str):
         raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
     if not cuaderno.eliminar_producto(producto_id):
         raise HTTPException(status_code=404, detail="Producto no encontrado")
-    storage.guardar(cuaderno)
+    _guardar_cuaderno(storage, cuaderno)
     _cache_invalidate(["catalog_global::", "stock_global::all"])
     return {"success": True, "message": "Producto eliminado"}
 
@@ -1283,9 +1357,11 @@ async def crear_tratamiento(cuaderno_id: str, data: TratamientoCreate):
     creados = cuaderno.agregar_tratamiento_desglosado(plantilla)
 
     # Deducir stock de productos aplicados
+    # Índice O(P) construido una sola vez → lookups O(1) por parcela_id
+    parcelas_idx = {p.id: p for p in cuaderno.parcelas}
     superficie_total = sum(
-        next((p.superficie_cultivada or p.superficie_sigpac or 0.0 for p in cuaderno.parcelas if p.id == pid), 0.0)
-        for pid in data.parcela_ids
+        (parcelas_idx[pid].superficie_cultivada or parcelas_idx[pid].superficie_sigpac or 0.0)
+        for pid in data.parcela_ids if pid in parcelas_idx
     )
     if superficie_total <= 0:
         superficie_total = float(data.superficie_tratada or 1.0)
@@ -1698,9 +1774,15 @@ async def get_stock(cuaderno_id: str):
             if pa.producto_id:
                 uso_por_producto[pa.producto_id] += _to_float_dosis(pa.dosis) * sup
 
+    # Construir índice entradas por producto en O(E) antes del bucle — evita O(P×E)
+    entradas_por_producto: dict = defaultdict(float)
+    for e in cuaderno.stock_entradas:
+        if e.producto_id:
+            entradas_por_producto[e.producto_id] += e.cantidad
+
     productos_resumen = []
     for p in cuaderno.productos:
-        total_entradas = sum(e.cantidad for e in cuaderno.stock_entradas if e.producto_id == p.id)
+        total_entradas = entradas_por_producto.get(p.id, 0.0)
         total_usado = round(uso_por_producto.get(p.id, 0.0), 4)
         stock_actual = p.cantidad_adquirida
         if total_entradas > 0:
@@ -1901,14 +1983,23 @@ async def get_alertas(cuaderno_id: str):
             alertas.append({"tipo": "muchos_tratamientos_especiales", "severidad": "info", "mensaje": f"Parcela {parcela.nombre or parcela.num_orden} ({cultivo}) tiene {trats_por_parcela[parcela.id]} tratamientos — revisa el registro de Asesoramiento", "parcela_id": parcela.id, "accion": "ver_asesoramiento"})
 
     # 5. Parcelas sin tratamiento en >60 días
+    # Construir índice parcela_id → fecha_max en O(T) antes del bucle de parcelas
+    ultima_fecha_por_parcela: dict = {}
+    for t in cuaderno.tratamientos:
+        if not t.fecha_aplicacion:
+            continue
+        fecha_str = t.fecha_aplicacion[:10]
+        for pid in (t.parcela_ids or []):
+            if pid not in ultima_fecha_por_parcela or fecha_str > ultima_fecha_por_parcela[pid]:
+                ultima_fecha_por_parcela[pid] = fecha_str
+
     for parcela in cuaderno.parcelas:
         if not parcela.activa:
             continue
-        trats_parcela = [t for t in cuaderno.tratamientos if parcela.id in (t.parcela_ids or [])]
-        if trats_parcela:
-            ultima_fecha_str = max(t.fecha_aplicacion for t in trats_parcela if t.fecha_aplicacion)
+        ultima_fecha_str = ultima_fecha_por_parcela.get(parcela.id)
+        if ultima_fecha_str:
             try:
-                ultima = datetime.strptime(ultima_fecha_str[:10], "%Y-%m-%d")
+                ultima = datetime.strptime(ultima_fecha_str, "%Y-%m-%d")
                 if (hoy - ultima).days > 60:
                     alertas.append({"tipo": "sin_tratamiento_reciente", "severidad": "baja", "mensaje": f"Parcela '{parcela.nombre or parcela.num_orden}' sin tratamiento hace {(hoy - ultima).days} días", "parcela_id": parcela.id, "accion": "crear_tratamiento"})
             except Exception:
@@ -4057,17 +4148,22 @@ class ChatResponse(BaseModel):
     advertencias: Optional[List[str]] = None  # Advertencias sobre datos inferidos o por defecto
 
 
-# Cliente OpenAI global
+# Cliente OpenAI global — AsyncOpenAI para no bloquear el event loop durante 5-30s
 _openai_client = None
 
 def _get_openai_client():
-    """Obtiene o crea el cliente de OpenAI"""
+    """Obtiene o crea el cliente asíncrono de OpenAI."""
     global _openai_client
     if _openai_client is None:
         api_key = os.getenv("OPENAI_API_KEY")
         if api_key:
-            from openai import OpenAI
-            _openai_client = OpenAI(api_key=api_key)
+            try:
+                from openai import AsyncOpenAI
+                _openai_client = AsyncOpenAI(api_key=api_key)
+            except ImportError:
+                # Fallback a cliente síncrono si la versión de openai es antigua
+                from openai import OpenAI
+                _openai_client = OpenAI(api_key=api_key)
     return _openai_client
 
 
@@ -4078,22 +4174,44 @@ def _get_openai_client():
 # ============================================
 
 # Memoria de conversación por cuaderno (para "como te dije", "lo mismo", etc.)
-_conversation_memory: Dict[str, List[Dict[str, str]]] = {}
+# Almacena (timestamp_último_uso, mensajes) para poder limpiar entradas inactivas
+_conversation_memory: Dict[str, Dict] = {}  # {cuaderno_id: {"ts": float, "msgs": [...]}}
 MAX_CONVERSATION_HISTORY = 12  # Últimos 12 mensajes (6 intercambios)
+_CONV_MEMORY_TTL_H = 4         # Descarta historiales sin actividad durante 4 horas
+_CONV_MEMORY_MAX_KEYS = 50     # Límite de cuadernos en memoria simultáneos
+
+
+def _conversation_cleanup() -> None:
+    """Elimina historiales de chat inactivos >4h para evitar fuga de memoria."""
+    cutoff = time.time() - _CONV_MEMORY_TTL_H * 3600
+    stale = [k for k, v in _conversation_memory.items() if v.get("ts", 0) < cutoff]
+    for k in stale:
+        _conversation_memory.pop(k, None)
+    # Si aún hay demasiadas entradas, eliminar las más antiguas
+    if len(_conversation_memory) > _CONV_MEMORY_MAX_KEYS:
+        sorted_keys = sorted(_conversation_memory, key=lambda k: _conversation_memory[k].get("ts", 0))
+        for k in sorted_keys[:len(_conversation_memory) - _CONV_MEMORY_MAX_KEYS]:
+            _conversation_memory.pop(k, None)
 
 
 def _get_conversation_history(cuaderno_id: str) -> List[Dict[str, str]]:
-    """Obtiene el historial de conversación de un cuaderno"""
-    return _conversation_memory.get(cuaderno_id, [])
+    """Obtiene el historial de conversación de un cuaderno."""
+    entry = _conversation_memory.get(cuaderno_id)
+    return entry["msgs"] if entry else []
 
 
 def _add_to_conversation(cuaderno_id: str, role: str, content: str):
-    """Añade un mensaje al historial de conversación"""
+    """Añade un mensaje al historial de conversación."""
     if cuaderno_id not in _conversation_memory:
-        _conversation_memory[cuaderno_id] = []
-    _conversation_memory[cuaderno_id].append({"role": role, "content": content})
-    if len(_conversation_memory[cuaderno_id]) > MAX_CONVERSATION_HISTORY:
-        _conversation_memory[cuaderno_id] = _conversation_memory[cuaderno_id][-MAX_CONVERSATION_HISTORY:]
+        _conversation_memory[cuaderno_id] = {"ts": time.time(), "msgs": []}
+    entry = _conversation_memory[cuaderno_id]
+    entry["ts"] = time.time()
+    entry["msgs"].append({"role": role, "content": content})
+    if len(entry["msgs"]) > MAX_CONVERSATION_HISTORY:
+        entry["msgs"] = entry["msgs"][-MAX_CONVERSATION_HISTORY:]
+    # Limpieza periódica (cada ~20 escrituras, sin coste en el path caliente)
+    if len(_conversation_memory) > _CONV_MEMORY_MAX_KEYS:
+        _conversation_cleanup()
 
 
 def _normalize_agricultural_text(texto: str) -> str:
@@ -4996,15 +5114,19 @@ RECUERDA: Responde SOLO con JSON usando el formato de plantilla + cantidad. NUNC
                 return json.loads(t2)
             raise
 
-    # 8. Llamada a OpenAI
+    # 8. Llamada a OpenAI — await para no bloquear el event loop
     try:
-        response = client.chat.completions.create(
+        import inspect
+        _call = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=messages,
             response_format={"type": "json_object"},
-            temperature=0.15,  # Baja para máxima precisión en extracción
-            max_tokens=4000    # Suficiente: solo plantilla + cantidad, no N items
+            temperature=0.15,
+            max_tokens=4000,
+            timeout=60,  # timeout explícito: evita que un hang de OpenAI bloquee indefinidamente
         )
+        # Soporta tanto AsyncOpenAI (awaitable) como OpenAI síncrono (fallback legacy)
+        response = (await _call) if inspect.isawaitable(_call) else _call
 
         respuesta_texto = (response.choices[0].message.content or "").strip()
         result = _try_parse_json(respuesta_texto)

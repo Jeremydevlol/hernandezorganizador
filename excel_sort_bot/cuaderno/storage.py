@@ -50,26 +50,9 @@ class LocalStorage:
         filepath = self._get_filepath(cuaderno_id)
         if not filepath.exists():
             return None
-        cuaderno = CuadernoExplotacion.cargar(str(filepath))
-        # Auto-reparación de tratamientos que mezclan parcelas de cultivos distintos.
-        # + Auto-reparación de históricos mal particionados por Nº orden multi-parcela.
-        # Es idempotente: si no hay nada que reparar, no reescribe el fichero.
-        try:
-            reparados_multi_cultivo = cuaderno.reparar_tratamientos_multi_cultivo()
-            reparados_num_orden = cuaderno.reparar_tratamientos_num_orden_multi_parcela()
-            restablecidos_individual = cuaderno.reestablecer_num_orden_individual_tratamientos()
-            total_reparados = reparados_multi_cultivo + reparados_num_orden + restablecidos_individual
-            if total_reparados > 0:
-                cuaderno.guardar(str(filepath))
-                print(
-                    f"[auto-repair] Cuaderno {cuaderno_id}: "
-                    f"{reparados_multi_cultivo} multi-cultivo + "
-                    f"{reparados_num_orden} por Nº orden + "
-                    f"{restablecidos_individual} restablecidos individuales."
-                )
-        except Exception as e:
-            print(f"[auto-repair] Error reparando cuaderno {cuaderno_id}: {e}")
-        return cuaderno
+        # Auto-reparación movida a tarea de fondo en api.py (_normalizar_y_guardar_bg)
+        # para no bloquear el path crítico en cada petición.
+        return CuadernoExplotacion.cargar(str(filepath))
 
     def listar(self) -> List[Dict]:
         cuadernos = []
@@ -171,6 +154,19 @@ class SupabaseStorage:
         self.client = create_client(url, key)
         self.table = "cuadernos"
 
+    def _make_row(self, cuaderno: CuadernoExplotacion, data: dict) -> dict:
+        """Construye la fila de BD incluyendo conteos desnormalizados para listar() rápido."""
+        return {
+            "id": cuaderno.id,
+            "nombre": cuaderno.nombre_explotacion or "Sin nombre",
+            "titular": cuaderno.titular or "",
+            "anio": cuaderno.año,
+            "data": data,
+            "num_parcelas": len(data.get("parcelas", [])),
+            "num_tratamientos": len(data.get("tratamientos", [])),
+            "updated_at": datetime.now().isoformat(),
+        }
+
     def crear(self, cuaderno: CuadernoExplotacion) -> CuadernoExplotacion:
         data = cuaderno.to_dict()
         # Verificar que no exista
@@ -178,28 +174,13 @@ class SupabaseStorage:
         if existing.data:
             raise ValueError(f"Ya existe un cuaderno con ID: {cuaderno.id}")
 
-        self.client.table(self.table).insert({
-            "id": cuaderno.id,
-            "nombre": cuaderno.nombre_explotacion or "Sin nombre",
-            "titular": cuaderno.titular or "",
-            "anio": cuaderno.año,
-            "data": data,
-            "updated_at": datetime.now().isoformat()
-        }).execute()
+        self.client.table(self.table).insert(self._make_row(cuaderno, data)).execute()
         return cuaderno
 
     def guardar(self, cuaderno: CuadernoExplotacion) -> CuadernoExplotacion:
         data = cuaderno.to_dict()
-        row = {
-            "id": cuaderno.id,
-            "nombre": cuaderno.nombre_explotacion or "Sin nombre",
-            "titular": cuaderno.titular or "",
-            "anio": cuaderno.año,
-            "data": data,
-            "updated_at": datetime.now().isoformat()
-        }
         # Upsert: inserta si no existe, actualiza si existe
-        self.client.table(self.table).upsert(row).execute()
+        self.client.table(self.table).upsert(self._make_row(cuaderno, data)).execute()
         return cuaderno
 
     def cargar(self, cuaderno_id: str) -> Optional[CuadernoExplotacion]:
@@ -207,42 +188,42 @@ class SupabaseStorage:
         if not result.data:
             return None
         json_data = result.data[0]["data"]
-        cuaderno = CuadernoExplotacion.from_dict(json_data)
-        # Auto-reparación de tratamientos que mezclan parcelas de cultivos distintos.
-        # + auto-reparación de históricos por Nº orden multi-parcela.
-        # Idempotente: solo escribe en Supabase si hubo cambios reales.
-        try:
-            reparados_multi_cultivo = cuaderno.reparar_tratamientos_multi_cultivo()
-            reparados_num_orden = cuaderno.reparar_tratamientos_num_orden_multi_parcela()
-            restablecidos_individual = cuaderno.reestablecer_num_orden_individual_tratamientos()
-            total_reparados = reparados_multi_cultivo + reparados_num_orden + restablecidos_individual
-            if total_reparados > 0:
-                self.guardar(cuaderno)
-                print(
-                    f"[auto-repair] Cuaderno {cuaderno_id}: "
-                    f"{reparados_multi_cultivo} multi-cultivo + "
-                    f"{reparados_num_orden} por Nº orden + "
-                    f"{restablecidos_individual} restablecidos individuales."
-                )
-        except Exception as e:
-            print(f"[auto-repair] Error reparando cuaderno {cuaderno_id}: {e}")
-        return cuaderno
+        # Auto-reparación movida a tarea de fondo en api.py (_normalizar_y_guardar_bg)
+        # para no bloquear el path crítico con hasta O(T²) de CPU + un segundo round-trip a Supabase.
+        return CuadernoExplotacion.from_dict(json_data)
 
     def listar(self) -> List[Dict]:
-        result = self.client.table(self.table).select(
-            "id, nombre, titular, anio, updated_at, data"
-        ).order("updated_at", desc=True).execute()
+        # Selecciona solo metadatos (sin el JSONB data) → mucho más rápido.
+        # num_parcelas / num_tratamientos se guardan como columnas desnormalizadas en guardar().
+        # Si la columna no existe aún en la BD, el select falla silenciosamente y devolvemos 0.
+        try:
+            result = self.client.table(self.table).select(
+                "id, nombre, titular, anio, updated_at, num_parcelas, num_tratamientos"
+            ).order("updated_at", desc=True).execute()
+            use_counts = True
+        except Exception:
+            # Columnas desnormalizadas aún no existen: fallback con data (lento pero seguro)
+            result = self.client.table(self.table).select(
+                "id, nombre, titular, anio, updated_at, data"
+            ).order("updated_at", desc=True).execute()
+            use_counts = False
 
         cuadernos = []
         for row in result.data:
-            data = row.get("data", {})
+            if use_counts:
+                num_p = row.get("num_parcelas") or 0
+                num_t = row.get("num_tratamientos") or 0
+            else:
+                data = row.get("data", {})
+                num_p = len(data.get("parcelas", []))
+                num_t = len(data.get("tratamientos", []))
             cuadernos.append({
                 "id": row["id"],
                 "nombre_explotacion": row.get("nombre") or "Sin nombre",
                 "titular": row.get("titular") or "",
                 "año": row.get("anio"),
-                "num_parcelas": len(data.get("parcelas", [])),
-                "num_tratamientos": len(data.get("tratamientos", [])),
+                "num_parcelas": num_p,
+                "num_tratamientos": num_t,
                 "fecha_modificacion": row.get("updated_at"),
             })
         return cuadernos
