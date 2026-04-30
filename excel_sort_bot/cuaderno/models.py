@@ -350,6 +350,45 @@ class Cosecha:
 
 
 @dataclass
+class Asesoramiento:
+    """Registro de asesoramiento fitosanitario (Hoja 3.2 oficial).
+    Obligatorio para Patata y Remolacha ≥5 ha.
+    """
+    id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    fecha: str = ""
+    num_orden_parcelas: str = ""       # Nº orden parcelas afectadas (ej: "7,8")
+    cultivo_especie: str = ""
+    cultivo_variedad: str = ""
+    superficie_ha: float = 0.0
+    nombre_asesor: str = ""
+    num_habilitacion: str = ""         # Nº habilitación del asesor
+    tipo_asesoramiento: str = ""       # Visita, Plan anual, etc.
+    recomendacion: str = ""
+    observaciones: str = ""
+    color_fila: str = ""
+
+    def to_dict(self) -> Dict:
+        return {
+            "id": self.id,
+            "fecha": self.fecha,
+            "num_orden_parcelas": self.num_orden_parcelas,
+            "cultivo_especie": self.cultivo_especie,
+            "cultivo_variedad": self.cultivo_variedad,
+            "superficie_ha": self.superficie_ha,
+            "nombre_asesor": self.nombre_asesor,
+            "num_habilitacion": self.num_habilitacion,
+            "tipo_asesoramiento": self.tipo_asesoramiento,
+            "recomendacion": self.recomendacion,
+            "observaciones": self.observaciones,
+            "color_fila": self.color_fila or "",
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict) -> 'Asesoramiento':
+        return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
+
+
+@dataclass
 class HojaExcel:
     """Representa una hoja de Excel importada. Toda hoja entra, se ve, se edita y se conserva."""
     sheet_id: str = field(default_factory=lambda: str(uuid.uuid4()))
@@ -378,6 +417,43 @@ class HojaExcel:
 
 
 @dataclass
+class StockEntrada:
+    """Registro de entrada de stock (compra/recepción de producto)."""
+    id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    producto_id: str = ""
+    nombre_comercial: str = ""   # snapshot del nombre en el momento de la entrada
+    cantidad: float = 0.0
+    unidad: str = "L"
+    fecha: str = ""
+    proveedor: str = ""
+    num_albaran: str = ""
+    num_lote: str = ""
+    precio_unidad: float = 0.0
+    notas: str = ""
+    fecha_creacion: str = field(default_factory=lambda: datetime.now().isoformat())
+
+    def to_dict(self) -> Dict:
+        return {
+            "id": self.id,
+            "producto_id": self.producto_id,
+            "nombre_comercial": self.nombre_comercial,
+            "cantidad": self.cantidad,
+            "unidad": self.unidad,
+            "fecha": self.fecha,
+            "proveedor": self.proveedor,
+            "num_albaran": self.num_albaran,
+            "num_lote": self.num_lote,
+            "precio_unidad": self.precio_unidad,
+            "notas": self.notas,
+            "fecha_creacion": self.fecha_creacion,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict) -> 'StockEntrada':
+        return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
+
+
+@dataclass
 class CuadernoExplotacion:
     """Cuaderno de explotación completo de un cliente"""
     id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
@@ -392,6 +468,8 @@ class CuadernoExplotacion:
     tratamientos: List[Tratamiento] = field(default_factory=list)
     fertilizaciones: List['Fertilizacion'] = field(default_factory=list)
     cosechas: List['Cosecha'] = field(default_factory=list)
+    asesoramientos: List['Asesoramiento'] = field(default_factory=list)
+    stock_entradas: List['StockEntrada'] = field(default_factory=list)
     hojas_originales: List[HojaExcel] = field(default_factory=list)  # Hojas Excel importadas
     fecha_creacion: str = field(default_factory=lambda: datetime.now().isoformat())
     fecha_modificacion: str = field(default_factory=lambda: datetime.now().isoformat())
@@ -410,6 +488,8 @@ class CuadernoExplotacion:
             "tratamientos": [t.to_dict() for t in self.tratamientos],
             "fertilizaciones": [f.to_dict() for f in self.fertilizaciones],
             "cosechas": [c.to_dict() for c in self.cosechas],
+            "asesoramientos": [a.to_dict() for a in self.asesoramientos],
+            "stock_entradas": [s.to_dict() for s in self.stock_entradas],
             "hojas_originales": [h.to_dict() for h in self.hojas_originales],
             "fecha_creacion": self.fecha_creacion,
             "fecha_modificacion": self.fecha_modificacion
@@ -433,6 +513,12 @@ class CuadernoExplotacion:
         if 'cosechas' in d:
             raw = d.get('cosechas') or []
             d['cosechas'] = [Cosecha.from_dict(c) if isinstance(c, dict) else c for c in raw]
+        if 'asesoramientos' in d:
+            raw = d.get('asesoramientos') or []
+            d['asesoramientos'] = [Asesoramiento.from_dict(a) if isinstance(a, dict) else a for a in raw]
+        if 'stock_entradas' in d:
+            raw = d.get('stock_entradas') or []
+            d['stock_entradas'] = [StockEntrada.from_dict(s) if isinstance(s, dict) else s for s in raw]
         if 'hojas_originales' in d:
             d['hojas_originales'] = [HojaExcel.from_dict(h) if isinstance(h, dict) else h 
                                     for h in d['hojas_originales']]
@@ -524,6 +610,8 @@ class CuadernoExplotacion:
             ent = self.obtener_fertilizacion(entity_id)
         elif sheet_type == "cosecha":
             ent = self.obtener_cosecha(entity_id)
+        elif sheet_type == "asesoramiento":
+            ent = self.obtener_asesoramiento(entity_id)
         else:
             return False
         if not ent:
@@ -898,6 +986,58 @@ class CuadernoExplotacion:
         self._actualizar_modificacion()
         return cosecha
 
+    def agregar_asesoramiento(self, asesoramiento: 'Asesoramiento') -> 'Asesoramiento':
+        """Añade un registro de asesoramiento (Hoja 3.2)."""
+        self.asesoramientos.append(asesoramiento)
+        self._actualizar_modificacion()
+        return asesoramiento
+
+    def obtener_asesoramiento(self, asesoramiento_id: str) -> Optional['Asesoramiento']:
+        for a in self.asesoramientos:
+            if a.id == asesoramiento_id:
+                return a
+        return None
+
+    def eliminar_asesoramiento(self, asesoramiento_id: str) -> bool:
+        for i, a in enumerate(self.asesoramientos):
+            if a.id == asesoramiento_id:
+                self.asesoramientos.pop(i)
+                self._actualizar_modificacion()
+                return True
+        return False
+
+    # ---- Stock ----
+    def agregar_stock_entrada(self, entrada: 'StockEntrada') -> 'StockEntrada':
+        self.stock_entradas.append(entrada)
+        # Aumentar cantidad_adquirida del producto correspondiente
+        if entrada.producto_id:
+            prod = self.obtener_producto(entrada.producto_id)
+            if prod:
+                prod.cantidad_adquirida = round(prod.cantidad_adquirida + entrada.cantidad, 4)
+                if entrada.proveedor and not prod.proveedor:
+                    prod.proveedor = entrada.proveedor
+        self._actualizar_modificacion()
+        return entrada
+
+    def obtener_stock_entrada(self, entrada_id: str) -> Optional['StockEntrada']:
+        for s in self.stock_entradas:
+            if s.id == entrada_id:
+                return s
+        return None
+
+    def eliminar_stock_entrada(self, entrada_id: str) -> bool:
+        for i, s in enumerate(self.stock_entradas):
+            if s.id == entrada_id:
+                # Revertir la cantidad en el producto
+                if s.producto_id:
+                    prod = self.obtener_producto(s.producto_id)
+                    if prod:
+                        prod.cantidad_adquirida = max(0.0, round(prod.cantidad_adquirida - s.cantidad, 4))
+                self.stock_entradas.pop(i)
+                self._actualizar_modificacion()
+                return True
+        return False
+
     def eliminar_parcela(self, parcela_id: str) -> bool:
         """Elimina una parcela por ID (la quita de la lista)."""
         for i, p in enumerate(self.parcelas):
@@ -1017,6 +1157,243 @@ class CuadernoExplotacion:
             self.ordenar_tratamientos()
             self._actualizar_modificacion()
         return reparados
+
+    def reparar_tratamientos_num_orden_multi_parcela(self) -> int:
+        """
+        Repara tratamientos históricos mal particionados cuando un Nº de orden
+        representa varias parcelas (p. ej. recintos distintos) y solo quedó una.
+
+        Criterio conservador:
+        - tratamiento con 1 sola parcela_id
+        - num_orden_parcelas con un único número (ej: "11")
+        - existen >1 parcelas con ese num_orden en el cuaderno
+        - faltan líneas hermanas para alguna de esas parcelas
+
+        Devuelve el número de líneas nuevas creadas.
+        """
+        # Índice de parcelas por Nº orden
+        orden_to_parcelas: Dict[int, List[Parcela]] = {}
+        for p in self.parcelas:
+            try:
+                no = int(float(getattr(p, "num_orden", 0) or 0))
+            except (TypeError, ValueError):
+                continue
+            if no > 0:
+                orden_to_parcelas.setdefault(no, []).append(p)
+
+        if not orden_to_parcelas:
+            return 0
+
+        def _parse_num_orden_unico(s: str) -> Optional[int]:
+            raw = (s or "").strip()
+            if not raw:
+                return None
+            parts = [x.strip() for x in raw.replace(";", ",").split(",") if x.strip()]
+            if len(parts) != 1:
+                return None
+            try:
+                return int(float(parts[0]))
+            except (TypeError, ValueError):
+                return None
+
+        def _firma_base(t: Tratamiento) -> tuple:
+            prod = t.productos[0] if t.productos else ProductoAplicado()
+            return (
+                t.fecha_aplicacion or "",
+                (t.problema_fitosanitario or t.plaga_enfermedad or "").strip().lower(),
+                (prod.nombre_comercial or "").strip().lower(),
+                (prod.numero_registro or "").strip().lower(),
+                float(prod.dosis or 0),
+                (prod.unidad_dosis or "").strip().lower(),
+                (t.aplicador or t.operador or "").strip().lower(),
+                (t.equipo or "").strip().lower(),
+            )
+
+        creadas = 0
+        nuevas: List[Tratamiento] = []
+        existentes = list(self.tratamientos)
+
+        for t in existentes:
+            nuevas.append(t)
+            if len([pid for pid in (t.parcela_ids or []) if pid]) != 1:
+                continue
+            orden = _parse_num_orden_unico(t.num_orden_parcelas or "")
+            if not orden:
+                continue
+            candidatas = orden_to_parcelas.get(orden, [])
+            if len(candidatas) <= 1:
+                continue
+
+            firma = _firma_base(t)
+            # Parcelas ya cubiertas por líneas hermanas equivalentes
+            cubiertas = set()
+            for sib in existentes + nuevas:
+                if _parse_num_orden_unico(sib.num_orden_parcelas or "") != orden:
+                    continue
+                if _firma_base(sib) != firma:
+                    continue
+                for pid in (sib.parcela_ids or []):
+                    if pid:
+                        cubiertas.add(pid)
+
+            faltantes = [p for p in candidatas if p.id not in cubiertas]
+            if not faltantes:
+                continue
+
+            prod_copia = [
+                ProductoAplicado(
+                    producto_id=pa.producto_id,
+                    nombre_comercial=pa.nombre_comercial,
+                    numero_registro=pa.numero_registro,
+                    numero_lote=pa.numero_lote,
+                    problema_fitosanitario=pa.problema_fitosanitario,
+                    dosis=pa.dosis,
+                    unidad_dosis=pa.unidad_dosis,
+                    caldo_hectarea=pa.caldo_hectarea,
+                    notas=pa.notas,
+                )
+                for pa in (t.productos or [])
+            ]
+
+            for p in faltantes:
+                try:
+                    sup = float(p.superficie_cultivada or p.superficie_ha or p.superficie_sigpac or 0)
+                except (TypeError, ValueError):
+                    sup = 0.0
+                nuevo = Tratamiento(
+                    parcela_ids=[p.id],
+                    parcela_nombres=[p.nombre] if p.nombre else [],
+                    num_orden_parcelas=str(orden),
+                    cultivo_especie=(p.especie or p.cultivo or t.cultivo_especie or "").strip().upper(),
+                    cultivo_variedad=t.cultivo_variedad or p.variedad,
+                    superficie_tratada=round(sup, 2) if sup > 0 else t.superficie_tratada,
+                    fecha_aplicacion=t.fecha_aplicacion,
+                    problema_fitosanitario=t.problema_fitosanitario,
+                    plaga_enfermedad=t.plaga_enfermedad,
+                    aplicador=t.aplicador,
+                    operador=t.operador,
+                    equipo=t.equipo,
+                    productos=[
+                        ProductoAplicado(
+                            producto_id=pa.producto_id,
+                            nombre_comercial=pa.nombre_comercial,
+                            numero_registro=pa.numero_registro,
+                            numero_lote=pa.numero_lote,
+                            problema_fitosanitario=pa.problema_fitosanitario,
+                            dosis=pa.dosis,
+                            unidad_dosis=pa.unidad_dosis,
+                            caldo_hectarea=pa.caldo_hectarea,
+                            notas=pa.notas,
+                        )
+                        for pa in prod_copia
+                    ],
+                    eficacia=t.eficacia,
+                    observaciones=t.observaciones,
+                    justificacion=t.justificacion,
+                    metodo_aplicacion=t.metodo_aplicacion,
+                    condiciones_climaticas=t.condiciones_climaticas,
+                    hora_inicio=t.hora_inicio,
+                    hora_fin=t.hora_fin,
+                    estado=t.estado,
+                    color_fila=t.color_fila,
+                )
+                nuevas.append(nuevo)
+                creadas += 1
+
+        if creadas > 0:
+            self.tratamientos = nuevas
+            self.ordenar_tratamientos()
+            self._actualizar_modificacion()
+        return creadas
+
+    def normalizar_num_orden_parcelas_en_grupos(self) -> int:
+        """
+        Normaliza num_orden_parcelas para mostrar el bloque completo de órdenes
+        relacionadas (ej: "11,8,10") en filas del mismo tratamiento lógico.
+
+        No cambia parcela_ids; solo el string visible num_orden_parcelas.
+        """
+        id_to_orden: Dict[str, int] = {}
+        for p in self.parcelas:
+            try:
+                no = int(float(getattr(p, "num_orden", 0) or 0))
+            except (TypeError, ValueError):
+                no = 0
+            if no > 0:
+                id_to_orden[p.id] = no
+
+        def _prod_sig(t: Tratamiento) -> tuple:
+            prod = t.productos[0] if t.productos else ProductoAplicado()
+            return (
+                (prod.nombre_comercial or "").strip().lower(),
+                (prod.numero_registro or "").strip().lower(),
+                float(prod.dosis or 0),
+                (prod.unidad_dosis or "").strip().lower(),
+            )
+
+        groups: Dict[tuple, List[Tratamiento]] = {}
+        for t in self.tratamientos:
+            key = (
+                t.fecha_aplicacion or "",
+                (t.problema_fitosanitario or t.plaga_enfermedad or "").strip().lower(),
+                (t.aplicador or t.operador or "").strip().lower(),
+                (t.equipo or "").strip().lower(),
+                _prod_sig(t),
+            )
+            groups.setdefault(key, []).append(t)
+
+        cambios = 0
+        for _, items in groups.items():
+            ordenes = sorted({
+                id_to_orden.get(pid, 0)
+                for t in items
+                for pid in (t.parcela_ids or [])
+                if pid in id_to_orden
+            })
+            ordenes = [o for o in ordenes if o > 0]
+            if len(ordenes) <= 1:
+                continue
+            joined = ",".join(str(o) for o in ordenes)
+            for t in items:
+                if (t.num_orden_parcelas or "").strip() != joined:
+                    t.num_orden_parcelas = joined
+                    cambios += 1
+
+        if cambios > 0:
+            self._actualizar_modificacion()
+        return cambios
+
+    def reestablecer_num_orden_individual_tratamientos(self) -> int:
+        """
+        Reestablece num_orden_parcelas a valor individual por fila, tomando la
+        primera parcela_id relacionada con el tratamiento.
+        """
+        id_to_orden: Dict[str, int] = {}
+        for p in self.parcelas:
+            try:
+                no = int(float(getattr(p, "num_orden", 0) or 0))
+            except (TypeError, ValueError):
+                no = 0
+            if no > 0:
+                id_to_orden[p.id] = no
+
+        cambios = 0
+        for t in self.tratamientos:
+            pids = [pid for pid in (t.parcela_ids or []) if pid]
+            if not pids:
+                continue
+            ordenes = [id_to_orden.get(pid, 0) for pid in pids if id_to_orden.get(pid, 0) > 0]
+            if not ordenes:
+                continue
+            # Para filas desglosadas, dejamos el orden individual (primero).
+            nuevo = str(ordenes[0])
+            if (t.num_orden_parcelas or "").strip() != nuevo:
+                t.num_orden_parcelas = nuevo
+                cambios += 1
+
+        if cambios > 0:
+            self._actualizar_modificacion()
+        return cambios
 
     def _actualizar_modificacion(self):
         """Actualiza fecha de modificación"""

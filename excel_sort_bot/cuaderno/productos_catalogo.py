@@ -241,6 +241,8 @@ class CatalogoProductos:
         mode = os.environ.get("STORAGE_MODE", "").lower()
         on_render = os.environ.get("RENDER") == "true"
         has_supabase = bool(os.environ.get("SUPABASE_URL") and os.environ.get("SUPABASE_KEY"))
+        # Fallback local para entornos con RLS o permisos parciales en Supabase.
+        self._fallback_local = LocalCatalogoStorage()
 
         if on_render and has_supabase and mode != "supabase":
             mode = "supabase"
@@ -254,19 +256,69 @@ class CatalogoProductos:
             self._backend = LocalCatalogoStorage()
 
     def listar(self, q: str = "", limit: int = 50) -> List[Dict]:
-        return self._backend.listar(q=q, limit=limit)
+        try:
+            rows = self._backend.listar(q=q, limit=limit)
+        except Exception:
+            rows = []
+        try:
+            rows_local = self._fallback_local.listar(q=q, limit=max(200, limit or 50))
+        except Exception:
+            rows_local = []
+        merged: Dict[str, Dict] = {}
+        for r in rows:
+            merged[_clave_unicidad(r)] = r
+        for r in rows_local:
+            key = _clave_unicidad(r)
+            if key not in merged:
+                merged[key] = r
+        out = sorted(merged.values(), key=lambda r: (r.get("nombre_comercial") or "").lower())
+        return out[: max(1, int(limit or 50))]
 
     def obtener(self, producto_id: str) -> Optional[Dict]:
-        return self._backend.obtener(producto_id)
+        try:
+            r = self._backend.obtener(producto_id)
+            if r:
+                return r
+        except Exception:
+            pass
+        return self._fallback_local.obtener(producto_id)
 
     def upsert(self, data: Dict) -> Dict:
-        return self._backend.upsert(data)
+        try:
+            result = self._backend.upsert(data)
+            # Mantener también copia local para resiliencia
+            try:
+                self._fallback_local.upsert(result)
+            except Exception:
+                pass
+            return result
+        except Exception:
+            return self._fallback_local.upsert(data)
 
     def actualizar(self, producto_id: str, patch: Dict) -> Optional[Dict]:
-        return self._backend.actualizar(producto_id, patch)
+        result = None
+        try:
+            result = self._backend.actualizar(producto_id, patch)
+        except Exception:
+            result = None
+        try:
+            local = self._fallback_local.actualizar(producto_id, patch)
+        except Exception:
+            local = None
+        return result or local
 
     def eliminar(self, producto_id: str) -> bool:
-        return self._backend.eliminar(producto_id)
+        ok_backend = False
+        ok_local = False
+        try:
+            ok_backend = self._backend.eliminar(producto_id)
+        except Exception:
+            ok_backend = False
+        try:
+            ok_local = self._fallback_local.eliminar(producto_id)
+        except Exception:
+            ok_local = False
+        return ok_backend or ok_local
 
 
 _catalogo_instance: Optional[CatalogoProductos] = None

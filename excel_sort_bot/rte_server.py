@@ -14,9 +14,13 @@ import sys
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from datetime import datetime
+from dotenv import load_dotenv
 
 # Añadir el path del proyecto
 sys.path.insert(0, str(Path(__file__).parent))
+
+# Cargar variables de entorno desde .env en la raíz del proyecto
+load_dotenv(Path(__file__).parent / ".env")
 
 from fastapi import FastAPI, HTTPException, Request, File, UploadFile
 from fastapi.staticfiles import StaticFiles

@@ -52,12 +52,21 @@ class LocalStorage:
             return None
         cuaderno = CuadernoExplotacion.cargar(str(filepath))
         # Auto-reparación de tratamientos que mezclan parcelas de cultivos distintos.
+        # + Auto-reparación de históricos mal particionados por Nº orden multi-parcela.
         # Es idempotente: si no hay nada que reparar, no reescribe el fichero.
         try:
-            reparados = cuaderno.reparar_tratamientos_multi_cultivo()
-            if reparados > 0:
+            reparados_multi_cultivo = cuaderno.reparar_tratamientos_multi_cultivo()
+            reparados_num_orden = cuaderno.reparar_tratamientos_num_orden_multi_parcela()
+            restablecidos_individual = cuaderno.reestablecer_num_orden_individual_tratamientos()
+            total_reparados = reparados_multi_cultivo + reparados_num_orden + restablecidos_individual
+            if total_reparados > 0:
                 cuaderno.guardar(str(filepath))
-                print(f"[auto-repair] Cuaderno {cuaderno_id}: {reparados} tratamiento(s) multi-cultivo divididos.")
+                print(
+                    f"[auto-repair] Cuaderno {cuaderno_id}: "
+                    f"{reparados_multi_cultivo} multi-cultivo + "
+                    f"{reparados_num_orden} por Nº orden + "
+                    f"{restablecidos_individual} restablecidos individuales."
+                )
         except Exception as e:
             print(f"[auto-repair] Error reparando cuaderno {cuaderno_id}: {e}")
         return cuaderno
@@ -200,12 +209,21 @@ class SupabaseStorage:
         json_data = result.data[0]["data"]
         cuaderno = CuadernoExplotacion.from_dict(json_data)
         # Auto-reparación de tratamientos que mezclan parcelas de cultivos distintos.
+        # + auto-reparación de históricos por Nº orden multi-parcela.
         # Idempotente: solo escribe en Supabase si hubo cambios reales.
         try:
-            reparados = cuaderno.reparar_tratamientos_multi_cultivo()
-            if reparados > 0:
+            reparados_multi_cultivo = cuaderno.reparar_tratamientos_multi_cultivo()
+            reparados_num_orden = cuaderno.reparar_tratamientos_num_orden_multi_parcela()
+            restablecidos_individual = cuaderno.reestablecer_num_orden_individual_tratamientos()
+            total_reparados = reparados_multi_cultivo + reparados_num_orden + restablecidos_individual
+            if total_reparados > 0:
                 self.guardar(cuaderno)
-                print(f"[auto-repair] Cuaderno {cuaderno_id}: {reparados} tratamiento(s) multi-cultivo divididos.")
+                print(
+                    f"[auto-repair] Cuaderno {cuaderno_id}: "
+                    f"{reparados_multi_cultivo} multi-cultivo + "
+                    f"{reparados_num_orden} por Nº orden + "
+                    f"{restablecidos_individual} restablecidos individuales."
+                )
         except Exception as e:
             print(f"[auto-repair] Error reparando cuaderno {cuaderno_id}: {e}")
         return cuaderno
