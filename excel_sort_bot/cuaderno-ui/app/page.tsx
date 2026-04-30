@@ -5,8 +5,12 @@ import Sidebar from "@/components/Sidebar";
 import Editor, { type EditorActions } from "@/components/Editor";
 import ChatPanel from "@/components/ChatPanel";
 import WelcomeScreen from "@/components/WelcomeScreen";
+import CatalogoView from "@/components/CatalogoView";
+import GlobalStockView from "@/components/GlobalStockView";
+import AlertasPanel from "@/components/AlertasPanel";
 import { Cuaderno, SheetType, ChatMessage, ChatSession, CellSelection } from "@/lib/types";
 import { api } from "@/lib/api";
+import { AlertTriangle } from "lucide-react";
 
 const INITIAL_MESSAGE: ChatMessage = {
   role: "assistant",
@@ -34,6 +38,7 @@ export default function Home() {
   const [activeSheet, setActiveSheet] = useState<SheetType>("parcelas");
   const [focusSheetId, setFocusSheetId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadingCuaderno, setLoadingCuaderno] = useState(false);
   const editorActionsRef = useRef<EditorActions | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
   const [leftSidebarOpen, setLeftSidebarOpen] = useState(true);
@@ -42,6 +47,10 @@ export default function Home() {
   const [rightWidth, setRightWidth] = useState<number>(320);
   const [dragging, setDragging] = useState<"left" | "right" | null>(null);
   const [pendingSelection, setPendingSelection] = useState<CellSelection | null>(null);
+  const [globalCatalogOpen, setGlobalCatalogOpen] = useState(false);
+  const [globalStockOpen, setGlobalStockOpen] = useState(false);
+  const [alertasOpen, setAlertasOpen] = useState(false);
+  const [alertasCount, setAlertasCount] = useState(0);
 
   // Sesiones de chat: cada una ligada a un cuaderno; varias pueden ser del mismo cuaderno
   const [chatSessions, setChatSessions] = useState<ChatSession[]>(() => [
@@ -148,6 +157,8 @@ export default function Home() {
   }, [dragging]);
 
   const selectCuaderno = useCallback(async (id: string) => {
+    setFocusSheetId(null);
+    setLoadingCuaderno(true);
     try {
       const data = await api.getCuaderno(id);
       setActiveCuaderno(data.cuaderno);
@@ -172,6 +183,8 @@ export default function Home() {
       if (sessionToActivate) setActiveChatId(sessionToActivate);
     } catch (error) {
       console.error("Error loading cuaderno:", error);
+    } finally {
+      setLoadingCuaderno(false);
     }
   }, []);
 
@@ -196,6 +209,14 @@ export default function Home() {
       await selectCuaderno(activeCuaderno.id);
     }
   };
+
+  // Fetch alertas count when active cuaderno changes
+  useEffect(() => {
+    if (!activeCuaderno?.id) { setAlertasCount(0); return; }
+    api.getAlertas(activeCuaderno.id)
+      .then((r) => setAlertasCount(r.total || 0))
+      .catch(() => setAlertasCount(0));
+  }, [activeCuaderno?.id]);
 
   /** Nuevo chat: mismo cuaderno actual (o sin cuaderno si no hay ninguno seleccionado) */
   const handleNewChat = useCallback(() => {
@@ -271,6 +292,18 @@ export default function Home() {
             <rect x="16" y="3" width="6" height="18" rx="0.5" fill="currentColor" fillOpacity="0.5" />
           </svg>
         </button>
+        {activeCuaderno && (
+          <button
+            onClick={() => setAlertasOpen(v => !v)}
+            title="Alertas del cuaderno"
+            className={`desktop-only p-2 rounded-md transition-colors electron-no-drag relative ${alertasOpen ? "text-amber-400" : "text-zinc-400 hover:text-zinc-100 hover:bg-white/5"}`}
+          >
+            <AlertTriangle size={17} />
+            {alertasCount > 0 && (
+              <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full" />
+            )}
+          </button>
+        )}
 
         {/* Mobile header title */}
         <span className="mobile-only header-title items-center gap-2 flex-1 text-sm font-semibold text-zinc-200 truncate">
@@ -288,8 +321,11 @@ export default function Home() {
               activeCuaderno={activeCuaderno}
               activeSheet={activeSheet}
               loading={loading}
-              onSelectCuaderno={selectCuaderno}
-              onSelectSheet={setActiveSheet}
+              onSelectCuaderno={(id) => { selectCuaderno(id); setGlobalCatalogOpen(false); setGlobalStockOpen(false); }}
+              onSelectSheet={(sheet) => {
+                setFocusSheetId(null);
+                setActiveSheet(sheet);
+              }}
               onCreateCuaderno={createCuaderno}
               onUploadSuccess={onUploadSuccess}
               onCuadernoDeleted={async () => {
@@ -298,6 +334,10 @@ export default function Home() {
                   setActiveCuaderno(null);
                 }
               }}
+              onOpenGlobalCatalog={() => { setGlobalCatalogOpen(true); setGlobalStockOpen(false); }}
+              globalCatalogOpen={globalCatalogOpen}
+              onOpenGlobalStock={() => { setGlobalStockOpen(true); setGlobalCatalogOpen(false); }}
+              globalStockOpen={globalStockOpen}
             />
             <div
               onMouseDown={() => setDragging("left")}
@@ -308,19 +348,46 @@ export default function Home() {
 
         {/* Área central — desktop */}
         <main className="desktop-only flex-1 flex-col min-w-0 min-h-0 overflow-hidden">
-          {activeCuaderno ? (
-            <Editor
-              cuaderno={activeCuaderno}
-              activeSheet={activeSheet}
-              onSheetChange={setActiveSheet}
-              onRefresh={refreshData}
-              highlight={highlight}
-              onRequestHighlight={(sheet, id) => setHighlight({ sheet, id })}
-              focusSheetId={focusSheetId}
-              onFocusModeExit={() => setFocusSheetId(null)}
-              editorActionsRef={editorActionsRef}
-              onSendSelectionToChat={handleSendSelectionToChat}
-            />
+          {globalCatalogOpen ? (
+            <div className="flex-1 flex flex-col h-full overflow-hidden">
+              <div className="px-4 py-2.5 border-b border-gray-200 bg-[var(--bg-dark)] flex items-center gap-3 shrink-0">
+                <button
+                  onClick={() => setGlobalCatalogOpen(false)}
+                  className="p-1.5 rounded-md hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors"
+                  title="Volver al editor"
+                >
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
+                </button>
+                <span className="text-sm font-semibold text-gray-800">Catálogo Global de Productos</span>
+                <span className="text-xs text-gray-400">Todos los cuadernos</span>
+              </div>
+              <CatalogoView cuadernoId={activeCuaderno?.id} standalone />
+            </div>
+          ) : globalStockOpen ? (
+            <GlobalStockView />
+          ) : activeCuaderno ? (
+            <div className="relative flex-1 min-h-0 flex flex-col">
+              <Editor
+                cuaderno={activeCuaderno}
+                activeSheet={activeSheet}
+                onSheetChange={setActiveSheet}
+                onRefresh={refreshData}
+                highlight={highlight}
+                onRequestHighlight={(sheet, id) => setHighlight({ sheet, id })}
+                focusSheetId={focusSheetId}
+                onFocusModeExit={() => setFocusSheetId(null)}
+                editorActionsRef={editorActionsRef}
+                onSendSelectionToChat={handleSendSelectionToChat}
+              />
+              {loadingCuaderno && (
+                <div className="absolute inset-0 z-30 bg-white/65 backdrop-blur-[1px] flex items-center justify-center">
+                  <div className="flex items-center gap-2.5 px-4 py-2 rounded-lg bg-white border border-gray-200 shadow-sm text-sm text-gray-700">
+                    <span className="w-4 h-4 border-2 border-gray-300 border-t-emerald-500 rounded-full animate-spin" />
+                    Cargando cuaderno...
+                  </div>
+                </div>
+              )}
+            </div>
           ) : (
             <WelcomeScreen onCreateCuaderno={createCuaderno} />
           )}
@@ -350,13 +417,24 @@ export default function Home() {
               focusSheetId={focusSheetId}
               onSelectSheetFromChat={(sheetId) => {
                 setFocusSheetId(sheetId);
-                const base: SheetType[] = ["parcelas", "productos", "tratamientos", "fertilizantes", "cosecha", "historico"];
+                const base: SheetType[] = ["parcelas", "productos", "tratamientos", "fertilizantes", "cosecha", "asesoramiento", "catalogo", "historico", "tratamientos_especiales", "trat_asesor", "stock"];
                 if (base.includes(sheetId as SheetType)) setActiveSheet(sheetId as SheetType);
               }}
               onFocusModeExit={() => setFocusSheetId(null)}
               editorActionsRef={editorActionsRef}
               pendingSelection={pendingSelection}
               onSelectionConsumed={() => setPendingSelection(null)}
+            />
+          </div>
+        )}
+
+        {/* Alertas Panel — desktop */}
+        {alertasOpen && activeCuaderno && (
+          <div className="desktop-only h-full border-l border-gray-200" style={{ width: 280 }}>
+            <AlertasPanel
+              cuaderno={activeCuaderno}
+              onNavigate={(sheet) => setActiveSheet(sheet)}
+              onClose={() => setAlertasOpen(false)}
             />
           </div>
         )}
@@ -372,9 +450,12 @@ export default function Home() {
               loading={loading}
               onSelectCuaderno={(id) => {
                 selectCuaderno(id);
+                setGlobalCatalogOpen(false);
+                setGlobalStockOpen(false);
                 setMobilePanel("editor");
               }}
               onSelectSheet={(sheet) => {
+                setFocusSheetId(null);
                 setActiveSheet(sheet);
                 setMobilePanel("editor");
               }}
@@ -392,6 +473,10 @@ export default function Home() {
                   setActiveCuaderno(null);
                 }
               }}
+              onOpenGlobalCatalog={() => { setGlobalCatalogOpen(true); setGlobalStockOpen(false); setMobilePanel("editor"); }}
+              globalCatalogOpen={globalCatalogOpen}
+              onOpenGlobalStock={() => { setGlobalStockOpen(true); setGlobalCatalogOpen(false); setMobilePanel("editor"); }}
+              globalStockOpen={globalStockOpen}
             />
           </div>
         )}
@@ -399,22 +484,44 @@ export default function Home() {
         {/* Editor — mobile full screen */}
         {mobilePanel === "editor" && (
           <div className="mobile-only mobile-panel flex-col w-full">
-            {activeCuaderno ? (
-              <Editor
-                cuaderno={activeCuaderno}
-                activeSheet={activeSheet}
-                onSheetChange={setActiveSheet}
-                onRefresh={refreshData}
-                highlight={highlight}
-                onRequestHighlight={(sheet, id) => setHighlight({ sheet, id })}
-                focusSheetId={focusSheetId}
-                onFocusModeExit={() => setFocusSheetId(null)}
-                editorActionsRef={editorActionsRef}
-                onSendSelectionToChat={(sel) => {
-                  handleSendSelectionToChat(sel);
-                  setMobilePanel("chat");
-                }}
-              />
+            {globalCatalogOpen ? (
+              <div className="flex-1 flex flex-col h-full overflow-hidden">
+                <div className="px-4 py-2.5 border-b border-gray-200 bg-[var(--bg-dark)] flex items-center gap-2 shrink-0">
+                  <button onClick={() => setGlobalCatalogOpen(false)} className="p-1.5 rounded text-gray-400 hover:text-gray-600">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
+                  </button>
+                  <span className="text-sm font-semibold text-gray-800">Catálogo Global</span>
+                </div>
+                <CatalogoView cuadernoId={activeCuaderno?.id} standalone />
+              </div>
+            ) : globalStockOpen ? (
+              <GlobalStockView />
+            ) : activeCuaderno ? (
+              <div className="relative flex-1 min-h-0 flex flex-col">
+                <Editor
+                  cuaderno={activeCuaderno}
+                  activeSheet={activeSheet}
+                  onSheetChange={setActiveSheet}
+                  onRefresh={refreshData}
+                  highlight={highlight}
+                  onRequestHighlight={(sheet, id) => setHighlight({ sheet, id })}
+                  focusSheetId={focusSheetId}
+                  onFocusModeExit={() => setFocusSheetId(null)}
+                  editorActionsRef={editorActionsRef}
+                  onSendSelectionToChat={(sel) => {
+                    handleSendSelectionToChat(sel);
+                    setMobilePanel("chat");
+                  }}
+                />
+                {loadingCuaderno && (
+                  <div className="absolute inset-0 z-30 bg-white/65 backdrop-blur-[1px] flex items-center justify-center">
+                    <div className="flex items-center gap-2.5 px-4 py-2 rounded-lg bg-white border border-gray-200 shadow-sm text-sm text-gray-700">
+                      <span className="w-4 h-4 border-2 border-gray-300 border-t-emerald-500 rounded-full animate-spin" />
+                      Cargando cuaderno...
+                    </div>
+                  </div>
+                )}
+              </div>
             ) : (
               <WelcomeScreen onCreateCuaderno={createCuaderno} />
             )}
@@ -442,7 +549,7 @@ export default function Home() {
               focusSheetId={focusSheetId}
               onSelectSheetFromChat={(sheetId) => {
                 setFocusSheetId(sheetId);
-                const base: SheetType[] = ["parcelas", "productos", "tratamientos", "fertilizantes", "cosecha", "historico"];
+                const base: SheetType[] = ["parcelas", "productos", "tratamientos", "fertilizantes", "cosecha", "asesoramiento", "catalogo", "historico", "tratamientos_especiales", "trat_asesor", "stock"];
                 if (base.includes(sheetId as SheetType)) setActiveSheet(sheetId as SheetType);
                 setMobilePanel("editor");
               }}

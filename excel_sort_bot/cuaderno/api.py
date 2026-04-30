@@ -6,20 +6,21 @@ Soporte para upload y procesamiento de archivos con GPT-4o Vision.
 import os
 import re
 import json
+import time
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 from datetime import datetime, date
 import tempfile
 
 
-from fastapi import APIRouter, HTTPException, Query, File, UploadFile, Form
+from fastapi import APIRouter, HTTPException, Query, File, UploadFile, Form, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from .models import (
     CuadernoExplotacion, Parcela, ProductoFitosanitario,
     ProductoAplicado, Tratamiento, EstadoTratamiento, TipoProducto, HojaExcel,
-    Fertilizacion, Cosecha
+    Fertilizacion, Cosecha, Asesoramiento
 )
 from .storage import get_storage
 from .productos_catalogo import get_catalogo
@@ -35,11 +36,272 @@ router = APIRouter(prefix="/api/cuaderno", tags=["Cuaderno de Explotación"])
 
 
 # ============================================
+# WEBSOCKET HUB (stock realtime)
+# ============================================
+
+class _StockWsHub:
+    def __init__(self):
+        self._global: List[WebSocket] = []
+        self._by_cuaderno: Dict[str, List[WebSocket]] = {}
+
+    async def connect_global(self, ws: WebSocket):
+        await ws.accept()
+        self._global.append(ws)
+
+    async def connect_cuaderno(self, ws: WebSocket, cuaderno_id: str):
+        await ws.accept()
+        self._by_cuaderno.setdefault(cuaderno_id, []).append(ws)
+
+    def disconnect_global(self, ws: WebSocket):
+        self._global = [c for c in self._global if c is not ws]
+
+    def disconnect_cuaderno(self, ws: WebSocket, cuaderno_id: str):
+        conns = self._by_cuaderno.get(cuaderno_id, [])
+        self._by_cuaderno[cuaderno_id] = [c for c in conns if c is not ws]
+
+    async def _broadcast(self, conns: List[WebSocket], payload: Dict[str, Any]):
+        for ws in list(conns):
+            try:
+                await ws.send_json(payload)
+            except Exception:
+                # La conexión murió; se limpiará en el siguiente ciclo.
+                continue
+
+    async def publish_stock_changed(self, cuaderno_id: str):
+        payload = {"event": "stock_changed", "cuaderno_id": cuaderno_id, "ts": datetime.now().isoformat()}
+        await self._broadcast(self._global, payload)
+        await self._broadcast(self._by_cuaderno.get(cuaderno_id, []), payload)
+
+
+_stock_ws_hub = _StockWsHub()
+
+# Cache en memoria para acelerar endpoints costosos (catálogo/stock global).
+_FAST_CACHE: Dict[str, Dict[str, Any]] = {}
+_LAST_CATALOGO_SYNC_TS: float = 0.0
+
+
+def _cache_get(key: str) -> Optional[Any]:
+    item = _FAST_CACHE.get(key)
+    if not item:
+        return None
+    if time.time() >= float(item.get("expires_at", 0)):
+        _FAST_CACHE.pop(key, None)
+        return None
+    return item.get("value")
+
+
+def _cache_set(key: str, value: Any, ttl_sec: int = 8) -> None:
+    _FAST_CACHE[key] = {"value": value, "expires_at": time.time() + max(1, ttl_sec)}
+
+
+def _cache_invalidate(prefixes: List[str]) -> None:
+    keys = list(_FAST_CACHE.keys())
+    for k in keys:
+        if any(k.startswith(p) for p in prefixes):
+            _FAST_CACHE.pop(k, None)
+
+
+CULTIVOS_ASESORAMIENTO_OBLIGATORIO = ("PATATA", "REMOLACHA")
+TIPO_ASESORAMIENTO_AUTO = "AUTO_SUPERFICIE_ESPECIAL"
+
+
+def _parcelas_especiales_y_superficie(cuaderno: CuadernoExplotacion) -> tuple[List[Parcela], float]:
+    parcelas_especiales: List[Parcela] = []
+    total_ha = 0.0
+    for parcela in (cuaderno.parcelas or []):
+        cultivo = (parcela.especie or parcela.cultivo or "").upper().strip()
+        if any(c in cultivo for c in CULTIVOS_ASESORAMIENTO_OBLIGATORIO):
+            parcelas_especiales.append(parcela)
+            try:
+                total_ha += float(parcela.superficie_cultivada or parcela.superficie_ha or parcela.superficie_sigpac or 0)
+            except (TypeError, ValueError):
+                pass
+    return parcelas_especiales, round(total_ha, 2)
+
+
+def _normalizar_cultivo_variante_parcela(parcela: Parcela) -> bool:
+    """
+    Normaliza cultivos tipo 'REMOLACHA.ROSADONNA' a:
+      - cultivo/especie: 'REMOLACHA'
+      - variedad: 'ROSADONNA'
+    """
+    raw_cultivo = (parcela.especie or parcela.cultivo or "").strip()
+    if not raw_cultivo:
+        return False
+    if "." not in raw_cultivo:
+        return False
+
+    base, variante = raw_cultivo.split(".", 1)
+    base = base.strip()
+    variante = variante.strip()
+    if not base:
+        return False
+
+    changed = False
+    if (parcela.especie or "").strip() != base:
+        parcela.especie = base
+        changed = True
+    if (parcela.cultivo or "").strip() != base:
+        parcela.cultivo = base
+        changed = True
+    if variante and not (parcela.variedad or "").strip():
+        parcela.variedad = variante
+        changed = True
+    return changed
+
+
+def _normalizar_parcelas_cultivo_variante(cuaderno: CuadernoExplotacion) -> bool:
+    changed = False
+    for parcela in (cuaderno.parcelas or []):
+        if _normalizar_cultivo_variante_parcela(parcela):
+            changed = True
+    if changed:
+        cuaderno._actualizar_modificacion()
+    return changed
+
+
+def _desglosar_asesoramientos_multi_parcela(cuaderno: CuadernoExplotacion) -> bool:
+    """
+    Normaliza asesoramientos históricos con "num_orden_parcelas" agrupado (ej: "45,46,58")
+    en filas individuales (una por Nº de orden), igual que el resto de hojas.
+    """
+    ases = list(cuaderno.asesoramientos or [])
+    if not ases:
+        return False
+
+    orden_to_parcela: Dict[str, Parcela] = {}
+    for p in (cuaderno.parcelas or []):
+        if isinstance(p.num_orden, int) and p.num_orden > 0:
+            orden_to_parcela[str(p.num_orden)] = p
+
+    changed = False
+    nuevos: List[Asesoramiento] = []
+    for a in ases:
+        raw = (a.num_orden_parcelas or "").strip()
+        tokens = [t.strip() for t in raw.replace(";", ",").split(",") if t.strip()]
+        if len(tokens) <= 1:
+            nuevos.append(a)
+            continue
+
+        changed = True
+        divisor = max(1, len(tokens))
+        sup_base = float(a.superficie_ha or 0)
+        for tok in tokens:
+            parcela = orden_to_parcela.get(tok)
+            sup = float(parcela.superficie_cultivada or parcela.superficie_ha or parcela.superficie_sigpac or 0) if parcela else 0.0
+            if sup <= 0 and sup_base > 0:
+                sup = round(sup_base / divisor, 2)
+            cultivo_parcela = ((parcela.especie or parcela.cultivo) if parcela else "") or ""
+            cultivo_origen = (a.cultivo_especie or "").strip()
+            cultivo_final = cultivo_origen
+            # Si el histórico quedó con etiqueta combinada (PATATA/REMOLACHA), sustituimos por cultivo real de la parcela.
+            if not cultivo_final or "/" in cultivo_final or "," in cultivo_final or cultivo_final.upper() == "PATATA/REMOLACHA":
+                cultivo_final = cultivo_parcela
+            nuevos.append(
+                Asesoramiento(
+                    fecha=a.fecha,
+                    num_orden_parcelas=tok,
+                    cultivo_especie=cultivo_final,
+                    cultivo_variedad=a.cultivo_variedad or ((parcela.variedad or "") if parcela else ""),
+                    superficie_ha=round(sup, 2) if sup else 0.0,
+                    nombre_asesor=a.nombre_asesor,
+                    num_habilitacion=a.num_habilitacion,
+                    tipo_asesoramiento=a.tipo_asesoramiento,
+                    recomendacion=a.recomendacion,
+                    observaciones=a.observaciones,
+                    color_fila=a.color_fila,
+                )
+            )
+
+    if changed:
+        cuaderno.asesoramientos = nuevos
+        cuaderno._actualizar_modificacion()
+    return changed
+
+
+def _normalizar_cultivo_asesoramiento_individual(cuaderno: CuadernoExplotacion) -> bool:
+    """
+    Corrige filas de asesoramiento ya desglosadas que aún conservan cultivo combinado
+    (p.ej. PATATA/REMOLACHA), sustituyéndolo por el cultivo real de su parcela.
+    """
+    orden_to_parcela: Dict[str, Parcela] = {}
+    for p in (cuaderno.parcelas or []):
+        if isinstance(p.num_orden, int) and p.num_orden > 0:
+            orden_to_parcela[str(p.num_orden)] = p
+
+    changed = False
+    for a in (cuaderno.asesoramientos or []):
+        cultivo = (a.cultivo_especie or "").strip()
+        if not cultivo:
+            continue
+        if "/" not in cultivo and "," not in cultivo and cultivo.upper() != "PATATA/REMOLACHA":
+            continue
+
+        tokens = [t.strip() for t in str(a.num_orden_parcelas or "").replace(";", ",").split(",") if t.strip()]
+        if len(tokens) != 1:
+            continue
+        parcela = orden_to_parcela.get(tokens[0])
+        if not parcela:
+            continue
+        cultivo_real = (parcela.especie or parcela.cultivo or "").strip()
+        if cultivo_real and cultivo_real != cultivo:
+            a.cultivo_especie = cultivo_real
+            if not (a.cultivo_variedad or "").strip():
+                a.cultivo_variedad = (parcela.variedad or "").strip()
+            changed = True
+
+    if changed:
+        cuaderno._actualizar_modificacion()
+    return changed
+
+
+def _asegurar_asesoramiento_automatico(cuaderno: CuadernoExplotacion) -> bool:
+    """
+    Si PATATA+REMOLACHA del cuaderno supera 5 ha (sumadas), crea un asesoramiento automático.
+    Devuelve True si el cuaderno fue modificado.
+    """
+    parcelas_especiales, total_ha = _parcelas_especiales_y_superficie(cuaderno)
+    if total_ha <= 5 or not parcelas_especiales:
+        return False
+
+    existentes_por_orden = {
+        (a.num_orden_parcelas or "").strip()
+        for a in (cuaderno.asesoramientos or [])
+        if (a.num_orden_parcelas or "").strip()
+    }
+
+    created = False
+    for parcela in parcelas_especiales:
+        if not isinstance(parcela.num_orden, int) or parcela.num_orden <= 0:
+            continue
+        orden = str(parcela.num_orden)
+        if orden in existentes_por_orden:
+            continue
+        sup = float(parcela.superficie_cultivada or parcela.superficie_ha or parcela.superficie_sigpac or 0)
+        cultivo_base = (parcela.especie or parcela.cultivo or "").strip().upper()
+        asesoramiento = Asesoramiento(
+            fecha=datetime.now().date().isoformat(),
+            num_orden_parcelas=orden,
+            cultivo_especie=cultivo_base or "PATATA/REMOLACHA",
+            cultivo_variedad=(parcela.variedad or "").strip(),
+            superficie_ha=round(sup, 2) if sup else 0.0,
+            tipo_asesoramiento=TIPO_ASESORAMIENTO_AUTO,
+            recomendacion=f"Asesoramiento automático: superficie conjunta de cultivos especiales = {total_ha:.2f} ha (>5 ha).",
+            observaciones="Creado automáticamente por regla de Patata+Remolacha.",
+        )
+        cuaderno.agregar_asesoramiento(asesoramiento)
+        existentes_por_orden.add(orden)
+        created = True
+    return created
+
+
+# ============================================
 # PYDANTIC REQUEST/RESPONSE MODELS
 # ============================================
 
 class ParcelaCreate(BaseModel):
     nombre: str
+    num_orden: int = 0
     referencia_catastral: str = ""
     superficie_ha: float = 0.0
     cultivo: str = ""
@@ -159,6 +421,19 @@ class CosechaCreate(BaseModel):
     cliente_rgseaa: str = ""
 
 
+class AsesoramientoCreate(BaseModel):
+    fecha: str = ""
+    parcela_ids: List[str] = Field(default_factory=list)
+    cultivo_especie: str = ""
+    cultivo_variedad: str = ""
+    superficie_ha: float = 0.0
+    nombre_asesor: str = ""
+    num_habilitacion: str = ""
+    tipo_asesoramiento: str = ""
+    recomendacion: str = ""
+    observaciones: str = ""
+
+
 class TratamientoUpdate(BaseModel):
     """Campos opcionales para actualizar un tratamiento."""
     fecha_aplicacion: Optional[str] = None
@@ -263,7 +538,19 @@ async def obtener_cuaderno(cuaderno_id: str):
     
     if not cuaderno:
         raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
-    
+
+    changed = False
+    if _normalizar_parcelas_cultivo_variante(cuaderno):
+        changed = True
+    if _desglosar_asesoramientos_multi_parcela(cuaderno):
+        changed = True
+    if _normalizar_cultivo_asesoramiento_individual(cuaderno):
+        changed = True
+    if _asegurar_asesoramiento_automatico(cuaderno):
+        changed = True
+    if changed:
+        storage.guardar(cuaderno)
+
     return {"cuaderno": cuaderno.to_dict()}
 
 
@@ -351,7 +638,7 @@ async def actualizar_celda(cuaderno_id: str, data: CellPatch):
     if not cuaderno:
         raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
     sheet_id = data.sheet_id
-    if sheet_id in ("parcelas", "productos", "tratamientos", "fertilizantes", "cosecha"):
+    if sheet_id in ("parcelas", "productos", "tratamientos", "fertilizantes", "cosecha", "asesoramiento"):
         raw_row = data.row
         entity_id = str(raw_row)
         column = str(data.column).strip()
@@ -365,8 +652,10 @@ async def actualizar_celda(cuaderno_id: str, data: CellPatch):
             items = cuaderno.tratamientos
         elif sheet_id == "fertilizantes":
             items = getattr(cuaderno, "fertilizaciones", [])
-        else:  # cosecha
+        elif sheet_id == "cosecha":
             items = getattr(cuaderno, "cosechas", [])
+        else:  # asesoramiento
+            items = getattr(cuaderno, "asesoramientos", [])
         if items and entity_id and not any(getattr(it, "id", None) == entity_id for it in items):
             try:
                 idx = int(raw_row)
@@ -377,17 +666,19 @@ async def actualizar_celda(cuaderno_id: str, data: CellPatch):
 
         # Tolerancia: alias de columnas visibles en UI -> campo real de modelo
         aliases = {
-            # comunes
-            "fecha": "fecha_aplicacion",
-            "problema": "problema_fitosanitario",
-            "operador": "aplicador",
             # parcelas
             "termino municipal": "termino_municipal",
             "término municipal": "termino_municipal",
-            # tratamientos (campos mostrados en tabla)
+            # comunes de tablas estructurales
             "parcela_nombres": "num_orden_parcelas",
             "parcelas": "num_orden_parcelas",
         }
+        if sheet_id == "tratamientos":
+            aliases.update({
+                "fecha": "fecha_aplicacion",
+                "problema": "problema_fitosanitario",
+                "operador": "aplicador",
+            })
         col_norm = column.lower()
         mapped_column = aliases.get(col_norm, column)
 
@@ -401,6 +692,11 @@ async def actualizar_celda(cuaderno_id: str, data: CellPatch):
         ok = cuaderno.aplicar_celda(sheet_id, row_idx, col_idx, data.value)
     if not ok:
         raise HTTPException(status_code=400, detail="No se pudo aplicar el cambio (entidad o campo no encontrado)")
+
+    if sheet_id == "parcelas":
+        _normalizar_parcelas_cultivo_variante(cuaderno)
+        _asegurar_asesoramiento_automatico(cuaderno)
+
     storage.guardar(cuaderno)
     return {"success": True, "timestamp": datetime.now().isoformat()}
 
@@ -434,8 +730,17 @@ async def crear_parcela(cuaderno_id: str, data: ParcelaCreate):
     if not cuaderno:
         raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
     
+    # Auto-assign num_orden único si no se especifica o ya existe
+    existing_ordenes = {p.num_orden for p in cuaderno.parcelas if isinstance(p.num_orden, int) and p.num_orden > 0}
+    num_orden = data.num_orden
+    if num_orden <= 0 or num_orden in existing_ordenes:
+        num_orden = max(existing_ordenes, default=0) + 1
+        while num_orden in existing_ordenes:
+            num_orden += 1
+
     parcela = Parcela(
         nombre=data.nombre,
+        num_orden=num_orden,
         referencia_catastral=data.referencia_catastral,
         superficie_ha=data.superficie_ha,
         cultivo=data.cultivo,
@@ -444,8 +749,10 @@ async def crear_parcela(cuaderno_id: str, data: ParcelaCreate):
         provincia=data.provincia,
         notas=data.notas
     )
-    
+    _normalizar_cultivo_variante_parcela(parcela)
+
     cuaderno.agregar_parcela(parcela)
+    _asegurar_asesoramiento_automatico(cuaderno)
     storage.guardar(cuaderno)
     
     return {
@@ -473,7 +780,9 @@ async def actualizar_parcela(cuaderno_id: str, parcela_id: str, data: ParcelaUpd
     for key, value in update_data.items():
         if hasattr(parcela, key):
             setattr(parcela, key, value)
-    
+    _normalizar_cultivo_variante_parcela(parcela)
+
+    _asegurar_asesoramiento_automatico(cuaderno)
     cuaderno._actualizar_modificacion()
     storage.guardar(cuaderno)
     
@@ -493,6 +802,7 @@ async def eliminar_parcela(cuaderno_id: str, parcela_id: str):
         raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
     if not cuaderno.eliminar_parcela(parcela_id):
         raise HTTPException(status_code=404, detail="Parcela no encontrada")
+    _asegurar_asesoramiento_automatico(cuaderno)
     storage.guardar(cuaderno)
     return {"success": True, "message": "Parcela eliminada"}
 
@@ -561,6 +871,22 @@ async def crear_producto(cuaderno_id: str, data: ProductoCreate):
     
     cuaderno.agregar_producto(producto)
     storage.guardar(cuaderno)
+    # Publicar automáticamente en catálogo global (best-effort).
+    try:
+        get_catalogo().upsert({
+            "nombre_comercial": producto.nombre_comercial,
+            "numero_registro": producto.numero_registro,
+            "materia_activa": producto.materia_activa,
+            "formulacion": producto.formulacion,
+            "tipo": producto.tipo.value if hasattr(producto.tipo, "value") else str(producto.tipo or "fitosanitario"),
+            "unidad": producto.unidad or "L",
+            "proveedor": producto.proveedor,
+            "notas": producto.notas,
+        })
+    except Exception:
+        pass
+    _cache_invalidate(["catalog_global::", "stock_global::all"])
+    await _stock_ws_hub.publish_stock_changed(cuaderno_id)
     
     return {
         "success": True,
@@ -579,6 +905,7 @@ async def eliminar_producto(cuaderno_id: str, producto_id: str):
     if not cuaderno.eliminar_producto(producto_id):
         raise HTTPException(status_code=404, detail="Producto no encontrado")
     storage.guardar(cuaderno)
+    _cache_invalidate(["catalog_global::", "stock_global::all"])
     return {"success": True, "message": "Producto eliminado"}
 
 
@@ -586,29 +913,151 @@ async def eliminar_producto(cuaderno_id: str, producto_id: str):
 # CATÁLOGO GLOBAL DE PRODUCTOS (compartido)
 # ============================================
 
-@router.get("/catalogo/productos")
+def _sync_catalogo_desde_cuadernos() -> None:
+    """
+    Sincroniza productos ya existentes en cuadernos hacia el catálogo global.
+    Idempotente por upsert (nombre+registro).
+    """
+    try:
+        storage = get_storage()
+        catalogo = get_catalogo()
+        for meta in storage.listar():
+            cid = meta.get("id")
+            if not cid:
+                continue
+            cuaderno = storage.cargar(cid)
+            if not cuaderno:
+                continue
+            for prod in (cuaderno.productos or []):
+                try:
+                    catalogo.upsert({
+                        "nombre_comercial": prod.nombre_comercial,
+                        "numero_registro": prod.numero_registro,
+                        "materia_activa": prod.materia_activa,
+                        "formulacion": prod.formulacion,
+                        "tipo": prod.tipo.value if hasattr(prod.tipo, "value") else str(prod.tipo or "fitosanitario"),
+                        "unidad": prod.unidad or "L",
+                        "proveedor": prod.proveedor,
+                        "notas": prod.notas,
+                    })
+                except Exception:
+                    continue
+    except Exception:
+        pass
+
+
+def _collect_productos_desde_cuadernos(q: str = "") -> List[Dict[str, Any]]:
+    """
+    Recolecta productos directamente desde todos los cuadernos (sin depender del
+    backend del catálogo global), deduplicando por nombre+registro+unidad.
+    """
+    storage = get_storage()
+    q_norm = (q or "").strip().lower()
+    agg: Dict[str, Dict[str, Any]] = {}
+
+    for meta in storage.listar():
+        cid = meta.get("id")
+        if not cid:
+            continue
+        cuaderno = storage.cargar(cid)
+        if not cuaderno:
+            continue
+        for p in (cuaderno.productos or []):
+            nombre = (p.nombre_comercial or "").strip()
+            registro = (p.numero_registro or "").strip()
+            materia = (p.materia_activa or "").strip()
+            formulacion = (p.formulacion or "").strip()
+            unidad = (p.unidad or "L").strip()
+            proveedor = (p.proveedor or "").strip()
+            notas = (p.notas or "").strip()
+            if q_norm:
+                hay_match = any(
+                    q_norm in (v or "").lower()
+                    for v in (nombre, registro, materia, formulacion, proveedor, notas)
+                )
+                if not hay_match:
+                    continue
+
+            key = f"{nombre.lower()}||{registro.lower()}||{unidad.lower()}"
+            if key not in agg:
+                agg[key] = {
+                    "id": f"cuaderno::{key}",
+                    "nombre_comercial": nombre,
+                    "numero_registro": registro,
+                    "materia_activa": materia,
+                    "formulacion": formulacion,
+                    "tipo": p.tipo.value if hasattr(p.tipo, "value") else str(p.tipo or "fitosanitario"),
+                    "unidad": unidad,
+                    "proveedor": proveedor,
+                    "notas": notas,
+                    "created_at": "",
+                    "updated_at": "",
+                }
+            else:
+                row = agg[key]
+                if not row.get("materia_activa") and materia:
+                    row["materia_activa"] = materia
+                if not row.get("formulacion") and formulacion:
+                    row["formulacion"] = formulacion
+                if not row.get("proveedor") and proveedor:
+                    row["proveedor"] = proveedor
+                if not row.get("notas") and notas:
+                    row["notas"] = notas
+
+    return sorted(agg.values(), key=lambda r: (r.get("nombre_comercial") or "").lower())
+
+
+@router.get("/catalog/global/productos")
 async def listar_catalogo_productos(q: str = "", limit: int = Query(default=50, le=200)):
     """Busca productos en el catálogo GLOBAL (compartido entre todos los cuadernos)."""
+    global _LAST_CATALOGO_SYNC_TS
+    cache_key = f"catalog_global::{(q or '').strip().lower()}::{int(limit or 50)}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     try:
-        productos = get_catalogo().listar(q=q, limit=limit)
-        return {"productos": productos, "total": len(productos)}
+        # Evita sync completo en cada request (costoso con muchos cuadernos).
+        now = time.time()
+        if now - _LAST_CATALOGO_SYNC_TS > 20:
+            _sync_catalogo_desde_cuadernos()
+            _LAST_CATALOGO_SYNC_TS = now
+        productos_catalogo = get_catalogo().listar(q=q, limit=limit)
+    except Exception:
+        productos_catalogo = []
+
+    try:
+        productos_cuadernos = _collect_productos_desde_cuadernos(q=q)
+        merged: Dict[str, Dict[str, Any]] = {}
+        for p in productos_catalogo:
+            key = f"{(p.get('nombre_comercial') or '').strip().lower()}||{(p.get('numero_registro') or '').strip().lower()}||{(p.get('unidad') or 'L').strip().lower()}"
+            merged[key] = p
+        for p in productos_cuadernos:
+            key = f"{(p.get('nombre_comercial') or '').strip().lower()}||{(p.get('numero_registro') or '').strip().lower()}||{(p.get('unidad') or 'L').strip().lower()}"
+            if key not in merged:
+                merged[key] = p
+        productos = sorted(merged.values(), key=lambda r: (r.get("nombre_comercial") or "").lower())[: max(1, int(limit or 50))]
+        payload = {"productos": productos, "total": len(productos)}
+        _cache_set(cache_key, payload, ttl_sec=10)
+        return payload
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error listando catálogo: {e}")
 
 
-@router.post("/catalogo/productos")
+@router.post("/catalog/global/productos")
 async def crear_catalogo_producto(data: CatalogoProductoCreate):
     """Crea o actualiza (upsert por nombre+registro) un producto en el catálogo global."""
     if not (data.nombre_comercial or "").strip():
         raise HTTPException(status_code=400, detail="nombre_comercial es obligatorio")
     try:
         producto = get_catalogo().upsert(data.model_dump())
+        _cache_invalidate(["catalog_global::"])
         return {"success": True, "producto": producto}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error creando producto en catálogo: {e}")
 
 
-@router.put("/catalogo/productos/{producto_id}")
+@router.put("/catalog/global/productos/{producto_id}")
 async def actualizar_catalogo_producto(producto_id: str, data: CatalogoProductoUpdate):
     """Actualiza un producto del catálogo global."""
     patch = {k: v for k, v in data.model_dump().items() if v is not None}
@@ -618,10 +1067,11 @@ async def actualizar_catalogo_producto(producto_id: str, data: CatalogoProductoU
         raise HTTPException(status_code=500, detail=f"Error actualizando catálogo: {e}")
     if not actualizado:
         raise HTTPException(status_code=404, detail="Producto no encontrado en catálogo")
+    _cache_invalidate(["catalog_global::"])
     return {"success": True, "producto": actualizado}
 
 
-@router.delete("/catalogo/productos/{producto_id}")
+@router.delete("/catalog/global/productos/{producto_id}")
 async def eliminar_catalogo_producto(producto_id: str):
     """Elimina un producto del catálogo global."""
     try:
@@ -630,6 +1080,7 @@ async def eliminar_catalogo_producto(producto_id: str):
         raise HTTPException(status_code=500, detail=f"Error eliminando del catálogo: {e}")
     if not ok:
         raise HTTPException(status_code=404, detail="Producto no encontrado en catálogo")
+    _cache_invalidate(["catalog_global::"])
     return {"success": True, "message": "Producto eliminado del catálogo global"}
 
 
@@ -830,6 +1281,21 @@ async def crear_tratamiento(cuaderno_id: str, data: TratamientoCreate):
     )
     
     creados = cuaderno.agregar_tratamiento_desglosado(plantilla)
+
+    # Deducir stock de productos aplicados
+    superficie_total = sum(
+        next((p.superficie_cultivada or p.superficie_sigpac or 0.0 for p in cuaderno.parcelas if p.id == pid), 0.0)
+        for pid in data.parcela_ids
+    )
+    if superficie_total <= 0:
+        superficie_total = float(data.superficie_tratada or 1.0)
+    for prod_data in data.productos:
+        if prod_data.producto_id:
+            prod_obj = cuaderno.obtener_producto(prod_data.producto_id)
+            if prod_obj and prod_obj.cantidad_adquirida > 0:
+                consumo = float(prod_data.dosis or 0) * superficie_total
+                prod_obj.cantidad_adquirida = max(0.0, round(prod_obj.cantidad_adquirida - consumo, 4))
+
     storage.guardar(cuaderno)
     
     return {
@@ -979,6 +1445,478 @@ async def crear_cosecha(cuaderno_id: str, data: CosechaCreate):
     return {"cosecha": cosecha.to_dict()}
 
 
+# ============================================
+# ASESORAMIENTO (Hoja 3.2)
+# ============================================
+
+@router.post("/{cuaderno_id}/asesoramientos")
+async def crear_asesoramiento(cuaderno_id: str, data: AsesoramientoCreate):
+    """Añade un registro de asesoramiento fitosanitario (Hoja 3.2)."""
+    storage = get_storage()
+    cuaderno = storage.cargar(cuaderno_id)
+    if not cuaderno:
+        raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
+
+    asesoramientos_creados: List[Asesoramiento] = []
+    if data.parcela_ids:
+        for pid in data.parcela_ids:
+            parcela = cuaderno.obtener_parcela(pid)
+            if not parcela:
+                continue
+            orden = str(parcela.num_orden) if isinstance(parcela.num_orden, int) and parcela.num_orden > 0 else pid
+            sup_parcela = float(parcela.superficie_cultivada or parcela.superficie_ha or parcela.superficie_sigpac or 0)
+            asesoramiento = Asesoramiento(
+                fecha=data.fecha,
+                num_orden_parcelas=orden,
+                cultivo_especie=data.cultivo_especie or (parcela.especie or parcela.cultivo or ""),
+                cultivo_variedad=data.cultivo_variedad or (parcela.variedad or ""),
+                superficie_ha=round(sup_parcela, 2),
+                nombre_asesor=data.nombre_asesor,
+                num_habilitacion=data.num_habilitacion,
+                tipo_asesoramiento=data.tipo_asesoramiento,
+                recomendacion=data.recomendacion,
+                observaciones=data.observaciones,
+            )
+            cuaderno.agregar_asesoramiento(asesoramiento)
+            asesoramientos_creados.append(asesoramiento)
+    else:
+        asesoramiento = Asesoramiento(
+            fecha=data.fecha,
+            num_orden_parcelas="",
+            cultivo_especie=data.cultivo_especie,
+            cultivo_variedad=data.cultivo_variedad,
+            superficie_ha=round(float(data.superficie_ha or 0), 2),
+            nombre_asesor=data.nombre_asesor,
+            num_habilitacion=data.num_habilitacion,
+            tipo_asesoramiento=data.tipo_asesoramiento,
+            recomendacion=data.recomendacion,
+            observaciones=data.observaciones,
+        )
+        cuaderno.agregar_asesoramiento(asesoramiento)
+        asesoramientos_creados.append(asesoramiento)
+
+    storage.guardar(cuaderno)
+    first = asesoramientos_creados[0] if asesoramientos_creados else None
+    return {
+        "asesoramiento": first.to_dict() if first else None,
+        "asesoramientos": [a.to_dict() for a in asesoramientos_creados],
+        "total": len(asesoramientos_creados),
+    }
+
+
+@router.delete("/{cuaderno_id}/asesoramientos/{asesoramiento_id}")
+async def eliminar_asesoramiento(cuaderno_id: str, asesoramiento_id: str):
+    """Elimina un registro de asesoramiento."""
+    storage = get_storage()
+    cuaderno = storage.cargar(cuaderno_id)
+    if not cuaderno:
+        raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
+    ok = cuaderno.eliminar_asesoramiento(asesoramiento_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Asesoramiento no encontrado")
+    storage.guardar(cuaderno)
+    return {"success": True}
+
+
+class StockEntradaCreate(BaseModel):
+    producto_id: Optional[str] = None
+    nombre_comercial: str = ""
+    cantidad: float
+    unidad: str = "L"
+    fecha: str = ""
+    proveedor: str = ""
+    num_albaran: str = ""
+    num_lote: str = ""
+    precio_unidad: float = 0.0
+    notas: str = ""
+
+class StockEntradaUpdate(BaseModel):
+    cantidad: Optional[float] = None
+    fecha: Optional[str] = None
+    proveedor: Optional[str] = None
+    num_albaran: Optional[str] = None
+    num_lote: Optional[str] = None
+    precio_unidad: Optional[float] = None
+    notas: Optional[str] = None
+
+
+@router.websocket("/ws/stock/global")
+async def ws_stock_global(websocket: WebSocket):
+    await _stock_ws_hub.connect_global(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        _stock_ws_hub.disconnect_global(websocket)
+    except Exception:
+        _stock_ws_hub.disconnect_global(websocket)
+
+
+@router.websocket("/ws/stock/{cuaderno_id}")
+async def ws_stock_cuaderno(websocket: WebSocket, cuaderno_id: str):
+    await _stock_ws_hub.connect_cuaderno(websocket, cuaderno_id)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        _stock_ws_hub.disconnect_cuaderno(websocket, cuaderno_id)
+    except Exception:
+        _stock_ws_hub.disconnect_cuaderno(websocket, cuaderno_id)
+
+
+@router.get("/stock/global")
+@router.get("/catalog/stock-global")
+async def get_stock_global():
+    """Resumen global de stock agregando todos los cuadernos."""
+    cache_key = "stock_global::all"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    storage = get_storage()
+    from collections import defaultdict
+    import re
+
+    def _to_float_dosis(value: Any) -> float:
+        """Convierte dosis numérica o texto ('1.6 L/Ha', '1,6', etc.) a float seguro."""
+        if value is None:
+            return 0.0
+        if isinstance(value, (int, float)):
+            return float(value)
+        s = str(value).strip()
+        if not s:
+            return 0.0
+        # Extraer primer número con coma o punto decimal.
+        m = re.search(r"[-+]?\d+(?:[.,]\d+)?", s)
+        if not m:
+            return 0.0
+        try:
+            return float(m.group(0).replace(",", "."))
+        except Exception:
+            return 0.0
+
+    agg = {}
+
+    for meta in storage.listar():
+        cid = meta.get("id")
+        if not cid:
+            continue
+        cuaderno = storage.cargar(cid)
+        if not cuaderno:
+            continue
+
+        uso_por_producto: dict = defaultdict(float)
+        for t in cuaderno.tratamientos:
+            sup = t.superficie_tratada or 0.0
+            for pa in t.productos:
+                if pa.producto_id:
+                    uso_por_producto[pa.producto_id] += _to_float_dosis(pa.dosis) * sup
+
+        entradas_por_producto = defaultdict(float)
+        for e in cuaderno.stock_entradas:
+            if e.producto_id:
+                entradas_por_producto[e.producto_id] += float(e.cantidad or 0)
+
+        for p in cuaderno.productos:
+            key = ((p.nombre_comercial or "").strip().lower(), (p.numero_registro or "").strip().lower(), (p.unidad or "L").strip())
+            if key not in agg:
+                agg[key] = {
+                    "producto_id": p.id,
+                    "nombre_comercial": p.nombre_comercial,
+                    "numero_registro": p.numero_registro,
+                    "unidad": p.unidad or "L",
+                    "stock_actual": 0.0,
+                    "total_entradas": 0.0,
+                    "total_consumido": 0.0,
+                    "cuadernos_ids": set(),
+                }
+            row = agg[key]
+            row["stock_actual"] += float(p.cantidad_adquirida or 0)
+            row["total_entradas"] += float(entradas_por_producto.get(p.id, 0.0))
+            row["total_consumido"] += float(uso_por_producto.get(p.id, 0.0))
+            row["cuadernos_ids"].add(cid)
+
+    productos = []
+    for row in agg.values():
+        total_entradas = round(row["total_entradas"], 4)
+        stock_actual = round(row["stock_actual"], 4)
+        total_consumido = round(row["total_consumido"], 4)
+        if total_entradas > 0:
+            semaforo = "rojo" if stock_actual <= 0 else "amarillo" if stock_actual < total_entradas * 0.2 else "verde"
+        else:
+            semaforo = "rojo" if stock_actual <= 0 else "amarillo" if stock_actual < 2 else "verde"
+        productos.append({
+            "producto_id": row["producto_id"],
+            "nombre_comercial": row["nombre_comercial"],
+            "numero_registro": row["numero_registro"],
+            "unidad": row["unidad"],
+            "stock_actual": stock_actual,
+            "total_entradas": total_entradas,
+            "total_consumido": total_consumido,
+            "cuadernos_count": len(row["cuadernos_ids"]),
+            "semaforo": semaforo,
+        })
+
+    productos.sort(key=lambda x: (x["nombre_comercial"] or "").lower())
+    payload = {"productos": productos, "total": len(productos)}
+    _cache_set(cache_key, payload, ttl_sec=6)
+    return payload
+
+
+@router.get("/{cuaderno_id}/stock")
+async def get_stock(cuaderno_id: str):
+    """Resumen de stock: entradas + stock actual por producto + movimientos de tratamientos."""
+    storage = get_storage()
+    cuaderno = storage.cargar(cuaderno_id)
+    if not cuaderno:
+        raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
+
+    # Calcular total usado por producto a través de tratamientos
+    from collections import defaultdict
+    import re
+
+    def _to_float_dosis(value: Any) -> float:
+        if value is None:
+            return 0.0
+        if isinstance(value, (int, float)):
+            return float(value)
+        s = str(value).strip()
+        if not s:
+            return 0.0
+        m = re.search(r"[-+]?\d+(?:[.,]\d+)?", s)
+        if not m:
+            return 0.0
+        try:
+            return float(m.group(0).replace(",", "."))
+        except Exception:
+            return 0.0
+
+    uso_por_producto: dict = defaultdict(float)
+    for t in cuaderno.tratamientos:
+        sup = t.superficie_tratada or 0.0
+        for pa in t.productos:
+            if pa.producto_id:
+                uso_por_producto[pa.producto_id] += _to_float_dosis(pa.dosis) * sup
+
+    productos_resumen = []
+    for p in cuaderno.productos:
+        total_entradas = sum(e.cantidad for e in cuaderno.stock_entradas if e.producto_id == p.id)
+        total_usado = round(uso_por_producto.get(p.id, 0.0), 4)
+        stock_actual = p.cantidad_adquirida
+        if total_entradas > 0:
+            semaforo = "rojo" if stock_actual <= 0 else "amarillo" if stock_actual < total_entradas * 0.2 else "verde"
+        else:
+            semaforo = "rojo" if stock_actual <= 0 else "amarillo" if stock_actual < 2 else "verde"
+        productos_resumen.append({
+            "producto_id": p.id,
+            "nombre_comercial": p.nombre_comercial,
+            "unidad": p.unidad,
+            "proveedor": p.proveedor,
+            "stock_actual": stock_actual,
+            "total_entradas": total_entradas,
+            "total_consumido": total_usado,
+            "semaforo": semaforo,
+        })
+
+    entradas = [e.to_dict() for e in sorted(cuaderno.stock_entradas, key=lambda x: x.fecha or x.fecha_creacion, reverse=True)]
+    return {"productos": productos_resumen, "entradas": entradas}
+
+
+@router.post("/{cuaderno_id}/stock/entrada")
+async def crear_stock_entrada(cuaderno_id: str, data: StockEntradaCreate):
+    storage = get_storage()
+    cuaderno = storage.cargar(cuaderno_id)
+    if not cuaderno:
+        raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
+
+    prod = None
+    if data.producto_id:
+        prod = cuaderno.obtener_producto(data.producto_id)
+
+    # Si no viene producto_id, intentar resolver por nombre.
+    if not prod and (data.nombre_comercial or "").strip():
+        nom = (data.nombre_comercial or "").strip().lower()
+        prod = next((p for p in cuaderno.productos if (p.nombre_comercial or "").strip().lower() == nom), None)
+
+    # Si no existe, crearlo automáticamente para permitir flujo rápido desde Stock.
+    if not prod:
+        nombre = (data.nombre_comercial or "").strip()
+        if not nombre:
+            raise HTTPException(status_code=400, detail="Debes indicar producto_id o nombre_comercial")
+        prod = ProductoFitosanitario(
+            nombre_comercial=nombre,
+            numero_registro="",
+            materia_activa="",
+            formulacion="",
+            tipo=TipoProducto.FITOSANITARIO,
+            unidad=(data.unidad or "L"),
+            proveedor=data.proveedor or "",
+            notas="Creado automáticamente desde entrada de stock",
+        )
+        cuaderno.agregar_producto(prod)
+
+    from .models import StockEntrada
+    entrada = StockEntrada(
+        producto_id=prod.id,
+        nombre_comercial=prod.nombre_comercial,
+        cantidad=data.cantidad,
+        unidad=prod.unidad or data.unidad or "L",
+        fecha=data.fecha,
+        proveedor=data.proveedor or prod.proveedor,
+        num_albaran=data.num_albaran,
+        num_lote=data.num_lote,
+        precio_unidad=data.precio_unidad,
+        notas=data.notas,
+    )
+    cuaderno.agregar_stock_entrada(entrada)
+    storage.guardar(cuaderno)
+    _cache_invalidate(["stock_global::all"])
+    await _stock_ws_hub.publish_stock_changed(cuaderno_id)
+    return {"success": True, "entrada": entrada.to_dict(), "stock_actual": prod.cantidad_adquirida}
+
+
+@router.put("/{cuaderno_id}/stock/entrada/{entrada_id}")
+async def actualizar_stock_entrada(cuaderno_id: str, entrada_id: str, data: StockEntradaUpdate):
+    storage = get_storage()
+    cuaderno = storage.cargar(cuaderno_id)
+    if not cuaderno:
+        raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
+
+    entrada = cuaderno.obtener_stock_entrada(entrada_id)
+    if not entrada:
+        raise HTTPException(status_code=404, detail="Entrada no encontrada")
+
+    prod = cuaderno.obtener_producto(entrada.producto_id) if entrada.producto_id else None
+
+    # Ajustar stock del producto si cambia cantidad
+    if data.cantidad is not None and prod:
+        nueva_cantidad = float(data.cantidad or 0.0)
+        delta = nueva_cantidad - float(entrada.cantidad or 0.0)
+        prod.cantidad_adquirida = max(0.0, round(float(prod.cantidad_adquirida or 0.0) + delta, 4))
+        entrada.cantidad = nueva_cantidad
+
+    if data.fecha is not None:
+        entrada.fecha = data.fecha
+    if data.proveedor is not None:
+        entrada.proveedor = data.proveedor
+    if data.num_albaran is not None:
+        entrada.num_albaran = data.num_albaran
+    if data.num_lote is not None:
+        entrada.num_lote = data.num_lote
+    if data.precio_unidad is not None:
+        entrada.precio_unidad = float(data.precio_unidad or 0.0)
+    if data.notas is not None:
+        entrada.notas = data.notas
+
+    cuaderno._actualizar_modificacion()
+    storage.guardar(cuaderno)
+    _cache_invalidate(["stock_global::all"])
+    await _stock_ws_hub.publish_stock_changed(cuaderno_id)
+    return {"success": True, "entrada": entrada.to_dict(), "stock_actual": (prod.cantidad_adquirida if prod else None)}
+
+
+@router.delete("/{cuaderno_id}/stock/entrada/{entrada_id}")
+async def eliminar_stock_entrada(cuaderno_id: str, entrada_id: str):
+    storage = get_storage()
+    cuaderno = storage.cargar(cuaderno_id)
+    if not cuaderno:
+        raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
+    ok = cuaderno.eliminar_stock_entrada(entrada_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Entrada no encontrada")
+    storage.guardar(cuaderno)
+    _cache_invalidate(["stock_global::all"])
+    await _stock_ws_hub.publish_stock_changed(cuaderno_id)
+    return {"success": True}
+
+
+@router.get("/{cuaderno_id}/alertas")
+async def get_alertas(cuaderno_id: str):
+    """Analiza el cuaderno y devuelve alertas inteligentes."""
+    storage = get_storage()
+    cuaderno = storage.cargar(cuaderno_id)
+    if not cuaderno:
+        raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
+
+    alertas = []
+    from datetime import datetime, timedelta
+    hoy = datetime.now()
+
+    CULTIVOS_ESPECIALES = ["PATATA", "REMOLACHA"]
+
+    # 1. Stock bajo o agotado
+    for p in cuaderno.productos:
+        if p.cantidad_adquirida <= 0:
+            alertas.append({"tipo": "stock_agotado", "severidad": "alta", "mensaje": f"Stock agotado: {p.nombre_comercial}", "producto_id": p.id, "accion": "ver_producto"})
+        elif p.cantidad_adquirida < 2:
+            alertas.append({"tipo": "stock_bajo", "severidad": "media", "mensaje": f"Stock bajo ({p.cantidad_adquirida:.1f} {p.unidad}): {p.nombre_comercial}", "producto_id": p.id, "accion": "ver_producto"})
+
+    # 2. Productos con caducidad próxima (<30 días) o vencida
+    for p in cuaderno.productos:
+        if p.fecha_caducidad:
+            try:
+                fc = datetime.strptime(p.fecha_caducidad[:10], "%Y-%m-%d")
+                dias = (fc - hoy).days
+                if dias < 0:
+                    alertas.append({"tipo": "caducado", "severidad": "alta", "mensaje": f"Caducado hace {abs(dias)} días: {p.nombre_comercial}", "producto_id": p.id, "accion": "ver_producto"})
+                elif dias <= 30:
+                    alertas.append({"tipo": "caducidad_proxima", "severidad": "media", "mensaje": f"Caduca en {dias} días: {p.nombre_comercial}", "producto_id": p.id, "accion": "ver_producto"})
+            except Exception:
+                pass
+
+    # 3. Patata/Remolacha con superficie conjunta >5 ha sin asesoramiento
+    parcelas_especiales, total_especial_ha = _parcelas_especiales_y_superficie(cuaderno)
+    if total_especial_ha > 5:
+        ordenes_requeridas = {
+            str(p.num_orden)
+            for p in parcelas_especiales
+            if isinstance(p.num_orden, int) and p.num_orden > 0
+        }
+        ordenes_cubiertas = set()
+        for a in cuaderno.asesoramientos:
+            tokens = {
+                tok.strip()
+                for tok in str(a.num_orden_parcelas or "").replace(";", ",").split(",")
+                if tok.strip()
+            }
+            ordenes_cubiertas.update(tokens)
+        tiene_asesoramiento = (not ordenes_requeridas) or ordenes_requeridas.issubset(ordenes_cubiertas)
+        if not tiene_asesoramiento:
+            alertas.append({
+                "tipo": "sin_asesoramiento",
+                "severidad": "alta",
+                "mensaje": f"Patata/Remolacha suma {total_especial_ha:.2f} ha (>5 ha) y requiere asesoramiento fitosanitario",
+                "accion": "crear_asesoramiento",
+            })
+
+    # 4. Parcelas con Patata/Remolacha con >5 tratamientos
+    from collections import defaultdict
+    trats_por_parcela = defaultdict(int)
+    for t in cuaderno.tratamientos:
+        for pid in (t.parcela_ids or []):
+            trats_por_parcela[pid] += 1
+    for parcela in cuaderno.parcelas:
+        cultivo = (parcela.especie or parcela.cultivo or "").upper()
+        if any(c in cultivo for c in CULTIVOS_ESPECIALES) and trats_por_parcela[parcela.id] > 5:
+            alertas.append({"tipo": "muchos_tratamientos_especiales", "severidad": "info", "mensaje": f"Parcela {parcela.nombre or parcela.num_orden} ({cultivo}) tiene {trats_por_parcela[parcela.id]} tratamientos — revisa el registro de Asesoramiento", "parcela_id": parcela.id, "accion": "ver_asesoramiento"})
+
+    # 5. Parcelas sin tratamiento en >60 días
+    for parcela in cuaderno.parcelas:
+        if not parcela.activa:
+            continue
+        trats_parcela = [t for t in cuaderno.tratamientos if parcela.id in (t.parcela_ids or [])]
+        if trats_parcela:
+            ultima_fecha_str = max(t.fecha_aplicacion for t in trats_parcela if t.fecha_aplicacion)
+            try:
+                ultima = datetime.strptime(ultima_fecha_str[:10], "%Y-%m-%d")
+                if (hoy - ultima).days > 60:
+                    alertas.append({"tipo": "sin_tratamiento_reciente", "severidad": "baja", "mensaje": f"Parcela '{parcela.nombre or parcela.num_orden}' sin tratamiento hace {(hoy - ultima).days} días", "parcela_id": parcela.id, "accion": "crear_tratamiento"})
+            except Exception:
+                pass
+
+    return {"alertas": alertas, "total": len(alertas)}
+
+
 @router.post("/{cuaderno_id}/tratamientos/{tratamiento_id}/duplicar")
 async def duplicar_tratamiento(cuaderno_id: str, tratamiento_id: str):
     """Duplica un tratamiento (nuevo ID, mismo resto de datos)."""
@@ -1044,6 +1982,46 @@ async def copiar_tratamiento_a_parcelas(cuaderno_id: str, tratamiento_id: str, d
         "success": True,
         "tratamientos": [t.to_dict() for t in creados],
         "message": f"Tratamiento copiado a {len(data.parcela_ids)} parcela(s) ({len(creados)} línea(s))"
+    }
+
+
+@router.post("/{cuaderno_id}/tratamientos/repair")
+async def reparar_tratamientos_existentes(cuaderno_id: str):
+    """
+    Ejecuta reparación manual de tratamientos en cuaderno existente.
+    Útil para forzar el arreglo sin reiniciar.
+    """
+    storage = get_storage()
+    cuaderno = storage.cargar(cuaderno_id)
+    if not cuaderno:
+        raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
+
+    reparados_multi_cultivo = 0
+    reparados_num_orden = 0
+    try:
+        reparados_multi_cultivo = cuaderno.reparar_tratamientos_multi_cultivo()
+    except Exception:
+        reparados_multi_cultivo = 0
+    try:
+        reparados_num_orden = cuaderno.reparar_tratamientos_num_orden_multi_parcela()
+    except Exception:
+        reparados_num_orden = 0
+    try:
+        restablecidos_individual = cuaderno.reestablecer_num_orden_individual_tratamientos()
+    except Exception:
+        restablecidos_individual = 0
+
+    reparadas_total = int(reparados_multi_cultivo or 0) + int(reparados_num_orden or 0) + int(restablecidos_individual or 0)
+    if reparadas_total > 0:
+        storage.guardar(cuaderno)
+
+    return {
+        "success": True,
+        "reparadas_total": reparadas_total,
+        "reparadas_multi_cultivo": int(reparados_multi_cultivo or 0),
+        "reparadas_num_orden": int(reparados_num_orden or 0),
+        "restablecidas_individual": int(restablecidos_individual or 0),
+        "total_tratamientos": len(cuaderno.tratamientos or []),
     }
 
 
@@ -2486,9 +3464,12 @@ def _parcela_clave_importacion(p) -> tuple:
 
 
 def _extraer_parcelas_directas(hojas: List[dict]) -> List[Parcela]:
-    """Extrae parcelas directamente de hojas conocidas sin GPT. Evita solo Nº de orden repetido en el mismo archivo."""
+    """Extrae parcelas directamente de hojas conocidas sin GPT.
+    Clave de deduplicación: (num_orden, poligono, parcela, recinto) → dos filas con el mismo
+    num_orden pero distinto recinto se importan como parcelas independientes.
+    """
     parcelas = []
-    vistos: set = set()  # num_orden (evita la misma fila dos veces; no agrupa por SIGPAC)
+    vistos: set = set()  # clave SIGPAC compuesta (ver abajo)
     for hoja in hojas:
         nombre_hoja = hoja.get("nombre", "")
         es_parcelas = any(known in nombre_hoja for known in _KNOWN_PARCELAS_SHEETS)
@@ -2544,9 +3525,11 @@ def _extraer_parcelas_directas(hojas: List[dict]) -> List[Parcela]:
                 if "zona_vulnerables_raw" in d
                 else False,
             )
-            if num_orden in vistos:
+            # Clave compuesta: mismo num_orden + mismo SIGPAC = duplicado exacto; distinto recinto = fila nueva
+            clave_vista = (num_orden, d.get("num_poligono", ""), d.get("num_parcela", ""), d.get("num_recinto", ""))
+            if clave_vista in vistos:
                 continue
-            vistos.add(num_orden)
+            vistos.add(clave_vista)
             parcelas.append(parcela)
     return parcelas
 
@@ -2558,14 +3541,15 @@ def _extraer_tratamientos_directos(hojas: List[dict], parcelas: List[Parcela]) -
     con el cultivo tomado de la parcela (evita mezclar cultivos en una sola línea).
     """
     tratamientos = []
-    orden_to_parcela: Dict[int, Parcela] = {}
+    # Un Nº orden puede corresponder a varias filas SIGPAC (p. ej. recintos distintos).
+    orden_to_parcelas: Dict[int, List[Parcela]] = {}
     for p in parcelas:
         try:
             no = int(float(getattr(p, "num_orden", 0) or 0))
         except (TypeError, ValueError):
             continue
         if no > 0:
-            orden_to_parcela[no] = p
+            orden_to_parcelas.setdefault(no, []).append(p)
     for hoja in hojas:
         nombre_hoja = hoja.get("nombre", "")
         es_trat = any(known in nombre_hoja for known in _KNOWN_TRATAMIENTOS_SHEETS)
@@ -2647,8 +3631,8 @@ def _extraer_tratamientos_directos(hojas: List[dict], parcelas: List[Parcela]) -
                         orden_num = int(float(o))
                     except (ValueError, TypeError):
                         continue
-                    parc = orden_to_parcela.get(orden_num)
-                    if parc:
+                    parc_list = orden_to_parcelas.get(orden_num, [])
+                    for parc in parc_list:
                         cultivo_p = (parc.especie or parc.cultivo or "").strip().upper()
                         cultivo = cultivo_p or especie_excel
                         sup_p = sup
@@ -2680,15 +3664,9 @@ def _extraer_tratamientos_directos(hojas: List[dict], parcelas: List[Parcela]) -
                         orden_num = int(float(o))
                     except (ValueError, TypeError):
                         continue
-                    for p in parcelas:
-                        try:
-                            pno = int(float(getattr(p, "num_orden", 0) or 0))
-                        except (TypeError, ValueError):
-                            continue
-                        if pno == orden_num:
-                            parcela_ids.append(p.id)
-                            parcela_nombres.append(p.nombre)
-                            break
+                    for p in orden_to_parcelas.get(orden_num, []):
+                        parcela_ids.append(p.id)
+                        parcela_nombres.append(p.nombre)
 
             _append_uno(parcela_ids, parcela_nombres, id_parcelas_str, especie_excel, sup)
     return tratamientos

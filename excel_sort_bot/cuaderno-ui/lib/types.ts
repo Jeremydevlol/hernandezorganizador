@@ -1,7 +1,7 @@
 // Types for Cuaderno de Explotación - Formato Oficial España
 // Basado en: PABLO PEREZ RUBIO 2025 RESUELTO.XLSX
 
-export type SheetType = "parcelas" | "productos" | "tratamientos" | "historico" | "fertilizantes" | "cosecha";
+export type SheetType = "parcelas" | "productos" | "tratamientos" | "historico" | "fertilizantes" | "cosecha" | "asesoramiento" | "catalogo" | "tratamientos_especiales" | "trat_asesor" | "stock";
 
 // ============================================
 // PARCELA - Formato oficial SIGPAC
@@ -160,6 +160,55 @@ export interface Cosecha {
 }
 
 // ============================================
+// STOCK - Entradas de inventario
+// ============================================
+export interface StockEntrada {
+    id: string;
+    producto_id: string;
+    nombre_comercial: string;
+    cantidad: number;
+    unidad: string;
+    fecha: string;
+    proveedor: string;
+    num_albaran: string;
+    num_lote: string;
+    precio_unidad: number;
+    notas: string;
+    fecha_creacion: string;
+}
+
+export interface StockResumen {
+    producto_id: string;
+    nombre_comercial: string;
+    unidad: string;
+    proveedor: string;
+    stock_actual: number;
+    total_entradas: number;
+    total_consumido: number;
+    semaforo: "verde" | "amarillo" | "rojo";
+    entradas: StockEntrada[];
+}
+
+// ============================================
+// ASESORAMIENTO FITOSANITARIO (Hoja 3.2)
+// Obligatorio para Patata y Remolacha ≥5 ha
+// ============================================
+export interface Asesoramiento {
+    id: string;
+    fecha: string;
+    num_orden_parcelas: string;
+    cultivo_especie: string;
+    cultivo_variedad: string;
+    superficie_ha: number;
+    nombre_asesor: string;
+    num_habilitacion: string;
+    tipo_asesoramiento: string;
+    recomendacion: string;
+    observaciones?: string;
+    color_fila?: string;
+}
+
+// ============================================
 // HISTÓRICO
 // ============================================
 export interface HistoricoRow {
@@ -205,7 +254,9 @@ export interface Cuaderno {
     tratamientos: Tratamiento[];
     fertilizaciones?: Fertilizacion[];
     cosechas?: Cosecha[];
+    asesoramientos?: Asesoramiento[];
     hojas_originales?: HojaExcel[];
+    stock_entradas?: StockEntrada[];
 }
 
 export interface CuadernoSummary {
@@ -301,6 +352,7 @@ export const SHEET_CONFIG: Record<SheetType, {
             { key: "superficie_sigpac", label: "Sup. SIGPAC", width: 90, type: "number" },
             { key: "superficie_cultivada", label: "Sup. Cultivada", width: 100, type: "number" },
             { key: "especie", label: "Cultivo", width: 120, editable: true },
+            { key: "variedad", label: "Variante", width: 120, editable: true },
             { key: "ecoregimen", label: "Ecoreg.", width: 60 },
             { key: "secano_regadio", label: "S/R", width: 40 },
             { key: "zona_nitratos", label: "Zonas vuln.", width: 90, editable: true },
@@ -372,6 +424,77 @@ export const SHEET_CONFIG: Record<SheetType, {
             { key: "num_albaran", label: "Albarán", width: 100 },
             { key: "num_lote", label: "Lote", width: 80 },
             { key: "cliente_nombre", label: "Cliente", width: 150 },
+        ],
+    },
+    asesoramiento: {
+        title: "3.2 Asesoramiento Fitosanitario",
+        columns: [
+            { key: "fecha", label: "Fecha", width: 100, type: "date" },
+            { key: "num_orden_parcelas", label: "Parcelas", width: 80 },
+            { key: "cultivo_especie", label: "Cultivo", width: 120, editable: true },
+            { key: "cultivo_variedad", label: "Variante", width: 120, editable: true },
+            { key: "superficie_ha", label: "Sup. (ha)", width: 80, type: "number" },
+            { key: "nombre_asesor", label: "Asesor", width: 150, editable: true },
+            { key: "num_habilitacion", label: "Nº Habilitación", width: 110, editable: true },
+            { key: "tipo_asesoramiento", label: "Tipo", width: 100, editable: true },
+            { key: "recomendacion", label: "Recomendación", width: 200, editable: true },
+        ],
+    },
+    catalogo: {
+        title: "Catálogo Global de Productos",
+        columns: [
+            { key: "nombre_comercial", label: "Nombre Comercial", width: 180, editable: true },
+            { key: "numero_registro", label: "Nº Registro", width: 110, editable: true },
+            { key: "materia_activa", label: "Materia Activa", width: 160, editable: true },
+            { key: "formulacion", label: "Formulación", width: 100, editable: true },
+            { key: "tipo", label: "Tipo", width: 100, editable: true },
+            { key: "unidad", label: "Ud.", width: 60 },
+            { key: "proveedor", label: "Proveedor", width: 130, editable: true },
+        ],
+    },
+    tratamientos_especiales: {
+        title: "Tratamientos Especiales",
+        columns: [
+            { key: "num_orden_parcelas", label: "Nº Parcela", width: 80 },
+            { key: "cultivo_especie", label: "Cultivo", width: 110, editable: true },
+            { key: "cultivo_variedad", label: "Variante", width: 110, editable: true },
+            { key: "superficie_tratada", label: "Sup. (ha)", width: 80, type: "number", editable: true },
+            { key: "fecha_aplicacion", label: "Fecha", width: 100, type: "date", editable: true },
+            { key: "problema_fitosanitario", label: "Problemática", width: 120, editable: true },
+            { key: "aplicador", label: "Aplicador", width: 80, editable: true },
+            { key: "equipo", label: "Equipo", width: 70, editable: true },
+            { key: "nombre_comercial", label: "Producto", width: 140, editable: true },
+            { key: "numero_registro", label: "Nº Registro", width: 90, editable: true },
+            { key: "dosis", label: "Dosis", width: 100, type: "text", editable: true },
+            { key: "eficacia", label: "Eficacia", width: 70, editable: true },
+        ],
+    },
+    trat_asesor: {
+        title: "Trat. Asesor",
+        columns: [
+            { key: "num_orden_parcelas", label: "Nº Parcela", width: 80 },
+            { key: "cultivo_especie", label: "Cultivo", width: 110, editable: true },
+            { key: "superficie_tratada", label: "Sup. (ha)", width: 80, type: "number", editable: true },
+            { key: "fecha_aplicacion", label: "Fecha", width: 100, type: "date", editable: true },
+            { key: "problema_fitosanitario", label: "Problemática", width: 120, editable: true },
+            { key: "aplicador", label: "Aplicador", width: 100, editable: true },
+            { key: "equipo", label: "Equipo", width: 80, editable: true },
+            { key: "nombre_comercial", label: "Producto", width: 140, editable: true },
+            { key: "numero_registro", label: "Nº Registro", width: 90, editable: true },
+            { key: "dosis", label: "Dosis", width: 100, type: "text", editable: true },
+            { key: "eficacia", label: "Eficacia", width: 70, editable: true },
+        ],
+    },
+    stock: {
+        title: "Stock de Productos",
+        columns: [
+            { key: "nombre_comercial", label: "Producto", width: 200 },
+            { key: "semaforo", label: "Estado", width: 70 },
+            { key: "stock_actual", label: "Stock Actual", width: 100, type: "number" },
+            { key: "unidad", label: "Ud.", width: 60 },
+            { key: "total_entradas", label: "Total Entradas", width: 110, type: "number" },
+            { key: "total_consumido", label: "Total Consumido", width: 120, type: "number" },
+            { key: "proveedor", label: "Proveedor", width: 150 },
         ],
     },
 };

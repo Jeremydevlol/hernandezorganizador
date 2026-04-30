@@ -19,6 +19,10 @@ import {
     Check,
     X,
     GripVertical,
+    BookOpen,
+    Database,
+    AlertTriangle,
+    Package,
 } from "lucide-react";
 import { Cuaderno, CuadernoSummary, SheetType, Carpeta } from "@/lib/types";
 import { api } from "@/lib/api";
@@ -35,6 +39,10 @@ interface SidebarProps {
     onCreateCuaderno: (data: Partial<Cuaderno>) => void;
     onUploadSuccess?: (id: string) => void | Promise<void>;
     onCuadernoDeleted?: () => void | Promise<void>;
+    onOpenGlobalCatalog?: () => void;
+    globalCatalogOpen?: boolean;
+    onOpenGlobalStock?: () => void;
+    globalStockOpen?: boolean;
 }
 
 const LS_FOLDERS_KEY = "cuaderno_carpetas_v1";
@@ -86,8 +94,48 @@ const SHEET_ITEMS: { key: SheetType; label: string; icon: React.ReactNode }[] = 
     { key: "productos", label: "Productos", icon: <FlaskConical size={16} /> },
     { key: "tratamientos", label: "Tratamientos", icon: <ClipboardList size={16} /> },
     { key: "fertilizantes", label: "Fertilizantes", icon: <Sprout size={16} /> },
+    { key: "asesoramiento", label: "Asesoramiento 3.2", icon: <BookOpen size={16} /> },
+    { key: "trat_asesor", label: "Trat. Asesor", icon: <ClipboardList size={16} /> },
     { key: "historico", label: "Histórico", icon: <BarChart3 size={16} /> },
+    { key: "catalogo", label: "Catálogo Productos", icon: <Database size={16} /> },
+    { key: "stock", label: "Stock", icon: <Package size={16} /> },
 ];
+
+// Cultivos que requieren asesoramiento obligatorio ≥5 ha
+const CULTIVOS_ASESORAMIENTO_OBLIGATORIO = ["PATATA", "REMOLACHA", "REMOLACHA AZUCARERA"];
+function requiereAsesoramiento(cuaderno: any): boolean {
+    if (!cuaderno?.parcelas?.length) return false;
+    const totalEspecial = cuaderno.parcelas.reduce((acc: number, p: any) => {
+        const cultivo = (p.especie || p.cultivo || "").toUpperCase().trim();
+        const sup = Number(p.superficie_cultivada || p.superficie_ha || p.superficie_sigpac || 0);
+        if (CULTIVOS_ASESORAMIENTO_OBLIGATORIO.some(c => cultivo.includes(c))) return acc + sup;
+        return acc;
+    }, 0);
+    return totalEspecial > 5;
+}
+
+function mostrarTratamientosEspeciales(cuaderno: any): boolean {
+    if (!cuaderno?.parcelas?.length) return false;
+    const tratsPorParcela = new Map<string, number>();
+    for (const t of cuaderno.tratamientos || []) {
+        for (const pid of t.parcela_ids || []) {
+            tratsPorParcela.set(pid, (tratsPorParcela.get(pid) || 0) + 1);
+        }
+    }
+    const totalEspecial = cuaderno.parcelas.reduce((acc: number, p: any) => {
+        const cultivo = (p.especie || p.cultivo || "").toUpperCase().trim();
+        const sup = Number(p.superficie_cultivada || p.superficie_ha || p.superficie_sigpac || 0);
+        const esEspecial = CULTIVOS_ASESORAMIENTO_OBLIGATORIO.some((c) => cultivo.includes(c));
+        return esEspecial ? acc + sup : acc;
+    }, 0);
+    if (totalEspecial <= 5) return false;
+    return cuaderno.parcelas.some((p: any) => {
+        const cultivo = (p.especie || p.cultivo || "").toUpperCase().trim();
+        const esEspecial = CULTIVOS_ASESORAMIENTO_OBLIGATORIO.some((c) => cultivo.includes(c));
+        const totalTratamientos = tratsPorParcela.get(p.id) || 0;
+        return esEspecial && totalTratamientos > 0;
+    });
+}
 
 export default function Sidebar({
     cuadernos,
@@ -99,6 +147,10 @@ export default function Sidebar({
     onCreateCuaderno,
     onUploadSuccess,
     onCuadernoDeleted,
+    onOpenGlobalCatalog,
+    globalCatalogOpen,
+    onOpenGlobalStock,
+    globalStockOpen,
 }: SidebarProps) {
     const [cuadernosExpanded, setCuadernosExpanded] = useState(true);
     const [contenidoExpanded, setContenidoExpanded] = useState(true);
@@ -489,6 +541,40 @@ export default function Sidebar({
                     </div>
                 </div>
 
+                {/* Catálogo Global — acceso directo siempre visible */}
+                {onOpenGlobalCatalog && (
+                    <div className="px-2 py-1.5 border-b border-gray-200">
+                        <button
+                            onClick={onOpenGlobalCatalog}
+                            className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                                globalCatalogOpen
+                                    ? "bg-emerald-500/10 text-emerald-500"
+                                    : "text-gray-600 hover:bg-gray-100 hover:text-gray-800"
+                            }`}
+                        >
+                            <Database size={15} className={globalCatalogOpen ? "text-emerald-400" : "text-gray-400"} />
+                            <span className="flex-1 text-left">Catálogo de Productos</span>
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-500 font-medium">Global</span>
+                        </button>
+                    </div>
+                )}
+                {onOpenGlobalStock && (
+                    <div className="px-2 py-1.5 border-b border-gray-200">
+                        <button
+                            onClick={onOpenGlobalStock}
+                            className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                                globalStockOpen
+                                    ? "bg-emerald-500/10 text-emerald-500"
+                                    : "text-gray-600 hover:bg-gray-100 hover:text-gray-800"
+                            }`}
+                        >
+                            <Package size={15} className={globalStockOpen ? "text-emerald-400" : "text-gray-400"} />
+                            <span className="flex-1 text-left">Stock Global</span>
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-500 font-medium">Global</span>
+                        </button>
+                    </div>
+                )}
+
                 {/* Explorer */}
                 <div className="flex-1 overflow-y-auto py-2">
                     <div className="flex items-center justify-between px-3 py-1.5">
@@ -608,7 +694,20 @@ export default function Sidebar({
                                             item.key === "parcelas" ? activeCuaderno.parcelas?.length :
                                                 item.key === "productos" ? activeCuaderno.productos?.length :
                                                     item.key === "tratamientos" ? activeCuaderno.tratamientos?.length :
-                                                        item.key === "fertilizantes" ? ((activeCuaderno as any).fertilizaciones?.length ?? null) : null;
+                                                        item.key === "fertilizantes" ? ((activeCuaderno as any).fertilizaciones?.length ?? null) :
+                                                            item.key === "asesoramiento" ? ((activeCuaderno as any).asesoramientos?.length ?? null) :
+                                                                item.key === "trat_asesor" ? ((activeCuaderno.tratamientos || []).filter((t: any) => {
+                                                                    const CULTIVOS_ESP = ["PATATA", "REMOLACHA"];
+                                                                    const parcelasEsp = new Set((activeCuaderno.parcelas || [])
+                                                                        .filter((p: any) => CULTIVOS_ESP.some(c => (p.especie || p.cultivo || "").toUpperCase().includes(c)))
+                                                                        .map((p: any) => p.id));
+                                                                    return (t.parcela_ids || []).some((pid: string) => parcelasEsp.has(pid));
+                                                                }).length ?? null) :
+                                                                item.key === "stock" ? ((activeCuaderno as any).stock_entradas?.length ?? null) : null;
+
+                                        const needsAsesoramiento = item.key === "asesoramiento"
+                                            && requiereAsesoramiento(activeCuaderno)
+                                            && !((activeCuaderno as any).asesoramientos?.length);
 
                                         return (
                                             <button
@@ -621,7 +720,12 @@ export default function Sidebar({
                                             >
                                                 {item.icon}
                                                 <span className="flex-1 text-left">{item.label}</span>
-                                                {count !== null && (
+                                                {needsAsesoramiento && (
+                                                    <span title="Obligatorio: Patata + Remolacha suma más de 5 ha sin asesoramiento registrado">
+                                                        <AlertTriangle size={13} className="text-amber-400 shrink-0" />
+                                                    </span>
+                                                )}
+                                                {count !== null && !needsAsesoramiento && (
                                                     <span className={`text-[10px] px-1.5 py-0.5 rounded-md ${activeSheet === item.key
                                                         ? "bg-emerald-500/20 text-emerald-400"
                                                         : "bg-gray-100 text-gray-500"
@@ -632,6 +736,20 @@ export default function Sidebar({
                                             </button>
                                         );
                                     })}
+                                    {/* Tratamientos especiales: solo cuando hay parcelas con Patata/Remolacha */}
+                                    {mostrarTratamientosEspeciales(activeCuaderno) && (
+                                        <button
+                                            key="tratamientos_especiales"
+                                            onClick={() => onSelectSheet("tratamientos_especiales")}
+                                            className={`w-full flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors ${activeSheet === "tratamientos_especiales"
+                                                ? "bg-amber-500/10 text-amber-500"
+                                                : "text-gray-600 hover:bg-gray-100 hover:text-gray-800"
+                                                }`}
+                                        >
+                                            <AlertTriangle size={16} className="text-amber-400 shrink-0" />
+                                            <span className="flex-1 text-left">Tratamientos Especiales</span>
+                                        </button>
+                                    )}
                                 </div>
                             )}
                         </div>

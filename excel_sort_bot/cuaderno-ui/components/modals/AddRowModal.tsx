@@ -19,6 +19,7 @@ function fechaAFormatoISO(fecha: string): string {
 }
 
 const UNIDADES_DOSIS = ["L/Ha", "Kg/Ha", "ml/H", "g/Ha"] as const;
+const CULTIVOS_ASESORAMIENTO = ["PATATA", "REMOLACHA"] as const;
 
 /** Unidades antiguas del desplegable → equivalentes actuales */
 function migrateUnidadDosis(u: string | undefined): string {
@@ -50,6 +51,21 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
     const [fertProdInput, setFertProdInput] = useState("");
     const [fertProductDropdownOpen, setFertProductDropdownOpen] = useState(false);
     const productInputRef = useRef<HTMLInputElement>(null);
+
+    // Sugerencias únicas de problemática/plaga de tratamientos existentes
+    const plagaSugerencias = useMemo(() => {
+        const vals = new Set<string>();
+        (cuaderno.tratamientos || []).forEach((t) => {
+            const p = (t.problema_fitosanitario || t.plaga_enfermedad || "").trim();
+            if (p) vals.add(p);
+            // también de productos individuales
+            (t.productos || []).forEach((pr: any) => {
+                const pp = (pr.problema_fitosanitario || pr.plaga_enfermedad || "").trim();
+                if (pp) vals.add(pp);
+            });
+        });
+        return Array.from(vals).sort();
+    }, [cuaderno.tratamientos]);
 
     // Catálogo global: cache único de resultados de la última búsqueda que se
     // reusa para primario/secundarios/fertilizante (la query es la misma).
@@ -90,7 +106,7 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
         } else if (isOpen && !editTratamientoId) {
             const base: Record<string, any> = {
                 fecha_aplicacion: fechaAFormatoDDMM(new Date().toISOString().split("T")[0]),
-                parcela_ids: sheet === "tratamientos" || sheet === "fertilizantes" || sheet === "cosecha" ? initialParcelaIds : [],
+                parcela_ids: sheet === "tratamientos" || sheet === "fertilizantes" || sheet === "cosecha" || sheet === "asesoramiento" ? initialParcelaIds : [],
                 producto_id: "",
                 nombre_comercial: "",
                 numero_registro: "",
@@ -99,6 +115,7 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                 operador: "1",
                 equipo: "1",
                 eficacia: "BUENA",
+                requiere_asesoramiento: "no",
             };
             if (sheet === "fertilizantes") {
                 const now = new Date();
@@ -114,6 +131,14 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                 base.fecha = fechaAFormatoDDMM(new Date().toISOString().split("T")[0]);
                 base.producto = "";
                 base.cantidad_kg = "";
+            }
+            if (sheet === "asesoramiento") {
+                base.fecha = new Date().toISOString().split("T")[0];
+                base.nombre_asesor = "";
+                base.num_habilitacion = "";
+                base.tipo_asesoramiento = "";
+                base.recomendacion = "";
+                base.cultivo_especie = "";
             }
             setFormData(base);
             setProductInputValue("");
@@ -220,6 +245,16 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
         });
     }, [cuaderno.parcelas]);
 
+    const parcelasSeleccionadasEspeciales = useMemo(() => {
+        if (sheet !== "tratamientos") return [];
+        const ids = Array.isArray(formData.parcela_ids) ? formData.parcela_ids : [];
+        return (cuaderno.parcelas || []).filter((p: any) => {
+            if (!ids.includes(p.id)) return false;
+            const cultivo = (p.especie || p.cultivo || "").toUpperCase();
+            return CULTIVOS_ASESORAMIENTO.some((c) => cultivo.includes(c));
+        });
+    }, [sheet, formData.parcela_ids, cuaderno.parcelas]);
+
     if (!isOpen) return null;
 
     const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
@@ -310,6 +345,26 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                     cliente_direccion: formData.cliente_direccion || "",
                     cliente_rgseaa: formData.cliente_rgseaa || "",
                 });
+            } else if (sheet === "asesoramiento") {
+                const parcelaIds = Array.isArray(formData.parcela_ids) ? formData.parcela_ids : [];
+                const cultivoAuto = [...new Set(
+                    parcelaIds.map((id: string) => {
+                        const p = (cuaderno.parcelas || []).find((x: any) => x.id === id);
+                        return p?.especie || p?.cultivo || "";
+                    }).filter(Boolean)
+                )].join(", ");
+                await api.createAsesoramiento(cuaderno.id, {
+                    fecha: formData.fecha || "",
+                    parcela_ids: parcelaIds,
+                    cultivo_especie: formData.cultivo_especie || cultivoAuto,
+                    cultivo_variedad: formData.cultivo_variedad || "",
+                    superficie_ha: Number(formData.superficie_ha) || 0,
+                    nombre_asesor: formData.nombre_asesor || "",
+                    num_habilitacion: formData.num_habilitacion || "",
+                    tipo_asesoramiento: formData.tipo_asesoramiento || "",
+                    recomendacion: formData.recomendacion || "",
+                    observaciones: formData.observaciones || "",
+                });
             } else if (sheet === "tratamientos") {
                 const parcelaIds = Array.isArray(formData.parcela_ids) ? formData.parcela_ids : [];
                 const productosLista = Array.isArray(formData.productos_lista) && formData.productos_lista.length > 0
@@ -367,7 +422,6 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                 pid = nuevo.producto?.id || "";
                                 ncom = nuevo.producto?.nombre_comercial || nombreProd;
                                 nreg = nuevo.producto?.numero_registro || "-";
-                                onSuccess();
                             }
                         }
                         result.push({
@@ -403,12 +457,39 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                 } else {
                     await api.createTratamiento(cuaderno.id, payload);
                 }
+
+                const requiereAses = String(formData.requiere_asesoramiento || "no") === "si";
+                if (requiereAses && parcelaIds.length > 0) {
+                    try {
+                        const cultivoAuto = [...new Set(
+                            parcelaIds.map((id: string) => {
+                                const p = (cuaderno.parcelas || []).find((x: any) => x.id === id);
+                                return p?.especie || p?.cultivo || "";
+                            }).filter(Boolean)
+                        )].join(", ");
+                        await api.createAsesoramiento(cuaderno.id, {
+                            fecha: fechaAFormatoISO(formData.fecha_aplicacion || "") || new Date().toISOString().split("T")[0],
+                            parcela_ids: parcelaIds,
+                            cultivo_especie: cultivoAuto,
+                            cultivo_variedad: "",
+                            nombre_asesor: formData.nombre_asesor || "",
+                            num_habilitacion: formData.num_habilitacion || "",
+                            tipo_asesoramiento: "Desde tratamiento",
+                            recomendacion: formData.plaga_enfermedad || "Requiere seguimiento de asesoramiento.",
+                            observaciones: "Creado desde alta de tratamiento.",
+                        });
+                    } catch (asesError: any) {
+                        console.error("Error creating asesoramiento from tratamiento:", asesError);
+                        alert(`Tratamiento creado, pero no se pudo crear el asesoramiento: ${asesError?.message || asesError}`);
+                    }
+                }
             }
 
             setFormData({});
             onSuccess();
         } catch (error) {
             console.error("Error creating record:", error);
+            alert(`No se pudo guardar: ${(error as any)?.message || error}`);
         } finally {
             setLoading(false);
         }
@@ -422,6 +503,7 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
             case "tratamientos": return "Nuevo Tratamiento";
             case "fertilizantes": return "Nueva Fertilización";
             case "cosecha": return "Nueva Cosecha";
+            case "asesoramiento": return "Nuevo Asesoramiento (Hoja 3.2)";
             default: return "Nuevo Registro";
         }
     };
@@ -506,7 +588,7 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
                                     <label className="block text-xs font-medium text-gray-600 mb-1.5">
-                                        Variedad
+                                        Variante
                                     </label>
                                     <input
                                         type="text"
@@ -702,6 +784,40 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                     )}
                                 </div>
                             </div>
+                            {parcelasSeleccionadasEspeciales.length > 0 && (
+                                <div className="p-3 rounded-lg bg-amber-50 border border-amber-200">
+                                    <div className="text-xs text-amber-700 mb-2">
+                                        Has seleccionado parcelas de patata/remolacha.
+                                    </div>
+                                    <label className="block text-xs font-medium text-gray-700 mb-1.5">
+                                        ¿Requiere asesoramiento?
+                                    </label>
+                                    <div className="flex items-center gap-4 text-sm">
+                                        <label className="flex items-center gap-2 text-gray-700 cursor-pointer">
+                                            <input
+                                                type="radio"
+                                                name="requiere_asesoramiento"
+                                                value="si"
+                                                checked={String(formData.requiere_asesoramiento || "no") === "si"}
+                                                onChange={handleChange}
+                                                className="w-4 h-4 text-green-500 border-gray-400"
+                                            />
+                                            Sí
+                                        </label>
+                                        <label className="flex items-center gap-2 text-gray-700 cursor-pointer">
+                                            <input
+                                                type="radio"
+                                                name="requiere_asesoramiento"
+                                                value="no"
+                                                checked={String(formData.requiere_asesoramiento || "no") !== "si"}
+                                                onChange={handleChange}
+                                                className="w-4 h-4 text-green-500 border-gray-400"
+                                            />
+                                            No
+                                        </label>
+                                    </div>
+                                </div>
+                            )}
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
                                     <label className="block text-xs font-medium text-gray-600 mb-1.5">
@@ -728,8 +844,13 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                         value={formData.plaga_enfermedad || ""}
                                         onChange={handleChange}
                                         placeholder="Motivo del tratamiento"
+                                        list="plaga-sugerencias"
+                                        autoComplete="off"
                                         className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
                                     />
+                                    <datalist id="plaga-sugerencias">
+                                        {plagaSugerencias.map((s) => <option key={s} value={s} />)}
+                                    </datalist>
                                 </div>
                             </div>
                             <div className="relative">
@@ -1022,6 +1143,8 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                                         setFormData((prev) => ({ ...prev, productos_lista: list }));
                                                     }}
                                                     placeholder="Problemática"
+                                                    list="plaga-sugerencias"
+                                                    autoComplete="off"
                                                     className="flex-1 min-w-[100px] px-2 py-1.5 rounded border border-gray-300 text-sm"
                                                 />
                                                 <input
@@ -1513,6 +1636,102 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                     placeholder="Dirección"
                                     className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-gray-900 placeholder-zinc-500 text-sm focus:outline-none focus:border-green-500 transition-colors"
                                 />
+                            </div>
+                        </>
+                    )}
+
+                    {sheet === "asesoramiento" && (
+                        <>
+                            <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-700">
+                                Hoja 3.2 — Obligatorio cuando Patata + Remolacha superan 5 ha
+                            </div>
+                            <div>
+                                <label className="block text-xs font-medium text-gray-600 mb-1.5">Parcelas</label>
+                                <div className="grid grid-cols-2 gap-2 p-3 rounded-lg bg-white border border-gray-300 max-h-32 overflow-y-auto">
+                                    {(cuaderno.parcelas || []).length > 0 ? (
+                                        [...(cuaderno.parcelas || [])].sort((a: any, b: any) => (a.num_orden || 0) - (b.num_orden || 0)).map((p: any) => (
+                                            <label key={p.id} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-gray-100 cursor-pointer">
+                                                <input
+                                                    type="checkbox"
+                                                    name="parcela_ids"
+                                                    value={p.id}
+                                                    checked={Array.isArray(formData.parcela_ids) && formData.parcela_ids.includes(p.id)}
+                                                    onChange={(e) => {
+                                                        const ids = Array.isArray(formData.parcela_ids) ? [...formData.parcela_ids] : [];
+                                                        if (e.target.checked) ids.push(p.id);
+                                                        else ids.splice(ids.indexOf(p.id), 1);
+                                                        setFormData((prev: any) => ({ ...prev, parcela_ids: ids }));
+                                                    }}
+                                                    className="w-4 h-4 rounded border-gray-400 text-green-500"
+                                                />
+                                                <span className="text-sm text-gray-700 truncate">
+                                                    {p.nombre}{!!p.num_orden && <span className="text-gray-500"> · #{p.num_orden}</span>}
+                                                </span>
+                                            </label>
+                                        ))
+                                    ) : (
+                                        <p className="text-gray-500 text-sm col-span-2">No hay parcelas</p>
+                                    )}
+                                </div>
+                            </div>
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-xs font-medium text-gray-600 mb-1.5">Fecha</label>
+                                    <input type="date" name="fecha" value={formData.fecha || ""} onChange={handleChange}
+                                        className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-sm focus:outline-none focus:border-green-500" />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-medium text-gray-600 mb-1.5">Cultivo</label>
+                                    <input type="text" name="cultivo_especie" value={formData.cultivo_especie || ""} onChange={handleChange}
+                                        placeholder="PATATA, REMOLACHA..."
+                                        className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-sm focus:outline-none focus:border-green-500" />
+                                </div>
+                            </div>
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-xs font-medium text-gray-600 mb-1.5">Variante</label>
+                                    <input type="text" name="cultivo_variedad" value={formData.cultivo_variedad || ""} onChange={handleChange}
+                                        placeholder="ROSADONNA, SMART PEPETA KWS..."
+                                        className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-sm focus:outline-none focus:border-green-500" />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-medium text-gray-600 mb-1.5">Tipo de Asesoramiento</label>
+                                    <select name="tipo_asesoramiento" value={formData.tipo_asesoramiento || ""} onChange={handleChange}
+                                        className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-sm focus:outline-none focus:border-green-500">
+                                        <option value="">Seleccionar...</option>
+                                        <option value="Visita en campo">Visita en campo</option>
+                                        <option value="Plan anual">Plan anual</option>
+                                        <option value="Consulta puntual">Consulta puntual</option>
+                                        <option value="Análisis de suelo">Análisis de suelo</option>
+                                        <option value="Otro">Otro</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-xs font-medium text-gray-600 mb-1.5">Nombre del Asesor</label>
+                                    <input type="text" name="nombre_asesor" value={formData.nombre_asesor || ""} onChange={handleChange}
+                                        placeholder="Nombre completo"
+                                        className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-sm focus:outline-none focus:border-green-500" />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-medium text-gray-600 mb-1.5">Nº Habilitación</label>
+                                    <input type="text" name="num_habilitacion" value={formData.num_habilitacion || ""} onChange={handleChange}
+                                        placeholder="Nº habilitación oficial"
+                                        className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-sm focus:outline-none focus:border-green-500" />
+                                </div>
+                            </div>
+                            <div>
+                                <label className="block text-xs font-medium text-gray-600 mb-1.5">Recomendación / Tratamiento recomendado</label>
+                                <textarea name="recomendacion" value={formData.recomendacion || ""} onChange={handleChange}
+                                    rows={3} placeholder="Describe la recomendación del asesor..."
+                                    className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-sm resize-none focus:outline-none focus:border-green-500" />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-medium text-gray-600 mb-1.5">Observaciones</label>
+                                <textarea name="observaciones" value={formData.observaciones || ""} onChange={handleChange}
+                                    rows={2} placeholder="Notas adicionales..."
+                                    className="w-full px-3 py-2.5 rounded-lg bg-white border border-gray-300 text-sm resize-none focus:outline-none focus:border-green-500" />
                             </div>
                         </>
                     )}

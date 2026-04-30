@@ -29,7 +29,9 @@ import {
     MapPin,
     Table2,
     Send,
-    Palette
+    Palette,
+    AlertTriangle,
+    Package
 } from "lucide-react";
 import { Cuaderno, SheetType, SHEET_CONFIG, HistoricoRow, HojaExcel, CellSelection } from "@/lib/types";
 import { fechaFlexibleAISO, formatDateTableES } from "@/lib/dateSpanish";
@@ -38,6 +40,8 @@ import { api } from "@/lib/api";
 import AddRowModal from "./modals/AddRowModal";
 import AddBulkModal from "./modals/AddBulkModal";
 import ImportedSheet from "./ImportedSheet";
+import CatalogoViewComponent from "./CatalogoView";
+import StockView from "./StockView";
 
 // Tipo extendido para incluir hojas importadas
 type ExtendedSheetType = SheetType | `imported_${number}`;
@@ -73,17 +77,23 @@ const SHEET_ICONS: Record<SheetType, React.ReactNode> = {
     fertilizantes: <Sprout size={14} />,
     cosecha: <Wheat size={14} />,
     historico: <BarChart3 size={14} />,
+    asesoramiento: <Eye size={14} />,
+    catalogo: <Search size={14} />,
+    tratamientos_especiales: <AlertTriangle size={14} />,
+    trat_asesor: <ClipboardList size={14} />,
+    stock: <Package size={14} />,
 };
 
-const BASE_EDITABLE_SHEETS: SheetType[] = ["parcelas", "productos", "tratamientos"];
+const BASE_EDITABLE_SHEETS: SheetType[] = ["parcelas", "productos", "tratamientos", "asesoramiento"];
 const BULK_EDIT_SHEETS: SheetType[] = ["parcelas", "productos", "tratamientos", "fertilizantes", "cosecha"];
 
-const BASE_SHEET_IDS: SheetType[] = ["parcelas", "productos", "tratamientos", "fertilizantes", "cosecha", "historico"];
+const BASE_SHEET_IDS: SheetType[] = ["parcelas", "productos", "tratamientos", "fertilizantes", "cosecha", "asesoramiento", "historico", "catalogo", "tratamientos_especiales", "trat_asesor", "stock"];
 /** Hojas base con casilla de selección y color de fila */
-const SHEETS_WITH_ROW_SELECT: SheetType[] = ["parcelas", "productos", "tratamientos", "fertilizantes", "cosecha"];
+const SHEETS_WITH_ROW_SELECT: SheetType[] = ["parcelas", "productos", "tratamientos", "fertilizantes", "cosecha", "asesoramiento"];
 const ROW_COLOR_SWATCHES = ["#ffffff", "#fef3c7", "#fde68a", "#bbf7d0", "#bfdbfe", "#e9d5ff", "#fbcfe8", "#fecaca"] as const;
 type ParcelSortMode = "num_orden" | "cultivo_superficie" | "cultivo" | "alfabetico" | "superficie_desc" | "superficie_asc" | "termino_municipal" | "todo_az";
 type TratSortMode = "fecha_desc" | "fecha_asc" | "cultivo" | "parcela" | "producto";
+type FertSortMode = "fecha_desc" | "fecha_asc" | "cultivo" | "dosis_desc" | "dosis_asc";
 
 /** Filtro del desplegable: igualdad exacta (trim + minúsculas). Evita que "AVENA" incluya "AVENA/COLIFLOR". */
 function cultivoCoincideConFiltro(celdaCultivo: string, filtro: string): boolean {
@@ -113,22 +123,31 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
     const [selectedProductos, setSelectedProductos] = useState<Set<string>>(new Set());
     const [selectedFertilizaciones, setSelectedFertilizaciones] = useState<Set<string>>(new Set());
     const [selectedCosechas, setSelectedCosechas] = useState<Set<string>>(new Set());
+    const [selectedAsesoramientos, setSelectedAsesoramientos] = useState<Set<string>>(new Set());
     const [cultivoFilter, setCultivoFilter] = useState<string>("");
     const [parcelaTratamientoFilter, setParcelaTratamientoFilter] = useState<"" | "con_tratamiento" | "sin_tratamiento">("");
     const [tratCultivoFilter, setTratCultivoFilter] = useState<string>("");
     const [parcelSortMode, setParcelSortMode] = useState<ParcelSortMode>("num_orden");
     const [tratSortMode, setTratSortMode] = useState<TratSortMode>("fecha_desc");
+    const [fertSortMode, setFertSortMode] = useState<FertSortMode>("fecha_desc");
     const [targetHectareas, setTargetHectareas] = useState<string>("");
+    const [showNitrogenCalc, setShowNitrogenCalc] = useState(false);
     const [showTratamientosParcelaId, setShowTratamientosParcelaId] = useState<string | null>(null);
     const [showTratamientoDetalleId, setShowTratamientoDetalleId] = useState<string | null>(null);
     const [parcelaTratamientos, setParcelaTratamientos] = useState<any[]>([]);
     const [loadingTratamientos, setLoadingTratamientos] = useState(false);
     const [openTreatFromSelection, setOpenTreatFromSelection] = useState(false);
     const [openTreatFromTratSelection, setOpenTreatFromTratSelection] = useState(false);
+    const [openTreatFromAsesorSelection, setOpenTreatFromAsesorSelection] = useState(false);
     const [openFertFromSelection, setOpenFertFromSelection] = useState(false);
+    const [repairingTratamientos, setRepairingTratamientos] = useState(false);
     // ---- Selección de celdas para Chat ----
     const [selectedCells, setSelectedCells] = useState<Set<string>>(new Set()); // "rowIdx:colKey"
     const [selectionAnchor, setSelectionAnchor] = useState<{ rowIdx: number; colIdx: number } | null>(null);
+    // ---- Drag-select ----
+    const isDraggingRef = useRef(false);
+    const dragMovedRef = useRef(false); // true si el drag se extendió a otra celda
+    const dragAnchorRef = useRef<{ rowIdx: number; colIdx: number } | null>(null);
     const [bulkEditValue, setBulkEditValue] = useState("");
     const [pasteValues, setPasteValues] = useState("");
     const [buscarValue, setBuscarValue] = useState("");
@@ -140,9 +159,23 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
     const [exportHojasModal, setExportHojasModal] = useState<{ hojas: { sheet_id: string; nombre: string; num_filas: number }[]; type: "pdf" | "excel"; params: Record<string, any> } | null>(null);
     const [selectedExportHojas, setSelectedExportHojas] = useState<Set<string>>(new Set());
     const searchInputRef = useRef<HTMLInputElement | null>(null);
+    const [showMoreTabsMenu, setShowMoreTabsMenu] = useState(false);
+    const [showImportedTabsMenu, setShowImportedTabsMenu] = useState(false);
 
     const hojas = cuaderno.hojas_originales || [];
     const isFocusMode = focusSheetId != null;
+
+    // Compute whether cuaderno has Patata/Remolacha con superficie conjunta >5 ha
+    const hasEspeciales = useMemo(() => {
+        const CULTIVOS_ESP = ["PATATA", "REMOLACHA"];
+        const totalEspecial = (cuaderno.parcelas || []).reduce((acc, p) => {
+            const cultivo = (p.especie || p.cultivo || "").toUpperCase();
+            const esEspecial = CULTIVOS_ESP.some(c => cultivo.includes(c));
+            const sup = Number(p.superficie_cultivada || p.superficie_ha || p.superficie_sigpac || 0);
+            return esEspecial ? acc + sup : acc;
+        }, 0);
+        return totalEspecial > 5;
+    }, [cuaderno.parcelas, cuaderno.tratamientos]);
     const focusIsBase = focusSheetId != null && BASE_SHEET_IDS.includes(focusSheetId as SheetType);
     const focusImportedIdx = focusSheetId != null ? (hojas.findIndex((h) => h.sheet_id === focusSheetId) ?? -1) : -1;
     const effectiveSheet = isFocusMode && focusIsBase ? (focusSheetId as SheetType) : activeSheet;
@@ -161,6 +194,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
         setSelectedProductos(new Set());
         setSelectedFertilizaciones(new Set());
         setSelectedCosechas(new Set());
+        setSelectedAsesoramientos(new Set());
     }, [effectiveSheet]);
 
     useEffect(() => {
@@ -177,6 +211,16 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
             console.error("Error loading historico:", error);
         }
     };
+
+    const calcNitrogenFromRow = useCallback((row: any): { n: number; dosis: number; total: number } | null => {
+        const riqueza = String(row?.riqueza_npk || "").trim();
+        const match = riqueza.match(/^(\d+(?:[.,]\d+)?)/);
+        if (!match) return null;
+        const n = Number(match[1].replace(",", "."));
+        const dosis = Number(row?.dosis ?? 0);
+        if (!Number.isFinite(n) || !Number.isFinite(dosis)) return null;
+        return { n, dosis, total: Number((dosis * (n / 100)).toFixed(2)) };
+    }, []);
 
     const getData = () => {
         switch (effectiveSheet) {
@@ -210,8 +254,74 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                 return cuaderno.fertilizaciones || [];
             case "cosecha":
                 return cuaderno.cosechas || [];
+            case "asesoramiento":
+                return (cuaderno as any).asesoramientos || [];
             case "historico":
                 return historico;
+            case "tratamientos_especiales": {
+                const CULTIVOS_ESP = ["PATATA", "REMOLACHA"];
+                const especialParcelaIds = new Set(
+                    (cuaderno.parcelas || [])
+                        .filter((p) => CULTIVOS_ESP.some(c => (p.especie || p.cultivo || "").toUpperCase().includes(c)))
+                        .map((p) => p.id)
+                );
+                return (cuaderno.tratamientos || [])
+                    .filter((t) => (t.parcela_ids || []).some((pid) => especialParcelaIds.has(pid)))
+                    .map(t => {
+                        const prod = t.productos?.[0] || {};
+                        const probProd = String((prod as any).problema_fitosanitario || (prod as any).plaga_enfermedad || "").trim();
+                        const probTrat = String(t.problema_fitosanitario || t.plaga_enfermedad || "").trim();
+                        const d = (prod as any).dosis;
+                        const u = String((prod as any).unidad_dosis || "").trim();
+                        let dosisStr = "";
+                        if (d !== "" && d !== undefined && d !== null) {
+                            const ds = typeof d === "number" ? String(d) : String(d);
+                            dosisStr = u ? `${ds} ${u}` : ds;
+                        }
+                        return {
+                            ...t,
+                            parcela_nombres: t.parcela_nombres?.join(", ") || "",
+                            nombre_comercial: (prod as any).nombre_comercial || "",
+                            numero_registro: (prod as any).numero_registro || "",
+                            dosis: dosisStr,
+                            unidad_dosis: u,
+                            problema_fitosanitario: probTrat || probProd,
+                        };
+                    });
+            }
+            case "trat_asesor": {
+                const CULTIVOS_ESP = ["PATATA", "REMOLACHA"];
+                const especialParcelaIds = new Set(
+                    (cuaderno.parcelas || [])
+                        .filter((p) => CULTIVOS_ESP.some(c => (p.especie || p.cultivo || "").toUpperCase().includes(c)))
+                        .map((p) => p.id)
+                );
+                return (cuaderno.tratamientos || [])
+                    .filter((t) => (t.parcela_ids || []).some((pid) => especialParcelaIds.has(pid)))
+                    .map(t => {
+                        const prod = t.productos?.[0] || {};
+                        const probProd = String((prod as any).problema_fitosanitario || (prod as any).plaga_enfermedad || "").trim();
+                        const probTrat = String(t.problema_fitosanitario || t.plaga_enfermedad || "").trim();
+                        const d = (prod as any).dosis;
+                        const u = String((prod as any).unidad_dosis || "").trim();
+                        let dosisStr = "";
+                        if (d !== "" && d !== undefined && d !== null) {
+                            const ds = typeof d === "number" ? String(d) : String(d);
+                            dosisStr = u ? `${ds} ${u}` : ds;
+                        }
+                        return {
+                            ...t,
+                            parcela_nombres: t.parcela_nombres?.join(", ") || "",
+                            nombre_comercial: (prod as any).nombre_comercial || "",
+                            numero_registro: (prod as any).numero_registro || "",
+                            dosis: dosisStr,
+                            unidad_dosis: u,
+                            problema_fitosanitario: probTrat || probProd,
+                        };
+                    });
+            }
+            case "stock":
+                return [];
             default:
                 return [];
         }
@@ -300,12 +410,12 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                         if (aCultivo !== bCultivo) return aCultivo.localeCompare(bCultivo, "es");
                         return bFecha.localeCompare(aFecha, "es");
                     case "parcela": {
-                        if (aCultivo !== bCultivo) return aCultivo.localeCompare(bCultivo, "es", { sensitivity: "base" });
                         const ao = minNumOrdenTratamiento(a);
                         const bo = minNumOrdenTratamiento(b);
                         if (ao !== bo) return ao - bo;
+                        if (aCultivo !== bCultivo) return aCultivo.localeCompare(bCultivo, "es", { sensitivity: "base" });
                         if (aParcela !== bParcela) return aParcela.localeCompare(bParcela, "es");
-                        if (aFecha !== bFecha) return aFecha.localeCompare(bFecha, "es");
+                        if (aFecha !== bFecha) return bFecha.localeCompare(aFecha, "es");
                         return (a.id || "").localeCompare(b.id || "");
                     }
                     case "producto":
@@ -314,6 +424,44 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                     case "fecha_desc":
                     default:
                         if (bFecha !== aFecha) return bFecha.localeCompare(aFecha, "es");
+                        return (a.id || "").localeCompare(b.id || "");
+                }
+            });
+            return sorted;
+        }
+        if (effectiveSheet === "fertilizantes") {
+            const parseMesAnio = (s: any): number => {
+                const raw = String(s || "").trim();
+                const m = raw.match(/^(\d{1,2})\s*\/\s*(\d{4})$/);
+                if (!m) return 0;
+                const mm = Number(m[1]);
+                const yy = Number(m[2]);
+                if (!Number.isFinite(mm) || !Number.isFinite(yy)) return 0;
+                return yy * 100 + mm;
+            };
+            const sorted = [...(data as any[])].sort((a: any, b: any) => {
+                const aFecha = parseMesAnio(a.fecha_inicio || a.fecha_fin);
+                const bFecha = parseMesAnio(b.fecha_inicio || b.fecha_fin);
+                const aCultivo = String(a.cultivo_especie || "").toLowerCase();
+                const bCultivo = String(b.cultivo_especie || "").toLowerCase();
+                const aDosis = Number(a.dosis || 0);
+                const bDosis = Number(b.dosis || 0);
+                switch (fertSortMode) {
+                    case "fecha_asc":
+                        if (aFecha !== bFecha) return aFecha - bFecha;
+                        return (a.id || "").localeCompare(b.id || "");
+                    case "cultivo":
+                        if (aCultivo !== bCultivo) return aCultivo.localeCompare(bCultivo, "es");
+                        return bFecha - aFecha;
+                    case "dosis_desc":
+                        if (bDosis !== aDosis) return bDosis - aDosis;
+                        return bFecha - aFecha;
+                    case "dosis_asc":
+                        if (aDosis !== bDosis) return aDosis - bDosis;
+                        return bFecha - aFecha;
+                    case "fecha_desc":
+                    default:
+                        if (aFecha !== bFecha) return bFecha - aFecha;
                         return (a.id || "").localeCompare(b.id || "");
                 }
             });
@@ -378,7 +526,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
             }
         });
         return sorted;
-    }, [data, effectiveSheet, cultivoFilter, parcelaTratamientoFilter, parcelaIdsConTratamiento, parcelSortMode, tratCultivoFilter, tratSortMode, minNumOrdenTratamiento]);
+    }, [data, effectiveSheet, cultivoFilter, parcelaTratamientoFilter, parcelaIdsConTratamiento, parcelSortMode, tratCultivoFilter, tratSortMode, fertSortMode, minNumOrdenTratamiento]);
 
     // ---- Orden para exportar (parcelas con el orden actual del editor) ----
     const sortedParcelasForExport = useMemo(() => {
@@ -447,12 +595,12 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                     if (aCultivo !== bCultivo) return aCultivo.localeCompare(bCultivo, "es");
                     return bFecha.localeCompare(aFecha, "es");
                 case "parcela": {
-                    if (aCultivo !== bCultivo) return aCultivo.localeCompare(bCultivo, "es", { sensitivity: "base" });
                     const ao = minNumOrdenTratamiento(a);
                     const bo = minNumOrdenTratamiento(b);
                     if (ao !== bo) return ao - bo;
+                    if (aCultivo !== bCultivo) return aCultivo.localeCompare(bCultivo, "es", { sensitivity: "base" });
                     if (aParcela !== bParcela) return aParcela.localeCompare(bParcela, "es");
-                    if (aFecha !== bFecha) return aFecha.localeCompare(bFecha, "es");
+                    if (aFecha !== bFecha) return bFecha.localeCompare(aFecha, "es");
                     return (a.id || "").localeCompare(b.id || "");
                 }
                 case "producto":
@@ -493,6 +641,22 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
             selectedHa,
         };
     }, [effectiveSheet, displayData, selectedTratamientos]);
+
+    const parcelasFromSelectedAsesoramientos = useMemo(() => {
+        if (selectedAsesoramientos.size === 0) return [];
+        const selectedRows = ((cuaderno as any).asesoramientos || []).filter((a: any) => a.id && selectedAsesoramientos.has(a.id));
+        const ordenes = new Set<string>();
+        for (const a of selectedRows) {
+            const toks = String(a.num_orden_parcelas || "").replace(";", ",").split(",").map((t) => t.trim()).filter(Boolean);
+            toks.forEach((t) => ordenes.add(t));
+        }
+        const ids = new Set<string>();
+        for (const p of (cuaderno.parcelas || [])) {
+            const ord = (typeof p.num_orden === "number" && p.num_orden > 0) ? String(p.num_orden) : "";
+            if (ord && ordenes.has(ord)) ids.add(p.id);
+        }
+        return Array.from(ids);
+    }, [selectedAsesoramientos, cuaderno]);
 
     // ---- Sumatorio de hectáreas ----
     const hectareasSummary = useMemo(() => {
@@ -554,6 +718,15 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
         });
     }, []);
 
+    const toggleAsesoramientoSelection = useCallback((id: string) => {
+        setSelectedAsesoramientos((prev) => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id);
+            else next.add(id);
+            return next;
+        });
+    }, []);
+
     const toggleSelectAllRowSheet = useCallback(() => {
         const allIds = (displayData as any[]).map((r: any) => r.id).filter(Boolean);
         if (effectiveSheet === "parcelas") {
@@ -566,6 +739,8 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
             setSelectedFertilizaciones((prev) => (prev.size === allIds.length ? new Set() : new Set(allIds)));
         } else if (effectiveSheet === "cosecha") {
             setSelectedCosechas((prev) => (prev.size === allIds.length ? new Set() : new Set(allIds)));
+        } else if (effectiveSheet === "asesoramiento") {
+            setSelectedAsesoramientos((prev) => (prev.size === allIds.length ? new Set() : new Set(allIds)));
         }
     }, [displayData, effectiveSheet]);
 
@@ -596,6 +771,8 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                 return selectedFertilizaciones.size;
             case "cosecha":
                 return selectedCosechas.size;
+            case "asesoramiento":
+                return selectedAsesoramientos.size;
             default:
                 return 0;
         }
@@ -606,6 +783,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
         selectedTratamientos,
         selectedFertilizaciones,
         selectedCosechas,
+        selectedAsesoramientos,
     ]);
 
     const autoSelectByHectareas = useCallback(() => {
@@ -907,6 +1085,48 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
         setSelectedCells(new Set());
         setSelectionAnchor(null);
     }, []);
+
+    // ---- Drag-select: mouseup global ----
+    useEffect(() => {
+        const onMouseUp = () => {
+            isDraggingRef.current = false;
+        };
+        document.addEventListener("mouseup", onMouseUp);
+        return () => document.removeEventListener("mouseup", onMouseUp);
+    }, []);
+
+    const handleCellMouseDown = useCallback((rowIdx: number, colIdx: number, e: React.MouseEvent) => {
+        if (e.button !== 0) return;
+        if (editingCell) return;
+        e.preventDefault(); // evita selección de texto nativa
+        isDraggingRef.current = true;
+        dragMovedRef.current = false;
+        dragAnchorRef.current = { rowIdx, colIdx };
+        const key = `${rowIdx}:${config.columns[colIdx]?.key || colIdx}`;
+        if (!e.shiftKey && !e.metaKey && !e.ctrlKey) {
+            setSelectedCells(new Set([key]));
+            setSelectionAnchor({ rowIdx, colIdx });
+        }
+    }, [editingCell, config.columns]);
+
+    const handleCellMouseEnter = useCallback((rowIdx: number, colIdx: number) => {
+        if (!isDraggingRef.current || !dragAnchorRef.current) return;
+        const anchor = dragAnchorRef.current;
+        if (anchor.rowIdx === rowIdx && anchor.colIdx === colIdx) return;
+        dragMovedRef.current = true;
+        const minRow = Math.min(anchor.rowIdx, rowIdx);
+        const maxRow = Math.max(anchor.rowIdx, rowIdx);
+        const minCol = Math.min(anchor.colIdx, colIdx);
+        const maxCol = Math.max(anchor.colIdx, colIdx);
+        const newSet = new Set<string>();
+        for (let r = minRow; r <= maxRow; r++) {
+            for (let c = minCol; c <= maxCol; c++) {
+                newSet.add(`${r}:${config.columns[c]?.key || c}`);
+            }
+        }
+        setSelectedCells(newSet);
+        setSelectionAnchor(anchor);
+    }, [config.columns]);
 
     // Construir CellSelection para el chat
     const buildCellSelection = useCallback((): CellSelection | null => {
@@ -1311,6 +1531,17 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
         }
     };
 
+    const handleDeleteAsesoramiento = async (id: string) => {
+        if (!confirm("¿Eliminar este registro de asesoramiento?")) return;
+        try {
+            await api.deleteAsesoramiento(cuaderno.id, id);
+            onRefresh();
+        } catch (e) {
+            console.error(e);
+            alert("No se pudo eliminar.");
+        }
+    };
+
     const handleDuplicarTratamiento = async (tratamientoId: string) => {
         try {
             await api.duplicarTratamiento(cuaderno.id, tratamientoId);
@@ -1335,6 +1566,27 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
             alert(e.message || "No se pudo copiar.");
         } finally {
             setCopyingToParcels(false);
+        }
+    };
+
+    const handleRepairTratamientos = async () => {
+        if (!confirm("¿Ejecutar reparación de tratamientos existentes por Nº orden?")) return;
+        setRepairingTratamientos(true);
+        try {
+            const r = await api.repararTratamientos(cuaderno.id);
+            onRefresh();
+            alert(
+                `Reparación completada.\n` +
+                `Total: ${r.reparadas_total}\n` +
+                `Multi-cultivo: ${r.reparadas_multi_cultivo}\n` +
+                `Por Nº orden: ${r.reparadas_num_orden}\n` +
+                `Restablecidas a Nº individual: ${r.restablecidas_individual}`
+            );
+        } catch (e: any) {
+            console.error(e);
+            alert(e?.message || "No se pudo reparar.");
+        } finally {
+            setRepairingTratamientos(false);
         }
     };
 
@@ -1475,46 +1727,105 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
     }
 
     function renderTabs() {
+        // Tabs principales siempre visibles
+        const primaryTabs: SheetType[] = ["parcelas", "productos", "tratamientos", "fertilizantes", "cosecha", "asesoramiento", "stock"];
+        // Tabs en el dropdown "Más"
+        const moreTabs: SheetType[] = ["historico", "catalogo"];
+        if (hasEspeciales) moreTabs.push("tratamientos_especiales", "trat_asesor");
+
+        const moreActive = moreTabs.includes(effectiveSheet) && effectiveImportedIndex === null;
+        const importedActive = effectiveImportedIndex !== null;
+        const activeImportedName = importedActive && hojas[effectiveImportedIndex!]
+            ? hojas[effectiveImportedIndex!].nombre
+            : null;
+
         return (
-            <div className="h-10 bg-[var(--bg-dark)] border-t border-gray-200 flex items-center justify-between px-3 shrink-0 overflow-x-auto">
-                <div className="flex items-center gap-0.5">
-                    {(["parcelas", "productos", "tratamientos", "fertilizantes", "cosecha", "historico"] as SheetType[]).map((sheet) => (
+            <div className="h-10 bg-[var(--bg-dark)] border-t border-gray-200 flex items-center justify-between px-2 shrink-0">
+                <div className="flex items-center gap-0.5 min-w-0 flex-1">
+                    <div className="flex items-center gap-0.5 overflow-x-auto min-w-0 flex-1">
+                    {primaryTabs.map((sheet) => (
                         <button
                             key={sheet}
                             onClick={() => handleSheetTabClick(sheet)}
-                            className={`flex items-center gap-1.5 px-3 py-2 rounded-md text-xs font-medium transition-colors ${effectiveImportedIndex === null && effectiveSheet === sheet
-                                ? "bg-emerald-500/10 text-emerald-400"
+                            className={`flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors whitespace-nowrap ${effectiveImportedIndex === null && effectiveSheet === sheet
+                                ? "bg-emerald-500/10 text-emerald-500"
                                 : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
                                 }`}
                         >
                             {SHEET_ICONS[sheet]}
-                            {SHEET_CONFIG[sheet].title}
+                            <span className="hidden sm:inline">{SHEET_CONFIG[sheet].title}</span>
                         </button>
                     ))}
+                    </div>
 
-                    {hojas.length > 0 && (
-                        <div className="w-px h-4 bg-gray-200 mx-2" />
-                    )}
-
-                    {hojas.map((hoja, idx) => (
+                    {/* Dropdown "Más" para hojas secundarias */}
+                    <div className="relative shrink-0">
                         <button
-                            key={`imported_${idx}`}
-                            onClick={() => handleImportedTabClick(idx)}
-                            className={`flex items-center gap-1.5 px-3 py-2 rounded-md text-xs font-medium transition-colors ${effectiveImportedIndex === idx
-                                ? "bg-purple-500/10 text-purple-400"
-                                : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
-                                }`}
+                            onClick={() => { setShowMoreTabsMenu(v => !v); setShowImportedTabsMenu(false); }}
+                            className={`flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors whitespace-nowrap ${moreActive ? "bg-emerald-500/10 text-emerald-500" : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"}`}
                         >
-                            <Table size={12} />
-                            {hoja.nombre.length > 15 ? `${hoja.nombre.slice(0, 15)}...` : hoja.nombre}
+                            {moreActive ? SHEET_ICONS[effectiveSheet] : null}
+                            {moreActive ? <span className="hidden sm:inline">{SHEET_CONFIG[effectiveSheet]?.title}</span> : <span>Más</span>}
+                            <svg className="w-3 h-3" viewBox="0 0 12 12" fill="currentColor"><path d="M6 8L2 4h8z"/></svg>
                         </button>
-                    ))}
+                        {showMoreTabsMenu && (
+                            <>
+                                <div className="fixed inset-0 z-30" onClick={() => setShowMoreTabsMenu(false)} />
+                                <div className="absolute bottom-10 left-0 z-40 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[180px]">
+                                    {moreTabs.map(sheet => (
+                                        <button
+                                            key={sheet}
+                                            onClick={() => { handleSheetTabClick(sheet); setShowMoreTabsMenu(false); }}
+                                            className={`flex items-center gap-2 w-full px-3 py-2 text-xs hover:bg-gray-50 ${effectiveSheet === sheet && effectiveImportedIndex === null ? "text-emerald-500 font-medium" : "text-gray-700"}`}
+                                        >
+                                            {SHEET_ICONS[sheet]}
+                                            {SHEET_CONFIG[sheet]?.title}
+                                        </button>
+                                    ))}
+                                </div>
+                            </>
+                        )}
+                    </div>
+
+                    {/* Dropdown para hojas importadas */}
+                    {hojas.length > 0 && (
+                        <>
+                            <div className="w-px h-4 bg-gray-200 mx-1 shrink-0" />
+                            <div className="relative shrink-0">
+                                <button
+                                    onClick={() => { setShowImportedTabsMenu(v => !v); setShowMoreTabsMenu(false); }}
+                                    className={`flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors whitespace-nowrap ${importedActive ? "bg-purple-500/10 text-purple-500" : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"}`}
+                                >
+                                    <Table size={12} />
+                                    <span>{importedActive && activeImportedName ? (activeImportedName.length > 12 ? activeImportedName.slice(0, 12) + "…" : activeImportedName) : `Importadas (${hojas.length})`}</span>
+                                    <svg className="w-3 h-3" viewBox="0 0 12 12" fill="currentColor"><path d="M6 8L2 4h8z"/></svg>
+                                </button>
+                                {showImportedTabsMenu && (
+                                    <>
+                                        <div className="fixed inset-0 z-30" onClick={() => setShowImportedTabsMenu(false)} />
+                                        <div className="absolute bottom-10 left-0 z-40 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[200px] max-h-64 overflow-y-auto">
+                                            {hojas.map((hoja, idx) => (
+                                                <button
+                                                    key={`imported_${idx}`}
+                                                    onClick={() => { handleImportedTabClick(idx); setShowImportedTabsMenu(false); }}
+                                                    className={`flex items-center gap-2 w-full px-3 py-2 text-xs hover:bg-gray-50 ${effectiveImportedIndex === idx ? "text-purple-500 font-medium" : "text-gray-700"}`}
+                                                >
+                                                    <Table size={11} />
+                                                    {hoja.nombre}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </>
+                                )}
+                            </div>
+                        </>
+                    )}
                 </div>
 
-                <span className="text-[11px] text-gray-500 shrink-0 ml-4">
+                <span className="text-[11px] text-gray-500 shrink-0 ml-2">
                     {effectiveImportedIndex !== null
                         ? `${hojas[effectiveImportedIndex]?.datos?.length || 0} filas`
-                        : `${data.length} registro${data.length !== 1 ? "s" : ""}`
+                        : `${data.length} reg.`
                     }
                 </span>
             </div>
@@ -1657,12 +1968,51 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                 <div className="w-px h-5 bg-gray-200" />
                             </div>
                         )}
-                        {effectiveSheet !== "historico" && (
+                        {effectiveSheet === "tratamientos" && (
+                            <button
+                                onClick={handleRepairTratamientos}
+                                disabled={repairingTratamientos}
+                                className="flex items-center gap-1.5 px-3 py-2 rounded-md bg-amber-500/15 hover:bg-amber-500/25 text-amber-700 text-xs font-medium transition-colors disabled:opacity-50"
+                                title="Reparar tratamientos históricos por Nº orden"
+                            >
+                                <RefreshCw size={14} className={repairingTratamientos ? "animate-spin" : ""} />
+                                {repairingTratamientos ? "Reparando..." : "Reparar"}
+                            </button>
+                        )}
+                        {effectiveSheet === "fertilizantes" && (
+                            <div className="flex items-center gap-1.5">
+                                <select
+                                    value={fertSortMode}
+                                    onChange={(e) => setFertSortMode(e.target.value as FertSortMode)}
+                                    className="rounded-md bg-gray-100 border border-gray-300 px-2 py-1.5 text-xs text-gray-800 focus:outline-none focus:border-emerald-500/40 min-w-[180px]"
+                                >
+                                    <option value="fecha_desc">Orden: Mes inicio (reciente primero)</option>
+                                    <option value="fecha_asc">Orden: Mes inicio (antiguo primero)</option>
+                                    <option value="cultivo">Orden: por cultivo</option>
+                                    <option value="dosis_desc">Orden: por dosis (mayor primero)</option>
+                                    <option value="dosis_asc">Orden: por dosis (menor primero)</option>
+                                </select>
+                                <button
+                                    type="button"
+                                    onClick={() => setShowNitrogenCalc((v) => !v)}
+                                    className={`flex items-center gap-1.5 px-3 py-2 rounded-md text-xs font-medium transition-colors ${
+                                        showNitrogenCalc
+                                            ? "bg-cyan-500/15 text-cyan-700 hover:bg-cyan-500/25"
+                                            : "bg-gray-100 hover:bg-gray-200 text-gray-700"
+                                    }`}
+                                    title="Calcula Dosis × N (auxiliar UI)"
+                                >
+                                    {showNitrogenCalc ? "Ocultar cálculo N" : "Calcular N"}
+                                </button>
+                            </div>
+                        )}
+                        {effectiveSheet !== "historico" && effectiveSheet !== "catalogo" && (
                             <>
                                 <button
                                     onClick={() => {
                                         setOpenTreatFromSelection(false);
                                         setOpenTreatFromTratSelection(false);
+                                        setOpenTreatFromAsesorSelection(false);
                                         setOpenFertFromSelection(false);
                                         setShowAddModal(true);
                                     }}
@@ -2053,9 +2403,39 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                     </div>
                 )}
 
-                {/* Spreadsheet */}
-                <div className="flex-1 overflow-auto bg-[var(--bg-darker)]">
-                    <table className="w-full text-sm border-collapse">
+                {effectiveSheet === "asesoramiento" && currentRowSelectionCount > 0 && (
+                    <div className="px-4 py-2.5 border-b border-gray-200 bg-gradient-to-r from-cyan-500/5 to-transparent flex items-center justify-between shrink-0">
+                        <span className="text-sm text-gray-700">{currentRowSelectionCount} registro(s) de asesoramiento seleccionado(s)</span>
+                        <div className="flex items-center gap-2 flex-wrap">
+                            <button
+                                onClick={() => { setOpenTreatFromAsesorSelection(true); setShowAddModal(true); }}
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-medium transition-colors"
+                            >
+                                <Plus size={13} />
+                                Crear tratamiento asesorado
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setSelectedAsesoramientos(new Set())}
+                                className="text-xs text-gray-500 hover:text-gray-700 transition-colors"
+                            >
+                                Limpiar
+                            </button>
+                        </div>
+                    </div>
+                )}
+
+                {/* Catálogo Global — vista personalizada */}
+                {effectiveSheet === "catalogo" && (
+                    <CatalogoViewComponent cuadernoId={cuaderno.id} />
+                )}
+                {effectiveSheet === "stock" && (
+                    <StockView cuadernoId={cuaderno.id} />
+                )}
+
+                {/* Spreadsheet — oculto si estamos en catálogo o stock */}
+                <div className={`flex-1 overflow-auto bg-[var(--bg-darker)] ${(effectiveSheet === "catalogo" || effectiveSheet === "stock") ? "hidden" : ""}`}>
+                    <table className="w-full text-sm border-collapse select-none">
                         <thead className="sticky top-0 z-10">
                             <tr className="bg-[var(--bg-dark)]">
                                             {sheetHasRowSelect && (
@@ -2140,18 +2520,21 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                         (effectiveSheet === "productos" && selectedProductos.has(row.id)) ||
                                         (effectiveSheet === "tratamientos" && selectedTratamientos.has(row.id)) ||
                                         (effectiveSheet === "fertilizantes" && selectedFertilizaciones.has(row.id)) ||
-                                        (effectiveSheet === "cosecha" && selectedCosechas.has(row.id));
+                                        (effectiveSheet === "cosecha" && selectedCosechas.has(row.id)) ||
+                                        (effectiveSheet === "asesoramiento" && selectedAsesoramientos.has(row.id));
 
                                     // Separador de parcela cuando tratamientos ordenados por parcela
                                     const showParcelaSeparator = effectiveSheet === "tratamientos" && tratSortMode === "parcela";
                                     const parcelaKey = (r: any) => {
-                                        const val = r?.parcela_nombres ?? r?.num_orden_parcelas ?? "";
-                                        return (Array.isArray(val) ? (val as string[]).join(",") : String(val)).toLowerCase();
+                                        // Agrupar por Nº de orden real (desde parcela_ids), no por etiqueta textual.
+                                        const ord = minNumOrdenTratamiento(r);
+                                        return String(Number.isFinite(ord) ? ord : 999999);
                                     };
                                     const prevRow = idx > 0 ? (displayData as any[])[idx - 1] : null;
                                     const isNewParcela = !prevRow || parcelaKey(row) !== parcelaKey(prevRow);
-                                    const parcelaLabel = Array.isArray(row.parcela_nombres) && row.parcela_nombres.length
-                                        ? (row.parcela_nombres as string[]).join(", ")
+                                    const ordLabel = minNumOrdenTratamiento(row);
+                                    const parcelaLabel = Number.isFinite(ordLabel) && ordLabel !== 999999
+                                        ? `Ord. ${ordLabel}`
                                         : (row.num_orden_parcelas ? `Ord. ${row.num_orden_parcelas}` : "-");
 
                                     const colspan = config.columns.length + (sheetHasRowSelect ? 3 : 2);
@@ -2188,6 +2571,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                                             else if (effectiveSheet === "tratamientos") toggleTratamientoSelection(row.id);
                                                             else if (effectiveSheet === "fertilizantes") toggleFertilizacionSelection(row.id);
                                                             else if (effectiveSheet === "cosecha") toggleCosechaSelection(row.id);
+                                                            else if (effectiveSheet === "asesoramiento") toggleAsesoramientoSelection(row.id);
                                                         }}
                                                         className="text-gray-500 hover:text-emerald-400 transition-colors"
                                                     >
@@ -2212,6 +2596,20 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                                     ? null
                                                     : col.key === "zona_nitratos" && effectiveSheet === "parcelas"
                                                         ? (raw === true || raw === "true" ? "Sí" : raw === false || raw === "false" ? "No" : "—")
+                                                    : col.key === "dosis" && effectiveSheet === "fertilizantes" && showNitrogenCalc
+                                                        ? (() => {
+                                                            const calc = calcNitrogenFromRow(row);
+                                                            return (
+                                                                <div className="flex flex-col">
+                                                                    <span>{formatCellValue(raw, col.type)}</span>
+                                                                    {calc && (
+                                                                        <span className="text-[10px] text-cyan-700">
+                                                                            {calc.dosis} x {calc.n}% = {calc.total}
+                                                                        </span>
+                                                                    )}
+                                                                </div>
+                                                            );
+                                                        })()
                                                     : col.key === "num_orden_parcelas" && effectiveSheet === "tratamientos"
                                                         ? (
                                                             <div className="flex items-center justify-between group/link h-full w-full">
@@ -2241,7 +2639,18 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                                         key={col.key}
                                                         data-search-row={idx}
                                                         data-search-col={col.key}
+                                                        onMouseDown={(e) => {
+                                                            if (editingCell?.rowId === row.id && editingCell?.colKey === col.key) return;
+                                                            const colIndex = config.columns.findIndex(c => c.key === col.key);
+                                                            handleCellMouseDown(idx, colIndex, e);
+                                                        }}
+                                                        onMouseEnter={() => {
+                                                            const colIndex = config.columns.findIndex(c => c.key === col.key);
+                                                            handleCellMouseEnter(idx, colIndex);
+                                                        }}
                                                         onClick={(e) => {
+                                                            // Ignorar click si fue parte de un drag
+                                                            if (dragMovedRef.current) { dragMovedRef.current = false; return; }
                                                             // No seleccionar si estamos editando
                                                             if (editingCell?.rowId === row.id && editingCell?.colKey === col.key) return;
                                                             const colIndex = config.columns.findIndex(c => c.key === col.key);
@@ -2292,7 +2701,17 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                                             />
                                                         ) : (
                                                             <span className={`block w-full text-left min-h-[28px] rounded px-1 -mx-1 ${isBaseSheetEditable && row.id ? "hover:bg-gray-100" : ""}`}>
-                                                                {display}
+                                                                {effectiveSheet === "productos" && col.key === "cantidad_adquirida" ? (
+                                                                    <span className="flex items-center gap-1.5">
+                                                                        <span className={`w-2 h-2 rounded-full shrink-0 ${
+                                                                            Number(raw) <= 0 ? "bg-red-500" :
+                                                                            Number(raw) <= 2 ? "bg-amber-400" :
+                                                                            "bg-emerald-400"
+                                                                        }`} />
+                                                                        <span>{formatCellValue(raw, col.type)}</span>
+                                                                        {row.unidad && <span className="text-gray-400 text-[11px]">{row.unidad}</span>}
+                                                                    </span>
+                                                                ) : display}
                                                             </span>
                                                         )}
                                                     </td>
@@ -2383,6 +2802,16 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                                                 <Trash2 size={14} />
                                                             </button>
                                                         </>
+                                                    )}
+                                                    {effectiveSheet === "asesoramiento" && row.id && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleDeleteAsesoramiento(row.id)}
+                                                            className="p-1.5 rounded-md hover:bg-red-500/20 text-gray-500 hover:text-red-400"
+                                                            title="Eliminar"
+                                                        >
+                                                            <Trash2 size={14} />
+                                                        </button>
                                                     )}
                                                 </div>
                                             </td>
@@ -2511,19 +2940,27 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
             />
             <AddRowModal
                 isOpen={showAddModal || !!editTratamientoId}
-                onClose={() => { setShowAddModal(false); setEditTratamientoId(null); setOpenTreatFromSelection(false); setOpenTreatFromTratSelection(false); setOpenFertFromSelection(false); }}
-                sheet={openTreatFromSelection || openTreatFromTratSelection ? "tratamientos" : openFertFromSelection ? "fertilizantes" : effectiveSheet}
+                onClose={() => { setShowAddModal(false); setEditTratamientoId(null); setOpenTreatFromSelection(false); setOpenTreatFromTratSelection(false); setOpenTreatFromAsesorSelection(false); setOpenFertFromSelection(false); }}
+                sheet={openTreatFromSelection || openTreatFromTratSelection || openTreatFromAsesorSelection ? "tratamientos" : openFertFromSelection ? "fertilizantes" : effectiveSheet}
                 cuaderno={cuaderno}
                 editTratamientoId={editTratamientoId ?? undefined}
-                initialParcelaIds={openTreatFromTratSelection ? parcelasFromSelectedTratamientos : ((openTreatFromSelection || openFertFromSelection) ? Array.from(selectedParcelas) : [])}
+                initialParcelaIds={
+                    openTreatFromTratSelection
+                        ? parcelasFromSelectedTratamientos
+                        : openTreatFromAsesorSelection
+                            ? parcelasFromSelectedAsesoramientos
+                            : ((openTreatFromSelection || openFertFromSelection) ? Array.from(selectedParcelas) : [])
+                }
                 onSuccess={() => {
                     setShowAddModal(false);
                     setEditTratamientoId(null);
                     setOpenTreatFromSelection(false);
                     setOpenTreatFromTratSelection(false);
+                    setOpenTreatFromAsesorSelection(false);
                     setOpenFertFromSelection(false);
                     setSelectedParcelas(new Set());
                     setSelectedTratamientos(new Set());
+                    setSelectedAsesoramientos(new Set());
                     onRefresh();
                 }}
             />

@@ -20,14 +20,15 @@ function getApiBase(): string {
 }
 
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+    const method = (options.method ?? "GET").toUpperCase();
     // Increase timeout for chat operations (AI can take time)
     const isChatOperation = endpoint.includes('/chat/execute');
-    const timeout = isChatOperation ? 300000 : 30000; // 5 min for chat, 30s for others
+    const isWriteOperation = method !== "GET" && method !== "HEAD";
+    const timeout = isChatOperation ? 300000 : isWriteOperation ? 90000 : 30000; // chat 5m, writes 90s, reads 30s
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeout);
 
-    const method = (options.method ?? "GET").toUpperCase();
     const optHeaders = options.headers as Record<string, string> | undefined;
     const headers: Record<string, string> = { ...optHeaders };
     // GET/HEAD sin cuerpo: sin Content-Type → petición CORS "simple" (evita preflight fallido tras cold start / proxy).
@@ -297,25 +298,25 @@ export const api = {
         if (limit) search.set("limit", String(limit));
         const qs = search.toString();
         return request<{ productos: CatalogoProducto[]; total: number }>(
-            `/catalogo/productos${qs ? `?${qs}` : ""}`
+            `/catalog/global/productos${qs ? `?${qs}` : ""}`
         );
     },
 
     /** Crea o actualiza un producto del catálogo global (upsert por nombre+registro). */
     createCatalogoProducto: (data: Partial<CatalogoProducto> & { nombre_comercial: string }) =>
-        request<{ success: boolean; producto: CatalogoProducto }>(`/catalogo/productos`, {
+        request<{ success: boolean; producto: CatalogoProducto }>(`/catalog/global/productos`, {
             method: "POST",
             body: JSON.stringify(data),
         }),
 
     updateCatalogoProducto: (productoId: string, data: Partial<CatalogoProducto>) =>
-        request<{ success: boolean; producto: CatalogoProducto }>(`/catalogo/productos/${productoId}`, {
+        request<{ success: boolean; producto: CatalogoProducto }>(`/catalog/global/productos/${productoId}`, {
             method: "PUT",
             body: JSON.stringify(data),
         }),
 
     deleteCatalogoProducto: (productoId: string) =>
-        request<{ success: boolean }>(`/catalogo/productos/${productoId}`, {
+        request<{ success: boolean }>(`/catalog/global/productos/${productoId}`, {
             method: "DELETE",
         }),
 
@@ -355,6 +356,17 @@ export const api = {
             body: JSON.stringify(data),
         }),
 
+    createAsesoramiento: (cuadernoId: string, data: any) =>
+        request<{ asesoramiento: any }>(`/${cuadernoId}/asesoramientos`, {
+            method: "POST",
+            body: JSON.stringify(data),
+        }),
+
+    deleteAsesoramiento: (cuadernoId: string, asesoramientoId: string) =>
+        request<{ success: boolean }>(`/${cuadernoId}/asesoramientos/${asesoramientoId}`, {
+            method: "DELETE",
+        }),
+
     getTratamiento: (cuadernoId: string, tratamientoId: string) =>
         request<{ tratamiento: any }>(`/${cuadernoId}/tratamientos/${tratamientoId}`),
 
@@ -378,6 +390,18 @@ export const api = {
         request<{ tratamientos: any[]; message: string }>(`/${cuadernoId}/tratamientos/${tratamientoId}/copiar-a-parcelas`, {
             method: "POST",
             body: JSON.stringify({ parcela_ids: parcelaIds }),
+        }),
+
+    repararTratamientos: (cuadernoId: string) =>
+        request<{
+            success: boolean;
+            reparadas_total: number;
+            reparadas_multi_cultivo: number;
+            reparadas_num_orden: number;
+            restablecidas_individual: number;
+            total_tratamientos: number;
+        }>(`/${cuadernoId}/tratamientos/repair`, {
+            method: "POST",
         }),
 
     // Histórico canónico (filtros: parcela, fechas, producto, lote)
@@ -506,5 +530,54 @@ export const api = {
             formatos: Record<string, { extensiones: string[]; descripcion: string }>;
             capacidades: string[];
         }>("/upload/supported-formats"),
+
+    // Alertas inteligentes del cuaderno
+    getAlertas: (cuadernoId: string) =>
+        request<{ alertas: any[]; total: number }>(`/${cuadernoId}/alertas`),
+
+    // ============================================
+    // STOCK DE PRODUCTOS
+    // ============================================
+
+    getStock: (cuadernoId: string) =>
+        request<{ productos: any[]; total: number }>(`/${cuadernoId}/stock`),
+    getStockGlobal: () =>
+        request<{ productos: any[]; total: number }>(`/catalog/stock-global`),
+
+    createStockEntrada: (cuadernoId: string, data: {
+        producto_id?: string;
+        nombre_comercial: string;
+        cantidad: number;
+        unidad?: string;
+        fecha?: string;
+        proveedor?: string;
+        num_albaran?: string;
+        num_lote?: string;
+        precio_unidad?: number;
+        notas?: string;
+    }) =>
+        request<{ success: boolean; entrada: any; producto: any }>(`/${cuadernoId}/stock/entrada`, {
+            method: "POST",
+            body: JSON.stringify(data),
+        }),
+
+    updateStockEntrada: (cuadernoId: string, entradaId: string, data: {
+        cantidad?: number;
+        fecha?: string;
+        proveedor?: string;
+        num_albaran?: string;
+        num_lote?: string;
+        precio_unidad?: number;
+        notas?: string;
+    }) =>
+        request<{ success: boolean; entrada: any; stock_actual?: number | null }>(`/${cuadernoId}/stock/entrada/${entradaId}`, {
+            method: "PUT",
+            body: JSON.stringify(data),
+        }),
+
+    deleteStockEntrada: (cuadernoId: string, entradaId: string) =>
+        request<{ success: boolean }>(`/${cuadernoId}/stock/entrada/${entradaId}`, {
+            method: "DELETE",
+        }),
 };
 
