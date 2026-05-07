@@ -57,7 +57,11 @@ class _StockWsHub:
 
     def disconnect_cuaderno(self, ws: WebSocket, cuaderno_id: str):
         conns = self._by_cuaderno.get(cuaderno_id, [])
-        self._by_cuaderno[cuaderno_id] = [c for c in conns if c is not ws]
+        remaining = [c for c in conns if c is not ws]
+        if remaining:
+            self._by_cuaderno[cuaderno_id] = remaining
+        else:
+            self._by_cuaderno.pop(cuaderno_id, None)  # limpiar entradas vacías
 
     async def _broadcast(self, conns: List[WebSocket], payload: Dict[str, Any]):
         for ws in list(conns):
@@ -90,7 +94,20 @@ def _cache_get(key: str) -> Optional[Any]:
     return item.get("value")
 
 
+_FAST_CACHE_MAX = 200  # límite máximo de entradas para evitar OOM
+
 def _cache_set(key: str, value: Any, ttl_sec: int = 8) -> None:
+    # Si el cache está lleno, eliminar las entradas más antiguas / expiradas primero
+    if len(_FAST_CACHE) >= _FAST_CACHE_MAX:
+        now = time.time()
+        expired = [k for k, v in _FAST_CACHE.items() if now >= float(v.get("expires_at", 0))]
+        for k in expired:
+            _FAST_CACHE.pop(k, None)
+        # Si sigue lleno, eliminar la mitad más antigua
+        if len(_FAST_CACHE) >= _FAST_CACHE_MAX:
+            overflow = sorted(_FAST_CACHE.items(), key=lambda x: x[1].get("expires_at", 0))
+            for k, _ in overflow[:len(_FAST_CACHE) // 2]:
+                _FAST_CACHE.pop(k, None)
     _FAST_CACHE[key] = {"value": value, "expires_at": time.time() + max(1, ttl_sec)}
 
 
@@ -512,6 +529,11 @@ class CellPatch(BaseModel):
     value: Any = None
 
 
+class CellPatchBatch(BaseModel):
+    """Edición atómica de varias celdas en una sola petición."""
+    updates: List[CellPatch] = Field(default_factory=list, max_length=2000)
+
+
 # ============================================
 # CUADERNO ENDPOINTS
 # ============================================
@@ -787,6 +809,89 @@ async def actualizar_celda(cuaderno_id: str, data: CellPatch):
 
     _guardar_cuaderno(storage, cuaderno)
     return {"success": True, "timestamp": datetime.now().isoformat()}
+
+
+@router.patch("/{cuaderno_id}/cells/batch")
+async def actualizar_celdas_batch(cuaderno_id: str, data: CellPatchBatch):
+    """
+    Aplica múltiples cambios de celdas sobre un cuaderno en una sola persistencia.
+    Reduce latencia en edición masiva desde el frontend.
+    """
+    if not data.updates:
+        return {"success": True, "updated": 0, "timestamp": datetime.now().isoformat()}
+
+    storage = get_storage()
+    cuaderno = storage.cargar(cuaderno_id)
+    if not cuaderno:
+        raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
+
+    updated = 0
+    normalizar_parcelas = False
+
+    for patch in data.updates:
+        sheet_id = patch.sheet_id
+        if sheet_id in ("parcelas", "productos", "tratamientos", "fertilizantes", "cosecha", "asesoramiento"):
+            raw_row = patch.row
+            entity_id = str(raw_row)
+            column = str(patch.column).strip()
+
+            if sheet_id == "parcelas":
+                items = cuaderno.parcelas
+            elif sheet_id == "productos":
+                items = cuaderno.productos
+            elif sheet_id == "tratamientos":
+                items = cuaderno.tratamientos
+            elif sheet_id == "fertilizantes":
+                items = getattr(cuaderno, "fertilizaciones", [])
+            elif sheet_id == "cosecha":
+                items = getattr(cuaderno, "cosechas", [])
+            else:
+                items = getattr(cuaderno, "asesoramientos", [])
+
+            if items and entity_id and not any(getattr(it, "id", None) == entity_id for it in items):
+                try:
+                    idx = int(raw_row)
+                    if 0 <= idx < len(items):
+                        entity_id = str(getattr(items[idx], "id", entity_id))
+                except (TypeError, ValueError):
+                    pass
+
+            aliases = {
+                "termino municipal": "termino_municipal",
+                "término municipal": "termino_municipal",
+                "parcela_nombres": "num_orden_parcelas",
+                "parcelas": "num_orden_parcelas",
+            }
+            if sheet_id == "tratamientos":
+                aliases.update({
+                    "fecha": "fecha_aplicacion",
+                    "problema": "problema_fitosanitario",
+                    "operador": "aplicador",
+                })
+            mapped_column = aliases.get(column.lower(), column)
+            ok = cuaderno.aplicar_celda_estructural(sheet_id, entity_id, mapped_column, patch.value)
+        else:
+            try:
+                row_idx = int(patch.row)
+                col_idx = int(patch.column)
+            except (TypeError, ValueError):
+                continue
+            ok = cuaderno.aplicar_celda(sheet_id, row_idx, col_idx, patch.value)
+
+        if ok:
+            updated += 1
+            if sheet_id == "parcelas":
+                normalizar_parcelas = True
+
+    if updated == 0:
+        raise HTTPException(status_code=400, detail="No se pudo aplicar ningún cambio")
+
+    if normalizar_parcelas:
+        _normalizar_parcelas_cultivo_variante(cuaderno)
+        _asegurar_asesoramiento_automatico(cuaderno)
+
+    _guardar_cuaderno(storage, cuaderno)
+    return {"success": True, "updated": updated, "timestamp": datetime.now().isoformat()}
 
 
 # ============================================
@@ -3520,7 +3625,11 @@ def _parse_si_no_zona(val) -> bool:
 
 
 def _parse_dosis_y_unidad(val) -> tuple:
-    """(valor numérico, unidad). Unidades: L/Ha, Kg/Ha, ml/H, g/Ha."""
+    """
+    Extrae (valor numérico, unidad) de cualquier cadena de dosis.
+    Unidades reconocidas: L/Ha, Kg/Ha, ml/H, g/Ha, cc/Ha, cc/L, g/L.
+    Alias soportados: cc (→ ml/H), g/l (→ g/Ha), l/ha, kg/ha, etc.
+    """
     if val is None:
         return 0.0, "L/Ha"
     raw = str(val).strip()
@@ -3528,40 +3637,61 @@ def _parse_dosis_y_unidad(val) -> tuple:
         return 0.0, "L/Ha"
     s_compact = re.sub(r"\s+", "", raw.lower())
     unidad = "L/Ha"
-    if "ml/h" in s_compact:
+    # Orden de mayor a menor especificidad para evitar falsos match
+    if "cc/ha" in s_compact or "cc/h" in s_compact:
+        unidad = "ml/H"   # cc/Ha se trata como ml/H (mismo orden de magnitud)
+    elif "cc/l" in s_compact:
+        unidad = "ml/H"
+    elif "ml/ha" in s_compact or "ml/h" in s_compact:
         unidad = "ml/H"
     elif "kg/ha" in s_compact:
         unidad = "Kg/Ha"
-    elif "g/ha" in s_compact:
+    elif "g/ha" in s_compact or "g/h" in s_compact:
         unidad = "g/Ha"
+    elif "g/l" in s_compact:
+        unidad = "g/Ha"   # g/L se mapea a g/Ha (unidades equivalentes en contexto fitosanitario)
     elif "l/ha" in s_compact:
         unidad = "L/Ha"
     return _parse_dosis(val), unidad
 
 
 def _parse_dosis(val) -> float:
-    """Extrae valor numérico de dosis desde formatos como '3,50 l', '3.5 L/Ha', '3'."""
+    """
+    Extrae valor numérico de dosis desde formatos habituales en Excel:
+    '3,50 L/Ha', '3.5', '1,5-2 kg', '1.500 cc/Ha', '0,75 L', rangos 'min-max' (toma el mínimo).
+    """
     if val is None:
         return 0.0
     s = str(val).strip()
     if not s:
         return 0.0
-    # Quitar unidades (primero compuestas para no dejar restos tipo "/ha")
+    # Normalizar separador de miles español (1.500 → 1500) solo si hay patrón \d{1,3}.\d{3}
+    s = re.sub(r'(\d{1,3})\.(\d{3})(?=[^\d]|$)', r'\1\2', s)
+    # Quitar unidades compuestas primero (orden importa: cc/Ha antes que cc)
     s = re.sub(
-        r'\s*(l/ha\.?|kg/ha\.?|ml/h|g/ha)\s*$',
-        '',
+        r'\s*(cc/ha|cc/h|cc/l|ml/ha|ml/h|l/ha|kg/ha|g/ha|g/h|g/l)\s*',
+        ' ',
         s,
         flags=re.IGNORECASE,
     )
+    # Quitar unidades simples al final
     s = re.sub(
-        r'\s*(l|kg|litros|kilos|ml|g)\s*$',
+        r'\s*(cc|ml|litros?|kilos?|kg|l|g)\s*$',
         '',
         s,
         flags=re.IGNORECASE,
     )
     s = s.strip()
+    # Normalizar coma decimal española
     s = s.replace(",", ".")
-    # Extraer primer número (p.ej. "3.5 - 4" -> 3.5)
+    # Si hay rango "3.5-4" → tomar el primer valor (mínimo)
+    range_match = re.match(r'^([\d.]+)\s*[-–]\s*[\d.]+', s)
+    if range_match:
+        try:
+            return float(range_match.group(1))
+        except (ValueError, TypeError):
+            pass
+    # Extraer primer número
     match = re.search(r'[\d.]+', s)
     if match:
         try:
