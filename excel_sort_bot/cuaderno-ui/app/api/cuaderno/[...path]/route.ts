@@ -95,12 +95,22 @@ async function proxy(
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TIMEOUT);
 
-    const res = await fetch(backendUrl, {
-      method: request.method,
-      headers,
-      body,
-      signal: controller.signal,
-    });
+    /** Render devuelve 502/503 en cold start o reinicio; un reintento suele bastar. */
+    const fetchBackend = async (attempt: number): Promise<Response> => {
+      const res = await fetch(backendUrl, {
+        method: request.method,
+        headers,
+        body,
+        signal: controller.signal,
+      });
+      if (attempt === 0 && (res.status === 502 || res.status === 503)) {
+        await new Promise((r) => setTimeout(r, 2500));
+        return fetchBackend(1);
+      }
+      return res;
+    };
+
+    const res = await fetchBackend(0);
 
     clearTimeout(timer);
 
@@ -136,8 +146,15 @@ async function proxy(
 
     console.error(`[proxy] ${request.method} ${pathStr} →`, msg);
 
+    const isColdStart =
+      err instanceof Error &&
+      (err.message.includes('fetch') || err.message.includes('ECONNREFUSED'));
+    const userMsg = isColdStart
+      ? 'El servidor está arrancando (Render). Espera unos segundos y vuelve a intentarlo.'
+      : msg;
+
     return NextResponse.json(
-      { success: false, mensaje: `❌ ${msg}`, detail: msg },
+      { success: false, mensaje: `❌ ${userMsg}`, detail: msg },
       { status: 502 },
     );
   }

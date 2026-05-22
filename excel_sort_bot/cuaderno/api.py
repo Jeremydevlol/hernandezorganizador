@@ -411,6 +411,7 @@ class TratamientoCreate(BaseModel):
     fecha_aplicacion: str
     parcela_ids: List[str]
     productos: List[ProductoAplicadoCreate]
+    superficie_tratada: Optional[float] = None
     plaga_enfermedad: str = ""
     justificacion: str = ""
     metodo_aplicacion: str = ""
@@ -1459,115 +1460,120 @@ def _validar_tratamiento_create(data: TratamientoCreate, cuaderno: CuadernoExplo
             raise HTTPException(status_code=400, detail=f"Parcela no encontrada: {parcela_id}")
 
 
+def _bg_guardar_cuaderno(storage, cuaderno: CuadernoExplotacion) -> None:
+    """Persistencia en segundo plano con invalidación de caché (evita perder escrituras silenciosas)."""
+    try:
+        _guardar_cuaderno(storage, cuaderno)
+    except Exception as e:
+        print(f"[bg_guardar] Error guardando cuaderno {cuaderno.id}: {e}")
+
+
 @router.post("/{cuaderno_id}/tratamientos")
 async def crear_tratamiento(cuaderno_id: str, data: TratamientoCreate, background_tasks: BackgroundTasks):
     """
     Registra un nuevo tratamiento desglosado: 1 línea por parcela × 1 línea por producto.
-    Cache-first load + persist en background → respuesta inmediata.
+    Carga fresca desde almacenamiento + persist en background → respuesta inmediata.
     """
     storage = get_storage()
-
-    # 1. Intentar cargar desde caché para evitar round-trip a Supabase (~8s)
     cache_key = f"cuaderno::{cuaderno_id}"
-    cached = _cache_get(cache_key)
-    if cached is not None:
-        cuaderno = CuadernoExplotacion.from_dict(cached["cuaderno"])
-    else:
+
+    try:
+        # Escrituras: siempre cargar desde BD (no caché GET) para no pisar cambios concurrentes.
         cuaderno = storage.cargar(cuaderno_id)
+        if not cuaderno:
+            raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
 
-    if not cuaderno:
-        raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
-    
-    _validar_tratamiento_create(data, cuaderno)
-    
-    productos_aplicados = []
-    for prod_data in data.productos:
-        prod = ProductoAplicado(
-            producto_id=prod_data.producto_id or "",
-            nombre_comercial=prod_data.nombre_comercial or "",
-            numero_registro=prod_data.numero_registro or "",
-            numero_lote=prod_data.numero_lote or "",
-            problema_fitosanitario=(prod_data.plaga_enfermedad or "").strip(),
-            dosis=prod_data.dosis,
-            unidad_dosis=prod_data.unidad_dosis,
-            caldo_hectarea=prod_data.caldo_hectarea,
-            notas=prod_data.notas or ""
+        _validar_tratamiento_create(data, cuaderno)
+
+        productos_aplicados = []
+        for prod_data in data.productos:
+            prod = ProductoAplicado(
+                producto_id=prod_data.producto_id or "",
+                nombre_comercial=prod_data.nombre_comercial or "",
+                numero_registro=prod_data.numero_registro or "",
+                numero_lote=prod_data.numero_lote or "",
+                problema_fitosanitario=(prod_data.plaga_enfermedad or "").strip(),
+                dosis=prod_data.dosis,
+                unidad_dosis=prod_data.unidad_dosis,
+                caldo_hectarea=prod_data.caldo_hectarea,
+                notas=prod_data.notas or ""
+            )
+            productos_aplicados.append(prod)
+
+        plantilla = Tratamiento(
+            fecha_aplicacion=data.fecha_aplicacion.strip(),
+            parcela_ids=data.parcela_ids,
+            productos=productos_aplicados,
+            problema_fitosanitario=(data.plaga_enfermedad or "").strip(),
+            plaga_enfermedad=data.plaga_enfermedad,
+            justificacion=data.justificacion,
+            metodo_aplicacion=data.metodo_aplicacion,
+            condiciones_climaticas=data.condiciones_climaticas,
+            operador=(data.operador or "1").strip(),
+            equipo=(data.equipo or "1").strip(),
+            eficacia=(data.eficacia or "BUENA").strip(),
+            hora_inicio=data.hora_inicio,
+            hora_fin=data.hora_fin,
+            observaciones=data.observaciones,
+            asesorado=data.asesorado,
+            nombre_asesor_trat=data.nombre_asesor_trat or "",
+            num_colegiado_asesor=data.num_colegiado_asesor or "",
+            fecha_recomendacion_asesor=data.fecha_recomendacion_asesor or "",
+            firma_asesor=data.firma_asesor or "",
+            firma_cliente=data.firma_cliente or "",
         )
-        productos_aplicados.append(prod)
-    
-    plantilla = Tratamiento(
-        fecha_aplicacion=data.fecha_aplicacion.strip(),
-        parcela_ids=data.parcela_ids,
-        productos=productos_aplicados,
-        problema_fitosanitario=(data.plaga_enfermedad or "").strip(),
-        plaga_enfermedad=data.plaga_enfermedad,
-        justificacion=data.justificacion,
-        metodo_aplicacion=data.metodo_aplicacion,
-        condiciones_climaticas=data.condiciones_climaticas,
-        operador=(data.operador or "1").strip(),
-        equipo=(data.equipo or "1").strip(),
-        eficacia=(data.eficacia or "BUENA").strip(),
-        hora_inicio=data.hora_inicio,
-        hora_fin=data.hora_fin,
-        observaciones=data.observaciones,
-        asesorado=data.asesorado,
-        nombre_asesor_trat=data.nombre_asesor_trat or "",
-        num_colegiado_asesor=data.num_colegiado_asesor or "",
-        fecha_recomendacion_asesor=data.fecha_recomendacion_asesor or "",
-        firma_asesor=data.firma_asesor or "",
-        firma_cliente=data.firma_cliente or "",
-    )
-    
-    creados = cuaderno.agregar_tratamiento_desglosado(plantilla)
 
-    # Deducir stock de productos aplicados
-    # Índice O(P) construido una sola vez → lookups O(1) por parcela_id
-    parcelas_idx = {p.id: p for p in cuaderno.parcelas}
-    superficie_total = sum(
-        (parcelas_idx[pid].superficie_cultivada or parcelas_idx[pid].superficie_sigpac or 0.0)
-        for pid in data.parcela_ids if pid in parcelas_idx
-    )
-    if superficie_total <= 0:
-        superficie_total = float(data.superficie_tratada or 1.0)
-    for prod_data in data.productos:
-        if prod_data.producto_id:
-            prod_obj = cuaderno.obtener_producto(prod_data.producto_id)
-            if prod_obj and prod_obj.cantidad_adquirida > 0:
-                consumo = float(prod_data.dosis or 0) * superficie_total
-                prod_obj.cantidad_adquirida = max(0.0, round(prod_obj.cantidad_adquirida - consumo, 4))
+        creados = cuaderno.agregar_tratamiento_desglosado(plantilla)
 
-    # 2. Auto-publicar productos en catálogo global si no existen ya
-    #    Se hace best-effort en background para no añadir latencia
-    def _sync_prods_al_catalogo_global():
-        catalogo = get_catalogo()
-        for prod in productos_aplicados:
-            nombre = (prod.nombre_comercial or "").strip()
-            if not nombre:
-                continue
-            try:
-                catalogo.upsert({
-                    "nombre_comercial": nombre,
-                    "numero_registro": prod.numero_registro or "",
-                    "numero_lote": prod.numero_lote or "",
-                    "tipo": "fitosanitario",
-                })
-            except Exception:
-                pass
+        # Deducir stock de productos aplicados
+        parcelas_idx = {p.id: p for p in cuaderno.parcelas}
+        superficie_total = sum(
+            (parcelas_idx[pid].superficie_cultivada or parcelas_idx[pid].superficie_sigpac or 0.0)
+            for pid in data.parcela_ids if pid in parcelas_idx
+        )
+        if superficie_total <= 0:
+            sup_fallback = data.superficie_tratada if data.superficie_tratada is not None else 1.0
+            superficie_total = float(sup_fallback)
+        for prod_data in data.productos:
+            if prod_data.producto_id:
+                prod_obj = cuaderno.obtener_producto(prod_data.producto_id)
+                if prod_obj and prod_obj.cantidad_adquirida > 0:
+                    consumo = float(prod_data.dosis or 0) * superficie_total
+                    prod_obj.cantidad_adquirida = max(0.0, round(prod_obj.cantidad_adquirida - consumo, 4))
 
-    background_tasks.add_task(_sync_prods_al_catalogo_global)
+        # Auto-publicar productos en catálogo global (best-effort, en background)
+        def _sync_prods_al_catalogo_global():
+            catalogo = get_catalogo()
+            for prod in productos_aplicados:
+                nombre = (prod.nombre_comercial or "").strip()
+                if not nombre:
+                    continue
+                try:
+                    catalogo.upsert({
+                        "nombre_comercial": nombre,
+                        "numero_registro": prod.numero_registro or "",
+                        "numero_lote": prod.numero_lote or "",
+                        "tipo": "fitosanitario",
+                    })
+                except Exception:
+                    pass
 
-    # 3. Actualizar caché con el estado nuevo ANTES de responder
-    #    → el próximo GET sirve datos frescos sin ir a Supabase
-    _cache_set(cache_key, {"cuaderno": cuaderno.to_dict()}, ttl_sec=120)
+        background_tasks.add_task(_sync_prods_al_catalogo_global)
 
-    # 4. Persistir en Supabase en segundo plano (no bloquea la respuesta)
-    background_tasks.add_task(storage.guardar, cuaderno)
+        # Caché caliente para el siguiente GET del mismo proceso
+        _cache_set(cache_key, {"cuaderno": cuaderno.to_dict()}, ttl_sec=120)
+        background_tasks.add_task(_bg_guardar_cuaderno, storage, cuaderno)
 
-    return {
-        "success": True,
-        "tratamientos": [t.to_dict() for t in creados],
-        "message": f"{len(creados)} línea(s) creada(s) ({len(data.parcela_ids)} parcela(s) × {len(productos_aplicados)} producto(s))"
-    }
+        return {
+            "success": True,
+            "tratamientos": [t.to_dict() for t in creados],
+            "message": f"{len(creados)} línea(s) creada(s) ({len(data.parcela_ids)} parcela(s) × {len(productos_aplicados)} producto(s))"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[crear_tratamiento] {cuaderno_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error al crear tratamiento: {e}")
 
 
 @router.get("/{cuaderno_id}/tratamientos/{tratamiento_id}")

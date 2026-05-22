@@ -59,7 +59,23 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
         }
 
         if (!res.ok) {
-            throw new Error(data.detail || data.mensaje || `HTTP ${res.status}`);
+            if (res.status === 502 || res.status === 503) {
+                throw new Error(
+                    data.mensaje ||
+                        data.detail ||
+                        'El servidor backend no respondió (puede estar arrancando). Espera unos segundos y reintenta.'
+                );
+            }
+            const detail = data.detail;
+            const detailStr =
+                typeof detail === 'string'
+                    ? detail
+                    : Array.isArray(detail)
+                      ? detail.map((d: { msg?: string }) => d.msg).filter(Boolean).join('; ')
+                      : detail != null
+                        ? JSON.stringify(detail)
+                        : '';
+            throw new Error(detailStr || data.mensaje || `HTTP ${res.status}`);
         }
 
         return data as T;
