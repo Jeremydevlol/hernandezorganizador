@@ -2,6 +2,7 @@
 // Con soporte para upload de archivos y procesamiento GPT-4o
 
 import type { CatalogoProducto } from "@/lib/types";
+import { sanitizeApiError } from "@/lib/http-errors";
 
 function getApiBase(): string {
     if (process.env.NEXT_PUBLIC_API_URL) {
@@ -48,34 +49,17 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
 
         clearTimeout(timeoutId);
 
-        // Read the body once as text, then parse
         const text = await res.text();
-        let data: any;
+        let data: { mensaje?: string; detail?: unknown } | null = null;
         try {
             data = JSON.parse(text);
         } catch {
-            if (!res.ok) throw new Error(text || `HTTP ${res.status}`);
-            throw new Error(text || "Respuesta no válida del servidor");
+            if (!res.ok) throw new Error(sanitizeApiError(text, res.status));
+            throw new Error("Respuesta no válida del servidor");
         }
 
         if (!res.ok) {
-            if (res.status === 502 || res.status === 503) {
-                throw new Error(
-                    data.mensaje ||
-                        data.detail ||
-                        'El servidor backend no respondió (puede estar arrancando). Espera unos segundos y reintenta.'
-                );
-            }
-            const detail = data.detail;
-            const detailStr =
-                typeof detail === 'string'
-                    ? detail
-                    : Array.isArray(detail)
-                      ? detail.map((d: { msg?: string }) => d.msg).filter(Boolean).join('; ')
-                      : detail != null
-                        ? JSON.stringify(detail)
-                        : '';
-            throw new Error(detailStr || data.mensaje || `HTTP ${res.status}`);
+            throw new Error(sanitizeApiError(text, res.status, data));
         }
 
         return data as T;

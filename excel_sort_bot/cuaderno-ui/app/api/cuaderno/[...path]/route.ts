@@ -4,6 +4,7 @@
  * Supports both JSON and multipart/form-data (file uploads).
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { gatewayUserMessage, looksLikeHtml } from '@/lib/http-errors';
 
 /** Node evita límites cortos del Edge en subidas y chat largo. */
 export const runtime = 'nodejs';
@@ -95,7 +96,11 @@ async function proxy(
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TIMEOUT);
 
-    /** Render devuelve 502/503 en cold start o reinicio; un reintento suele bastar. */
+    /** Render devuelve 502/503 en cold start; reintentos con espera creciente en escrituras. */
+    const isWrite = request.method !== 'GET' && request.method !== 'HEAD';
+    const retryDelaysMs = isWrite ? [2000, 5000, 10000] : [2500];
+    const maxAttempts = 1 + retryDelaysMs.length;
+
     const fetchBackend = async (attempt: number): Promise<Response> => {
       const res = await fetch(backendUrl, {
         method: request.method,
@@ -103,9 +108,12 @@ async function proxy(
         body,
         signal: controller.signal,
       });
-      if (attempt === 0 && (res.status === 502 || res.status === 503)) {
-        await new Promise((r) => setTimeout(r, 2500));
-        return fetchBackend(1);
+      if (
+        attempt < maxAttempts - 1 &&
+        (res.status === 502 || res.status === 503)
+      ) {
+        await new Promise((r) => setTimeout(r, retryDelaysMs[attempt] ?? 3000));
+        return fetchBackend(attempt + 1);
       }
       return res;
     };
@@ -128,11 +136,42 @@ async function proxy(
     }
 
     const text = await res.text();
+
+    if ((res.status === 502 || res.status === 503) && looksLikeHtml(text)) {
+      const msg = gatewayUserMessage(res.status);
+      return NextResponse.json(
+        { success: false, mensaje: msg, detail: 'backend_gateway_error' },
+        { status: res.status },
+      );
+    }
+
     let json: unknown;
     try {
       json = JSON.parse(text);
     } catch {
-      json = { detail: text || 'Respuesta no válida del backend' };
+      if (looksLikeHtml(text)) {
+        const msg = gatewayUserMessage(res.status);
+        return NextResponse.json(
+          { success: false, mensaje: msg, detail: 'backend_invalid_response' },
+          { status: res.status >= 400 ? res.status : 502 },
+        );
+      }
+      json = { detail: text.slice(0, 500) || 'Respuesta no válida del backend' };
+    }
+
+    if (
+      (res.status === 502 || res.status === 503) &&
+      json &&
+      typeof json === 'object' &&
+      'detail' in json &&
+      typeof (json as { detail?: string }).detail === 'string' &&
+      looksLikeHtml((json as { detail: string }).detail)
+    ) {
+      const msg = gatewayUserMessage(res.status);
+      return NextResponse.json(
+        { success: false, mensaje: msg, detail: 'backend_gateway_error' },
+        { status: res.status },
+      );
     }
 
     return NextResponse.json(json, { status: res.status });
