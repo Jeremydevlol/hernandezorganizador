@@ -176,6 +176,11 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
         }, 0);
         return totalEspecial > 5;
     }, [cuaderno.parcelas, cuaderno.tratamientos]);
+
+    // Compute whether cuaderno has any asesorado treatments
+    const hasAsesorados = useMemo(() => {
+        return (cuaderno.tratamientos || []).some((t: any) => t.asesorado === true);
+    }, [cuaderno.tratamientos]);
     const focusIsBase = focusSheetId != null && BASE_SHEET_IDS.includes(focusSheetId as SheetType);
     const focusImportedIdx = focusSheetId != null ? (hojas.findIndex((h) => h.sheet_id === focusSheetId) ?? -1) : -1;
     const effectiveSheet = isFocusMode && focusIsBase ? (focusSheetId as SheetType) : activeSheet;
@@ -290,14 +295,8 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                     });
             }
             case "trat_asesor": {
-                const CULTIVOS_ESP = ["PATATA", "REMOLACHA"];
-                const especialParcelaIds = new Set(
-                    (cuaderno.parcelas || [])
-                        .filter((p) => CULTIVOS_ESP.some(c => (p.especie || p.cultivo || "").toUpperCase().includes(c)))
-                        .map((p) => p.id)
-                );
                 return (cuaderno.tratamientos || [])
-                    .filter((t) => (t.parcela_ids || []).some((pid) => especialParcelaIds.has(pid)))
+                    .filter((t) => (t as any).asesorado === true)
                     .map(t => {
                         const prod = t.productos?.[0] || {};
                         const probProd = String((prod as any).problema_fitosanitario || (prod as any).plaga_enfermedad || "").trim();
@@ -317,6 +316,9 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                             dosis: dosisStr,
                             unidad_dosis: u,
                             problema_fitosanitario: probTrat || probProd,
+                            nombre_asesor_trat: (t as any).nombre_asesor_trat || "",
+                            num_colegiado_asesor: (t as any).num_colegiado_asesor || "",
+                            fecha_recomendacion_asesor: (t as any).fecha_recomendacion_asesor || "",
                         };
                     });
             }
@@ -1731,7 +1733,8 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
         const primaryTabs: SheetType[] = ["parcelas", "productos", "tratamientos", "fertilizantes", "cosecha", "asesoramiento", "stock"];
         // Tabs en el dropdown "Más"
         const moreTabs: SheetType[] = ["historico", "catalogo"];
-        if (hasEspeciales) moreTabs.push("tratamientos_especiales", "trat_asesor");
+        if (hasEspeciales) moreTabs.push("tratamientos_especiales");
+        if (hasEspeciales || hasAsesorados) moreTabs.push("trat_asesor");
 
         const moreActive = moreTabs.includes(effectiveSheet) && effectiveImportedIndex === null;
         const importedActive = effectiveImportedIndex !== null;
