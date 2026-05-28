@@ -112,7 +112,7 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
             }).catch(() => setFormData({}));
         } else if (isOpen && !editTratamientoId) {
             const base: Record<string, any> = {
-                fecha_aplicacion: fechaAFormatoDDMM(new Date().toISOString().split("T")[0]),
+                fecha_aplicacion: "",
                 parcela_ids: sheet === "tratamientos" || sheet === "fertilizantes" || sheet === "cosecha" || sheet === "asesoramiento" ? initialParcelaIds : [],
                 producto_id: "",
                 nombre_comercial: "",
@@ -911,6 +911,7 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                                             nombre_comercial: p.nombre_comercial,
                                                             numero_registro: p.numero_registro,
                                                             numero_lote: p.numero_lote,
+                                                            plaga_enfermedad: (p as any).problema_fitosanitario || (p as any).plaga_enfermedad || (prev as any).plaga_enfermedad || "",
                                                         }));
                                                         setProductDropdownOpen(false);
                                                     }}
@@ -950,6 +951,7 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                                                 nombre_comercial: imported.nombre_comercial,
                                                                 numero_registro: imported.numero_registro,
                                                                 numero_lote: imported.numero_lote,
+                                                                plaga_enfermedad: (imported as any).problema_fitosanitario || (imported as any).plaga_enfermedad || (prev as any).plaga_enfermedad || "",
                                                             }));
                                                             setProductDropdownOpen(false);
                                                         }}

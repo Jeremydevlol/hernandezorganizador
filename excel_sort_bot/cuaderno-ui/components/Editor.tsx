@@ -96,11 +96,10 @@ type TratSortMode = "fecha_desc" | "fecha_asc" | "cultivo" | "parcela" | "produc
 type FertSortMode = "fecha_desc" | "fecha_asc" | "cultivo" | "dosis_desc" | "dosis_asc";
 
 /** Filtro del desplegable: igualdad exacta (trim + minúsculas). Evita que "AVENA" incluya "AVENA/COLIFLOR". */
-function cultivoCoincideConFiltro(celdaCultivo: string, filtro: string): boolean {
-    const f = (filtro || "").trim().toLowerCase();
-    if (!f) return true;
+function cultivoCoincideConFiltro(celdaCultivo: string, filtros: Set<string>): boolean {
+    if (!filtros || filtros.size === 0) return true;
     const c = (celdaCultivo || "").trim().toLowerCase();
-    return c === f;
+    return [...filtros].some(f => c === (f || "").trim().toLowerCase());
 }
 
 export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh, highlight, onRequestHighlight, focusSheetId = null, onFocusModeExit, editorActionsRef, onSendSelectionToChat }: EditorProps) {
@@ -124,11 +123,13 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
     const [selectedFertilizaciones, setSelectedFertilizaciones] = useState<Set<string>>(new Set());
     const [selectedCosechas, setSelectedCosechas] = useState<Set<string>>(new Set());
     const [selectedAsesoramientos, setSelectedAsesoramientos] = useState<Set<string>>(new Set());
-    const [cultivoFilter, setCultivoFilter] = useState<string>("");
+    const [cultivoFilters, setCultivoFilters] = useState<Set<string>>(new Set());
+    const [cultivoDropdownOpen, setCultivoDropdownOpen] = useState(false);
+    const [colSort, setColSort] = useState<{ key: string; dir: "asc" | "desc" } | null>(null);
     const [parcelaTratamientoFilter, setParcelaTratamientoFilter] = useState<"" | "con_tratamiento" | "sin_tratamiento">("");
     const [tratCultivoFilter, setTratCultivoFilter] = useState<string>("");
     const [parcelSortMode, setParcelSortMode] = useState<ParcelSortMode>("num_orden");
-    const [tratSortMode, setTratSortMode] = useState<TratSortMode>("fecha_desc");
+    const [tratSortMode, setTratSortMode] = useState<TratSortMode>("cultivo");
     const [fertSortMode, setFertSortMode] = useState<FertSortMode>("fecha_desc");
     const [targetHectareas, setTargetHectareas] = useState<string>("");
     const [showNitrogenCalc, setShowNitrogenCalc] = useState(false);
@@ -234,7 +235,9 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
             case "productos":
                 return cuaderno.productos || [];
             case "tratamientos":
-                return (cuaderno.tratamientos || []).map(t => {
+                return (cuaderno.tratamientos || [])
+                    .filter((t) => !(t as any).asesorado)
+                    .map(t => {
                     const prod = t.productos?.[0] || {};
                     const probProd = String((prod as any).problema_fitosanitario || (prod as any).plaga_enfermedad || "").trim();
                     const probTrat = String(t.problema_fitosanitario || t.plaga_enfermedad || "").trim();
@@ -392,8 +395,8 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
         if (effectiveSheet === "tratamientos") {
             const tratamientos = (data as any[]).filter((t: any) => {
                 if (!tratCultivoFilter) return true;
-                const cultivo = t.cultivo_especie || "";
-                return cultivoCoincideConFiltro(cultivo, tratCultivoFilter);
+                const cultivo = (t.cultivo_especie || "").trim().toLowerCase();
+                return cultivo === (tratCultivoFilter || "").trim().toLowerCase();
             });
             const sorted = [...tratamientos].sort((a: any, b: any) => {
                 const aFecha = String(a.fecha_aplicacion || "").toLowerCase();
@@ -410,7 +413,8 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                         return (a.id || "").localeCompare(b.id || "");
                     case "cultivo":
                         if (aCultivo !== bCultivo) return aCultivo.localeCompare(bCultivo, "es");
-                        return bFecha.localeCompare(aFecha, "es");
+                        if (aFecha !== bFecha) return aFecha.localeCompare(bFecha, "es");
+                        return (a.num_orden || 0) - (b.num_orden || 0);
                     case "parcela": {
                         const ao = minNumOrdenTratamiento(a);
                         const bo = minNumOrdenTratamiento(b);
@@ -471,9 +475,9 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
         }
         if (effectiveSheet !== "parcelas") return data;
         const filtered = (data as any[]).filter((row: any) => {
-            if (cultivoFilter) {
+            if (cultivoFilters.size > 0) {
                 const cultivo = row.especie || row.cultivo || "";
-                if (!cultivoCoincideConFiltro(cultivo, cultivoFilter)) return false;
+                if (!cultivoCoincideConFiltro(cultivo, cultivoFilters)) return false;
             }
             if (parcelaTratamientoFilter) {
                 const tieneTratamiento = parcelaIdsConTratamiento.has(row.id || "");
@@ -482,6 +486,18 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
             }
             return true;
         });
+
+        if (colSort) {
+            return [...filtered].sort((a: any, b: any) => {
+                const av = String(a[colSort.key] ?? "").toLowerCase();
+                const bv = String(b[colSort.key] ?? "").toLowerCase();
+                const an = Number(a[colSort.key] ?? 0);
+                const bn = Number(b[colSort.key] ?? 0);
+                const isNum = ["superficie_cultivada","superficie_ha","superficie_sigpac","num_orden"].includes(colSort.key);
+                let cmp = isNum ? (an - bn) : av.localeCompare(bv, "es", { sensitivity: "base" });
+                return colSort.dir === "desc" ? -cmp : cmp;
+            });
+        }
 
         const sorted = [...filtered].sort((a: any, b: any) => {
             const aOrden = Number(a.num_orden || 0);
@@ -528,7 +544,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
             }
         });
         return sorted;
-    }, [data, effectiveSheet, cultivoFilter, parcelaTratamientoFilter, parcelaIdsConTratamiento, parcelSortMode, tratCultivoFilter, tratSortMode, fertSortMode, minNumOrdenTratamiento]);
+    }, [data, effectiveSheet, cultivoFilters, parcelaTratamientoFilter, parcelaIdsConTratamiento, parcelSortMode, tratCultivoFilter, tratSortMode, fertSortMode, minNumOrdenTratamiento, colSort]);
 
     // ---- Orden para exportar (parcelas con el orden actual del editor) ----
     const sortedParcelasForExport = useMemo(() => {
@@ -595,7 +611,8 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                     return (a.id || "").localeCompare(b.id || "");
                 case "cultivo":
                     if (aCultivo !== bCultivo) return aCultivo.localeCompare(bCultivo, "es");
-                    return bFecha.localeCompare(aFecha, "es");
+                    if (aFecha !== bFecha) return aFecha.localeCompare(bFecha, "es");
+                    return (a.num_orden || 0) - (b.num_orden || 0);
                 case "parcela": {
                     const ao = minNumOrdenTratamiento(a);
                     const bo = minNumOrdenTratamiento(b);
@@ -1087,6 +1104,13 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
         setSelectedCells(new Set());
         setSelectionAnchor(null);
     }, []);
+
+    useEffect(() => {
+        if (!cultivoDropdownOpen) return;
+        const handler = () => setCultivoDropdownOpen(false);
+        document.addEventListener("mousedown", handler);
+        return () => document.removeEventListener("mousedown", handler);
+    }, [cultivoDropdownOpen]);
 
     // ---- Drag-select: mouseup global ----
     useEffect(() => {
@@ -1900,20 +1924,48 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                     <option value="con_tratamiento">Con tratamiento</option>
                                 </select>
                                 {uniqueCultivos.length > 0 && (
-                                <select
-                                    value={cultivoFilter}
-                                    onChange={(e) => { setCultivoFilter(e.target.value); setSelectedParcelas(new Set()); }}
-                                    className="rounded-md bg-gray-100 border border-gray-300 px-2 py-1.5 text-xs text-gray-800 focus:outline-none focus:border-emerald-500/40 min-w-[100px]"
-                                >
-                                    <option value="">Todos los cultivos</option>
-                                    {uniqueCultivos.map(c => (
-                                        <option key={c} value={c}>{c}</option>
-                                    ))}
-                                </select>
+                                <div className="relative">
+                                    <button
+                                        type="button"
+                                        onClick={() => setCultivoDropdownOpen(o => !o)}
+                                        className={`flex items-center gap-1.5 rounded-md border px-2 py-1.5 text-xs min-w-[120px] transition-colors ${cultivoFilters.size > 0 ? "bg-emerald-50 border-emerald-400 text-emerald-800 font-medium" : "bg-gray-100 border-gray-300 text-gray-800"}`}
+                                    >
+                                        {cultivoFilters.size === 0 ? "Todos los cultivos" : cultivoFilters.size === 1 ? [...cultivoFilters][0] : `${cultivoFilters.size} cultivos`}
+                                        <svg className="ml-auto w-3 h-3 text-gray-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                                    </button>
+                                    {cultivoDropdownOpen && (
+                                        <div className="absolute left-0 top-full mt-1 z-30 bg-white border border-gray-200 rounded-lg shadow-lg min-w-[160px] max-h-60 overflow-y-auto py-1">
+                                            <button
+                                                type="button"
+                                                className="w-full px-3 py-1.5 text-left text-xs text-gray-500 hover:bg-gray-50"
+                                                onClick={() => { setCultivoFilters(new Set()); setSelectedParcelas(new Set()); }}
+                                            >Todos los cultivos</button>
+                                            <div className="border-t border-gray-100 my-1" />
+                                            {uniqueCultivos.map(c => (
+                                                <label key={c} className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-50 cursor-pointer text-xs text-gray-800">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={cultivoFilters.has(c)}
+                                                        onChange={() => {
+                                                            setCultivoFilters(prev => {
+                                                                const next = new Set(prev);
+                                                                if (next.has(c)) next.delete(c); else next.add(c);
+                                                                return next;
+                                                            });
+                                                            setSelectedParcelas(new Set());
+                                                        }}
+                                                        className="accent-emerald-500"
+                                                    />
+                                                    {c}
+                                                </label>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
                                 )}
                                 <select
                                     value={parcelSortMode}
-                                    onChange={(e) => setParcelSortMode(e.target.value as ParcelSortMode)}
+                                    onChange={(e) => { setParcelSortMode(e.target.value as ParcelSortMode); setColSort(null); }}
                                     className="rounded-md bg-gray-100 border border-gray-300 px-2 py-1.5 text-xs text-gray-800 focus:outline-none focus:border-emerald-500/40 min-w-[180px]"
                                 >
                                     <option value="num_orden">Orden: Original / IA</option>
@@ -1964,7 +2016,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                 >
                                     <option value="fecha_desc">Orden: Fecha (reciente primero)</option>
                                     <option value="fecha_asc">Orden: Fecha (antiguo primero)</option>
-                                    <option value="cultivo">Orden: por cultivo</option>
+                                    <option value="cultivo">Orden: cultivo → fecha (antiguo primero)</option>
                                     <option value="parcela">Orden: cultivo → parcela (Nº orden) → fecha</option>
                                     <option value="producto">Orden: por producto</option>
                                 </select>
@@ -2471,7 +2523,28 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                         onClick={() => handleSelectColumn(colIdx)}
                                         title={`Seleccionar columna "${col.label}"`}
                                     >
-                                        {col.label}
+                                        <div className="flex items-center gap-1">
+                                            <span>{col.label}</span>
+                                            {effectiveSheet === "parcelas" && (
+                                                <button
+                                                    type="button"
+                                                    className="ml-auto shrink-0 opacity-40 hover:opacity-100 transition-opacity"
+                                                    title={`Ordenar por ${col.label}`}
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        setColSort(prev =>
+                                                            prev?.key === col.key
+                                                                ? { key: col.key, dir: prev.dir === "asc" ? "desc" : "asc" }
+                                                                : { key: col.key, dir: "asc" }
+                                                        );
+                                                    }}
+                                                >
+                                                    {colSort?.key === col.key
+                                                        ? (colSort.dir === "asc" ? "↑" : "↓")
+                                                        : "⇅"}
+                                                </button>
+                                            )}
+                                        </div>
                                     </th>
                                 ))}
                                 <th className="w-24 px-3 py-2.5 text-center text-[11px] font-medium text-gray-500 uppercase tracking-wider border-b border-gray-200">
@@ -2490,8 +2563,8 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                             <div className="w-12 h-12 rounded-xl bg-gray-100 flex items-center justify-center text-gray-600">
                                                 {SHEET_ICONS[effectiveSheet]}
                                             </div>
-                                            <p>{(effectiveSheet === "parcelas" && cultivoFilter) ? `Sin parcelas con cultivo "${cultivoFilter}"` : (effectiveSheet === "parcelas" && parcelaTratamientoFilter === "sin_tratamiento") ? "¡Todas las parcelas tienen tratamiento!" : (effectiveSheet === "parcelas" && parcelaTratamientoFilter === "con_tratamiento") ? "Ninguna parcela tiene tratamiento aún" : (effectiveSheet === "tratamientos" && tratCultivoFilter) ? `Sin tratamientos con cultivo "${tratCultivoFilter}"` : `Sin datos en ${config.title.toLowerCase()}`}</p>
-                                            {effectiveSheet !== "historico" && !cultivoFilter && !parcelaTratamientoFilter && (
+                                            <p>{(effectiveSheet === "parcelas" && cultivoFilters.size > 0) ? `Sin parcelas con los cultivos seleccionados` : (effectiveSheet === "parcelas" && parcelaTratamientoFilter === "sin_tratamiento") ? "¡Todas las parcelas tienen tratamiento!" : (effectiveSheet === "parcelas" && parcelaTratamientoFilter === "con_tratamiento") ? "Ninguna parcela tiene tratamiento aún" : (effectiveSheet === "tratamientos" && tratCultivoFilter) ? `Sin tratamientos con cultivo "${tratCultivoFilter}"` : `Sin datos en ${config.title.toLowerCase()}`}</p>
+                                            {effectiveSheet !== "historico" && cultivoFilters.size === 0 && !parcelaTratamientoFilter && (
                                                 <button
                                                     onClick={() => setShowAddModal(true)}
                                                     className="mt-2 flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium transition-colors"
@@ -2500,9 +2573,9 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                                     Añadir {effectiveSheet === "parcelas" ? "parcela" : effectiveSheet === "productos" ? "producto" : effectiveSheet === "fertilizantes" ? "fertilizante" : effectiveSheet === "cosecha" ? "cosecha" : "tratamiento"}
                                                 </button>
                                             )}
-                                            {(cultivoFilter || tratCultivoFilter || parcelaTratamientoFilter) && (
+                                            {(cultivoFilters.size > 0 || tratCultivoFilter || parcelaTratamientoFilter) && (
                                                 <button
-                                                    onClick={() => { setCultivoFilter(""); setTratCultivoFilter(""); setParcelaTratamientoFilter(""); }}
+                                                    onClick={() => { setCultivoFilters(new Set()); setTratCultivoFilter(""); setParcelaTratamientoFilter(""); }}
                                                     className="mt-2 text-xs text-emerald-400 hover:text-emerald-300 transition-colors"
                                                 >
                                                     Limpiar filtro
