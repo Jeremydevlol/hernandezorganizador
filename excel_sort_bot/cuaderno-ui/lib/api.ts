@@ -23,9 +23,10 @@ function getApiBase(): string {
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
     const method = (options.method ?? "GET").toUpperCase();
     // Increase timeout for chat operations (AI can take time)
+    // DELETE también puede tardar en Render (cold start + 3 reintentos del proxy = hasta 20s de delay)
     const isChatOperation = endpoint.includes('/chat/execute');
     const isWriteOperation = method !== "GET" && method !== "HEAD";
-    const timeout = isChatOperation ? 300000 : isWriteOperation ? 90000 : 30000; // chat 5m, writes 90s, reads 30s
+    const timeout = isChatOperation ? 300000 : isWriteOperation ? 120000 : 30000; // chat 5m, writes 120s, reads 30s
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeout);

@@ -177,6 +177,9 @@ export default function Sidebar({
     const [dragCuadernoId, setDragCuadernoId] = useState<string | null>(null);
     const [dropTargetFolderId, setDropTargetFolderId] = useState<string | null>(null);
 
+    // Deleting
+    const [deletingCuadernoId, setDeletingCuadernoId] = useState<string | null>(null);
+
     useEffect(() => {
         setFolders(loadFolders());
         setFolderMap(loadFolderMap());
@@ -379,8 +382,10 @@ export default function Sidebar({
             <button
                 onClick={async (e) => {
                     e.stopPropagation();
+                    if (deletingCuadernoId) return;
                     if (!confirm(`¿Eliminar el cuaderno "${c.nombre_explotacion}"?\n\nSe creará un backup. Esta acción no se puede deshacer.`))
                         return;
+                    setDeletingCuadernoId(c.id);
                     try {
                         await api.deleteCuaderno(c.id);
                         if (onCuadernoDeleted) await onCuadernoDeleted();
@@ -389,14 +394,20 @@ export default function Sidebar({
                             onSelectCuaderno(other?.id || "");
                         }
                     } catch (error) {
-                        alert("No se pudo eliminar el cuaderno.");
+                        const msg = error instanceof Error ? error.message : String(error);
+                        alert(`No se pudo eliminar el cuaderno.\n\n${msg}`);
                         console.error(error);
+                    } finally {
+                        setDeletingCuadernoId(null);
                     }
                 }}
-                className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 rounded-md opacity-0 group-hover:opacity-100 transition-opacity text-gray-500 hover:text-red-400 hover:bg-red-500/10"
-                title="Eliminar cuaderno"
+                className={`absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 rounded-md transition-opacity text-gray-500 hover:text-red-400 hover:bg-red-500/10 ${deletingCuadernoId === c.id ? "opacity-100 text-red-400" : "opacity-0 group-hover:opacity-100"}`}
+                title={deletingCuadernoId === c.id ? "Eliminando..." : "Eliminar cuaderno"}
+                disabled={!!deletingCuadernoId}
             >
-                <Trash2 size={12} />
+                {deletingCuadernoId === c.id
+                    ? <svg className="animate-spin w-3 h-3" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>
+                    : <Trash2 size={12} />}
             </button>
         </div>
     );
