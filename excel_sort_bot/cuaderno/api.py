@@ -149,19 +149,37 @@ def _parcelas_especiales_y_superficie(cuaderno: CuadernoExplotacion) -> tuple[Li
 
 def _normalizar_cultivo_variante_parcela(parcela: Parcela) -> bool:
     """
-    Normaliza cultivos tipo 'REMOLACHA.ROSADONNA' a:
-      - cultivo/especie: 'REMOLACHA'
-      - variedad: 'ROSADONNA'
+    Normaliza variantes de REMOLACHA y PATATA a cultivo base + variedad:
+      - 'REMOLACHA.ROSADONNA'     → especie='REMOLACHA', variedad='ROSADONNA'
+      - 'REMOLACHA AZUCARERA'     → especie='REMOLACHA', variedad='AZUCARERA'
+      - 'REMOLACHA DE MESA'       → especie='REMOLACHA', variedad='DE MESA'
+      - 'PATATA TEMPRANA'         → especie='PATATA',    variedad='TEMPRANA'
+      - 'PATATA EXTRATEMPRANA'    → especie='PATATA',    variedad='EXTRATEMPRANA'
+    Cualquier otro cultivo queda intacto.
     """
     raw_cultivo = (parcela.especie or parcela.cultivo or "").strip()
     if not raw_cultivo:
         return False
-    if "." not in raw_cultivo:
-        return False
 
-    base, variante = raw_cultivo.split(".", 1)
-    base = base.strip()
-    variante = variante.strip()
+    base: str | None = None
+    variante: str = ""
+
+    if "." in raw_cultivo:
+        # Formato punto: REMOLACHA.ROSADONNA
+        parts = raw_cultivo.split(".", 1)
+        base = parts[0].strip()
+        variante = parts[1].strip() if len(parts) > 1 else ""
+        if not base:
+            return False
+    else:
+        # Formato espacio para cultivos especiales: REMOLACHA AZUCARERA, PATATA TEMPRANA...
+        raw_upper = raw_cultivo.upper()
+        for cultivo_base in CULTIVOS_ASESORAMIENTO_OBLIGATORIO:
+            if raw_upper.startswith(cultivo_base + " "):
+                base = cultivo_base  # normalizar a mayúsculas (REMOLACHA / PATATA)
+                variante = raw_cultivo[len(cultivo_base):].strip()
+                break
+
     if not base:
         return False
 
