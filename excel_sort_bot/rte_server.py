@@ -52,25 +52,27 @@ from contextlib import asynccontextmanager
 import asyncio
 
 def _warmup_cache():
-    """Pre-carga todos los cuadernos en memoria al arrancar el servidor."""
+    """
+    Warmup de inicio: solo precarga la LISTA de cuadernos (metadatos ligeros).
+    Anteriormente cargaba todos los objetos completos, lo que podía OOM el proceso
+    si algún cuaderno tenía hojas_originales voluminosas importadas desde Excel.
+    Ahora cada cuaderno se carga de forma perezosa en su primera petición GET.
+    """
+    import gc
     try:
         from cuaderno.storage import get_storage
-        from cuaderno.api import _cache_set
+        from cuaderno.api import _cache_set, _cleanup_pdf_exports
         storage = get_storage()
+        # Solo cachear la lista (metadatos, sin data JSONB)
         metas = storage.listar()
-        for meta in metas:
-            cid = meta.get("id")
-            if not cid:
-                continue
-            try:
-                cuaderno = storage.cargar(cid)
-                if cuaderno:
-                    _cache_set(f"cuaderno::{cid}", {"cuaderno": cuaderno.to_dict()}, ttl_sec=120)
-            except Exception:
-                continue
-        print(f"🔥 Cache warmup: {len(metas)} cuadernos precargados")
+        _cache_set("cuadernos_list::", {"cuadernos": metas}, ttl_sec=60)
+        # Limpiar PDFs de exportación acumulados en /tmp
+        _cleanup_pdf_exports(max_age_hours=0)  # Borrar TODOS los exportes antiguos al reiniciar
+        gc.collect()
+        print(f"🔥 Cache warmup: lista de {len(metas)} cuadernos cargada (datos bajo demanda)")
     except Exception as e:
         print(f"⚠️  Cache warmup error: {e}")
+
 
 @asynccontextmanager
 async def lifespan(app):

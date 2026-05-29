@@ -59,15 +59,16 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-# Límites para Excel muy grandes (alineado con MAX_UPLOAD_BYTES en la API)
+# Límites para Excel (reducidos para evitar OOM en Render Standard 2GB).
+# Puedes subir los topes con variables de entorno si desplegas en instancias más grandes.
 MAX_UPLOAD_BYTES = _env_int(
     "MAX_UPLOAD_BYTES",
-    _env_int("MAX_EXCEL_UPLOAD_BYTES", 250 * 1024 * 1024),
-)  # 250 MB por defecto
-MAX_ROWS_PER_SHEET = _env_int("MAX_EXCEL_ROWS_PER_SHEET", 100_000)
-MAX_FORM_SCAN_ROWS = _env_int("MAX_EXCEL_FORM_SCAN_ROWS", 5_000)
-MAX_COMBINED_ROWS = _env_int("MAX_EXCEL_COMBINED_ROWS", 150_000)
-MAX_GPT_INPUT_CHARS = _env_int("MAX_EXCEL_GPT_INPUT_CHARS", 120_000)
+    _env_int("MAX_EXCEL_UPLOAD_BYTES", 15 * 1024 * 1024),
+)  # 15 MB por defecto (era 250 MB — suficiente para cualquier Excel SIGPAC oficial)
+MAX_ROWS_PER_SHEET = _env_int("MAX_EXCEL_ROWS_PER_SHEET", 3_000)    # era 100 000
+MAX_FORM_SCAN_ROWS = _env_int("MAX_EXCEL_FORM_SCAN_ROWS", 500)       # era 5 000
+MAX_COMBINED_ROWS  = _env_int("MAX_EXCEL_COMBINED_ROWS",  10_000)    # era 150 000
+MAX_GPT_INPUT_CHARS = _env_int("MAX_EXCEL_GPT_INPUT_CHARS", 30_000)  # era 120 000
 
 # PDF processing
 try:

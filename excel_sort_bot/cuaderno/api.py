@@ -3,6 +3,7 @@ CUADERNO DE EXPLOTACIÓN - API REST v2.0
 Endpoints para gestión de cuadernos, parcelas, productos y tratamientos.
 Soporte para upload y procesamiento de archivos con GPT-4o Vision.
 """
+import gc
 import os
 import re
 import json
@@ -94,9 +95,29 @@ def _cache_get(key: str) -> Optional[Any]:
     return item.get("value")
 
 
-_FAST_CACHE_MAX = 200  # límite máximo de entradas para evitar OOM
+_FAST_CACHE_MAX = 80  # era 200 — reducido para limitar RAM total del caché
+
+# Límite de filas de hojas_originales por encima del cual no cacheamos un cuaderno.
+# Un cuaderno con 1 000 filas importadas ocupa ~1-5 MB de RAM; con 200 entradas
+# y cuadernos grandes, el caché consumía > 1 GB → OOM.
+_MAX_CACHE_HOJA_ROWS = 400
+
+
+def _cuaderno_es_cacheable(cuaderno_dict: dict) -> bool:
+    """False si el cuaderno tiene demasiados datos de hojas importadas para cachear con seguridad."""
+    total_rows = sum(
+        len(h.get("datos", []))
+        for h in cuaderno_dict.get("hojas_originales", [])
+    )
+    return total_rows <= _MAX_CACHE_HOJA_ROWS
+
 
 def _cache_set(key: str, value: Any, ttl_sec: int = 8) -> None:
+    # Protección OOM: no cachear cuadernos con hojas_originales voluminosas.
+    if key.startswith("cuaderno::") and isinstance(value, dict):
+        cuaderno_inner = value.get("cuaderno", value)
+        if not _cuaderno_es_cacheable(cuaderno_inner):
+            return
     # Si el cache está lleno, eliminar las entradas más antiguas / expiradas primero
     if len(_FAST_CACHE) >= _FAST_CACHE_MAX:
         now = time.time()
@@ -672,6 +693,19 @@ async def obtener_cuaderno(cuaderno_id: str, background_tasks: BackgroundTasks):
 
     if not cuaderno:
         raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
+
+    # Truncar hojas_originales muy voluminosas ANTES de serializar (protección OOM).
+    # Si un cuaderno tiene hojas importadas antiguas con >3000 filas, se recortan aquí
+    # y se guardan de vuelta para que Supabase no almacene objetos masivos.
+    _MAX_HOJA_ROWS = 3_000
+    truncated = False
+    for h in cuaderno.hojas_originales:
+        if len(h.datos) > _MAX_HOJA_ROWS:
+            h.datos = h.datos[:_MAX_HOJA_ROWS]
+            truncated = True
+    if truncated:
+        # Guardar la versión reducida en segundo plano para no bloquear la respuesta
+        background_tasks.add_task(_guardar_cuaderno, storage, cuaderno)
 
     payload = {"cuaderno": cuaderno.to_dict()}
     _cache_set(cache_key, payload, ttl_sec=120)
@@ -2380,6 +2414,25 @@ async def obtener_historico_completo(
 # EXPORTACIÓN PDF
 # ============================================
 
+def _cleanup_pdf_exports(max_age_hours: float = 1.0) -> None:
+    """Elimina ficheros PDF de exportación más antiguos que max_age_hours.
+    Los exportes van a /tmp/cuaderno_exports/ y nunca se borraban → llenaban disco.
+    """
+    try:
+        output_dir = Path(tempfile.gettempdir()) / "cuaderno_exports"
+        if not output_dir.exists():
+            return
+        cutoff = time.time() - max_age_hours * 3600
+        for f in list(output_dir.iterdir()):
+            try:
+                if f.is_file() and f.stat().st_mtime < cutoff:
+                    f.unlink(missing_ok=True)
+            except OSError:
+                pass
+    except Exception:
+        pass
+
+
 def _sanitize_filename(name: str, max_len: int = 80) -> str:
     """Nombre seguro para archivo: sin caracteres inválidos, longitud limitada."""
     if not name or not name.strip():
@@ -2435,10 +2488,10 @@ async def exportar_pdf_cuaderno(
         if h["sheet_id"] in ids_incluir_set
     ]
     
-    import tempfile
+    _cleanup_pdf_exports()  # Limpiar PDFs antiguos antes de generar uno nuevo
     output_dir = Path(tempfile.gettempdir()) / "cuaderno_exports"
     output_dir.mkdir(exist_ok=True)
-    
+
     base_name = _sanitize_filename(cuaderno.nombre_explotacion)
     if desde or hasta:
         sufijo = "_" + (desde or "") + "_" + (hasta or "")
@@ -2493,10 +2546,10 @@ async def exportar_pdf_parcela(cuaderno_id: str, parcela_id: str):
         raise HTTPException(status_code=404, detail="Parcela no encontrada")
     
     # Generar PDF
-    import tempfile
+    _cleanup_pdf_exports()
     output_dir = Path(tempfile.gettempdir()) / "cuaderno_exports"
     output_dir.mkdir(exist_ok=True)
-    
+
     base_name = _sanitize_filename(parcela.nombre)
     filename = f"{base_name}_Historico_{cuaderno.año}.pdf"
     output_path = output_dir / filename
@@ -3417,6 +3470,7 @@ async def exportar_excel_cuaderno(
     # ================================================================
     # GUARDAR Y ENVIAR
     # ================================================================
+    _cleanup_pdf_exports()
     output_dir = Path(tempfile.gettempdir()) / "cuaderno_exports"
     output_dir.mkdir(parents=True, exist_ok=True)
     base_name = _sanitize_filename(cuaderno.nombre_explotacion)
@@ -3445,8 +3499,11 @@ async def exportar_excel_cuaderno(
 # ============================================
 
 def _max_upload_bytes() -> int:
-    """Tamaño máximo de subida (Excel/PDF/etc.); configurable con MAX_UPLOAD_BYTES."""
-    return int(os.environ.get("MAX_UPLOAD_BYTES", str(250 * 1024 * 1024)))
+    """Tamaño máximo de subida (Excel/PDF/etc.); configurable con MAX_UPLOAD_BYTES.
+    Default: 15 MB (era 250 MB — demasiado para un plan Render Standard de 2 GB RAM).
+    El Excel oficial SIGPAC pesa < 1 MB; 15 MB cubre cualquier caso real agrícola.
+    """
+    return int(os.environ.get("MAX_UPLOAD_BYTES", str(15 * 1024 * 1024)))
 
 
 async def _spool_upload_to_temp(file: UploadFile) -> Path:
@@ -3540,6 +3597,7 @@ async def analizar_archivo(file: UploadFile = File(...)):
     finally:
         if tmp is not None:
             tmp.unlink(missing_ok=True)
+        gc.collect()  # Liberar RAM tras procesar archivo grande
 
 
 # ============================================
@@ -4165,10 +4223,13 @@ async def crear_cuaderno_desde_archivo(
                 ]
                 if not filas_con_datos and not any(str(c).strip() for c in columnas):
                     continue  # Omitir hoja vacía
+                # Cap de filas para evitar cuadernos masivos que saturen RAM/Supabase
+                _MAX_HOJA_ROWS = 3_000
+                datos_capped = datos[:_MAX_HOJA_ROWS]
                 hoja_original = HojaExcel(
                     nombre=hoja.get("nombre", ""),
                     columnas=columnas,
-                    datos=[list(fila) for fila in datos],
+                    datos=[list(fila) for fila in datos_capped],
                     tipo="custom",
                     origen="importado_editable",
                 )
@@ -4201,6 +4262,7 @@ async def crear_cuaderno_desde_archivo(
     finally:
         if tmp is not None:
             tmp.unlink(missing_ok=True)
+        gc.collect()  # Liberar RAM tras procesar archivo grande
 
 
 @router.post("/{cuaderno_id}/upload/import")
@@ -4242,12 +4304,13 @@ async def importar_datos_archivo(cuaderno_id: str, file: UploadFile = File(...))
         hojas_añadidas = 0
 
         # Añadir hojas del archivo. Si ya existe inf.gral 1 o inf.gral 2, REEMPLAZAR con la nueva versión ordenada
+        _MAX_HOJA_ROWS = 3_000
         for hoja in result.get("hojas", []):
             nombre = hoja.get("nombre", "").strip()
             hoja_original = HojaExcel(
                 nombre=nombre,
                 columnas=list(hoja.get("columnas", [])),
-                datos=[list(fila) for fila in hoja.get("datos", [])],
+                datos=[list(fila) for fila in hoja.get("datos", [])[:_MAX_HOJA_ROWS]],
                 tipo="custom",
                 origen="importado",
             )
@@ -4341,6 +4404,7 @@ async def importar_datos_archivo(cuaderno_id: str, file: UploadFile = File(...))
     finally:
         if tmp is not None:
             tmp.unlink(missing_ok=True)
+        gc.collect()  # Liberar RAM tras procesar archivo grande
 
 
 @router.get("/upload/supported-formats")
