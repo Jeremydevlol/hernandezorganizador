@@ -76,6 +76,24 @@ class LocalStorage:
         cuadernos.sort(key=lambda x: x.get("fecha_modificacion", ""), reverse=True)
         return cuadernos
 
+    def listar_todos_productos(self) -> List[Dict]:
+        """
+        Devuelve lista de {cuaderno_id, productos} leyendo solo los campos necesarios
+        de cada fichero JSON, sin construir el objeto CuadernoExplotacion completo.
+        """
+        out = []
+        for filepath in self.base_dir.glob("cuaderno_*.json"):
+            try:
+                with open(filepath, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                cid = data.get("id")
+                productos = data.get("productos", [])
+                if cid and isinstance(productos, list):
+                    out.append({"cuaderno_id": cid, "productos": productos})
+            except Exception:
+                continue
+        return out
+
     def eliminar(self, cuaderno_id: str) -> bool:
         filepath = self._get_filepath(cuaderno_id)
         if not filepath.exists():
@@ -228,6 +246,44 @@ class SupabaseStorage:
             })
         return cuadernos
 
+    def listar_todos_productos(self) -> List[Dict]:
+        """
+        Usa el operador JSONB de PostgREST para extraer SOLO el array 'productos'
+        de cada cuaderno sin traer las hojas_originales voluminosas.
+        Evita cargar 50-200 MB de datos innecesarios → previene OOM.
+        """
+        try:
+            # PostgREST soporta: select=id,data->productos
+            # La clave en el resultado es "data->productos"
+            result = (
+                self.client.table(self.table)
+                .select("id, data->productos")
+                .execute()
+            )
+            out = []
+            for row in result.data:
+                cid = row.get("id", "")
+                # La clave puede variar según la versión de postgrest-py
+                prods = (
+                    row.get("data->productos")
+                    or row.get("productos")
+                    or []
+                )
+                if isinstance(prods, str):
+                    try:
+                        import json as _json
+                        prods = _json.loads(prods)
+                    except Exception:
+                        prods = []
+                if isinstance(prods, list) and cid:
+                    out.append({"cuaderno_id": cid, "productos": prods})
+            return out
+        except Exception as e:
+            print(f"[listar_todos_productos] JSONB select falló ({e}); usando fallback vacío")
+            # Si falla el path ligero, devolvemos lista vacía para que el
+            # caller use el método de carga por demanda con gc.collect().
+            return []
+
     def eliminar(self, cuaderno_id: str) -> bool:
         result = self.client.table(self.table).select("id").eq("id", cuaderno_id).execute()
         if not result.data:
@@ -302,6 +358,9 @@ class CuadernoStorage:
 
     def listar_backups(self, cuaderno_id):
         return self._backend.listar_backups(cuaderno_id)
+
+    def listar_todos_productos(self) -> List[Dict]:
+        return self._backend.listar_todos_productos()
 
 
 # ============================================

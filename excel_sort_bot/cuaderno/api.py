@@ -1162,11 +1162,34 @@ async def eliminar_producto(cuaderno_id: str, producto_id: str):
 def _sync_catalogo_desde_cuadernos() -> None:
     """
     Sincroniza productos ya existentes en cuadernos hacia el catálogo global.
-    Idempotente por upsert (nombre+registro).
+    Usa listar_todos_productos() para NO cargar hojas_originales voluminosas.
     """
     try:
         storage = get_storage()
         catalogo = get_catalogo()
+        # Ruta ligera: solo trae el array de productos de cada cuaderno
+        todos = storage.listar_todos_productos()
+        if todos:
+            for entry in todos:
+                for p in (entry.get("productos") or []):
+                    if not isinstance(p, dict):
+                        continue
+                    try:
+                        tipo_raw = p.get("tipo") or "fitosanitario"
+                        catalogo.upsert({
+                            "nombre_comercial": p.get("nombre_comercial") or "",
+                            "numero_registro": p.get("numero_registro") or "",
+                            "materia_activa": p.get("materia_activa") or "",
+                            "formulacion": p.get("formulacion") or "",
+                            "tipo": tipo_raw if isinstance(tipo_raw, str) else str(tipo_raw),
+                            "unidad": p.get("unidad") or "L",
+                            "proveedor": p.get("proveedor") or "",
+                            "notas": p.get("notas") or "",
+                        })
+                    except Exception:
+                        continue
+            return
+        # Fallback: carga completa cuaderno a cuaderno con liberación inmediata
         for meta in storage.listar():
             cid = meta.get("id")
             if not cid:
@@ -1174,7 +1197,11 @@ def _sync_catalogo_desde_cuadernos() -> None:
             cuaderno = storage.cargar(cid)
             if not cuaderno:
                 continue
-            for prod in (cuaderno.productos or []):
+            productos_snap = list(cuaderno.productos or [])
+            cuaderno.hojas_originales = []  # Liberar memoria grande
+            del cuaderno
+            gc.collect()
+            for prod in productos_snap:
                 try:
                     catalogo.upsert({
                         "nombre_comercial": prod.nombre_comercial,
@@ -1192,94 +1219,115 @@ def _sync_catalogo_desde_cuadernos() -> None:
         pass
 
 
+def _agregar_producto_a_agg(
+    agg: Dict[str, Any],
+    p: Any,
+    q_norm: str,
+    es_dict: bool,
+) -> None:
+    """Inserta/fusiona un producto (dict o modelo) en el dict de agregación."""
+    if es_dict:
+        nombre = (p.get("nombre_comercial") or "").strip()
+        registro = (p.get("numero_registro") or "").strip()
+        materia = (p.get("materia_activa") or "").strip()
+        formulacion = (p.get("formulacion") or "").strip()
+        unidad = (p.get("unidad") or "L").strip()
+        proveedor = (p.get("proveedor") or "").strip()
+        notas = (p.get("notas") or "").strip()
+        tipo = p.get("tipo") or "fitosanitario"
+    else:
+        nombre = (p.nombre_comercial or "").strip()
+        registro = (p.numero_registro or "").strip()
+        materia = (p.materia_activa or "").strip()
+        formulacion = (p.formulacion or "").strip()
+        unidad = (p.unidad or "L").strip()
+        proveedor = (p.proveedor or "").strip()
+        notas = (p.notas or "").strip()
+        tipo = p.tipo.value if hasattr(p.tipo, "value") else str(p.tipo or "fitosanitario")
+    if q_norm and not any(
+        q_norm in (v or "").lower()
+        for v in (nombre, registro, materia, formulacion, proveedor, notas)
+    ):
+        return
+    key = f"{nombre.lower()}||{registro.lower()}||{unidad.lower()}"
+    if key not in agg:
+        agg[key] = {
+            "id": f"cuaderno::{key}",
+            "nombre_comercial": nombre,
+            "numero_registro": registro,
+            "materia_activa": materia,
+            "formulacion": formulacion,
+            "tipo": tipo,
+            "unidad": unidad,
+            "proveedor": proveedor,
+            "notas": notas,
+            "created_at": "",
+            "updated_at": "",
+        }
+    else:
+        row = agg[key]
+        if not row.get("materia_activa") and materia:
+            row["materia_activa"] = materia
+        if not row.get("formulacion") and formulacion:
+            row["formulacion"] = formulacion
+        if not row.get("proveedor") and proveedor:
+            row["proveedor"] = proveedor
+        if not row.get("notas") and notas:
+            row["notas"] = notas
+
+
 def _collect_productos_desde_cuadernos(q: str = "") -> List[Dict[str, Any]]:
     """
-    Recolecta productos directamente desde todos los cuadernos (sin depender del
-    backend del catálogo global), deduplicando por nombre+registro+unidad.
-    Usa caché en memoria cuando está disponible para evitar round-trips a Supabase.
+    Recolecta productos de todos los cuadernos sin cargar hojas_originales.
+
+    Estrategia (en orden de preferencia):
+    1. Caché en memoria (para cuadernos pequeños ya cacheados)
+    2. listar_todos_productos() → JSONB path en Supabase o lectura ligera en local
+    3. Fallback: carga completa con liberación inmediata de hojas_originales + gc.collect()
     """
     storage = get_storage()
     q_norm = (q or "").strip().lower()
-    agg: Dict[str, Dict[str, Any]] = {}
+    agg: Dict[str, Any] = {}
 
+    # -- Paso 1: usar caché cuando esté disponible --
+    cids_from_cache: set = set()
     for meta in storage.listar():
         cid = meta.get("id")
         if not cid:
             continue
-        # Intentar servir desde caché en memoria antes de ir a Supabase
         cached = _cache_get(f"cuaderno::{cid}")
         if cached is not None:
-            productos_raw = cached.get("cuaderno", {}).get("productos", [])
-            for p in productos_raw:
-                nombre = (p.get("nombre_comercial") or "").strip()
-                registro = (p.get("numero_registro") or "").strip()
-                materia = (p.get("materia_activa") or "").strip()
-                formulacion = (p.get("formulacion") or "").strip()
-                unidad = (p.get("unidad") or "L").strip()
-                proveedor = (p.get("proveedor") or "").strip()
-                notas = (p.get("notas") or "").strip()
-                if q_norm and not any(q_norm in (v or "").lower() for v in (nombre, registro, materia, formulacion, proveedor, notas)):
-                    continue
-                key = f"{nombre.lower()}||{registro.lower()}||{unidad.lower()}"
-                if key not in agg:
-                    agg[key] = {
-                        "id": f"cuaderno::{key}",
-                        "nombre_comercial": nombre,
-                        "numero_registro": registro,
-                        "materia_activa": materia,
-                        "formulacion": formulacion,
-                        "tipo": p.get("tipo") or "fitosanitario",
-                        "unidad": unidad,
-                        "proveedor": proveedor,
-                        "notas": notas,
-                        "created_at": "",
-                        "updated_at": "",
-                    }
+            cids_from_cache.add(cid)
+            for p in (cached.get("cuaderno", {}).get("productos") or []):
+                _agregar_producto_a_agg(agg, p, q_norm, es_dict=True)
+
+    # -- Paso 2: productos del resto vía método ligero (sin hojas_originales) --
+    todos_productos = storage.listar_todos_productos()
+    if todos_productos:
+        for entry in todos_productos:
+            cid = entry.get("cuaderno_id", "")
+            if cid in cids_from_cache:
+                continue  # Ya procesado desde caché
+            for p in (entry.get("productos") or []):
+                if isinstance(p, dict):
+                    _agregar_producto_a_agg(agg, p, q_norm, es_dict=True)
+        return sorted(agg.values(), key=lambda r: (r.get("nombre_comercial") or "").lower())
+
+    # -- Paso 3: fallback con carga completa + liberación inmediata --
+    all_metas = storage.listar()
+    for meta in all_metas:
+        cid = meta.get("id")
+        if not cid or cid in cids_from_cache:
             continue
         cuaderno = storage.cargar(cid)
         if not cuaderno:
             continue
-        for p in (cuaderno.productos or []):
-            nombre = (p.nombre_comercial or "").strip()
-            registro = (p.numero_registro or "").strip()
-            materia = (p.materia_activa or "").strip()
-            formulacion = (p.formulacion or "").strip()
-            unidad = (p.unidad or "L").strip()
-            proveedor = (p.proveedor or "").strip()
-            notas = (p.notas or "").strip()
-            if q_norm:
-                hay_match = any(
-                    q_norm in (v or "").lower()
-                    for v in (nombre, registro, materia, formulacion, proveedor, notas)
-                )
-                if not hay_match:
-                    continue
-
-            key = f"{nombre.lower()}||{registro.lower()}||{unidad.lower()}"
-            if key not in agg:
-                agg[key] = {
-                    "id": f"cuaderno::{key}",
-                    "nombre_comercial": nombre,
-                    "numero_registro": registro,
-                    "materia_activa": materia,
-                    "formulacion": formulacion,
-                    "tipo": p.tipo.value if hasattr(p.tipo, "value") else str(p.tipo or "fitosanitario"),
-                    "unidad": unidad,
-                    "proveedor": proveedor,
-                    "notas": notas,
-                    "created_at": "",
-                    "updated_at": "",
-                }
-            else:
-                row = agg[key]
-                if not row.get("materia_activa") and materia:
-                    row["materia_activa"] = materia
-                if not row.get("formulacion") and formulacion:
-                    row["formulacion"] = formulacion
-                if not row.get("proveedor") and proveedor:
-                    row["proveedor"] = proveedor
-                if not row.get("notas") and notas:
-                    row["notas"] = notas
+        productos_snap = list(cuaderno.productos or [])
+        cuaderno.hojas_originales = []  # Liberar antes de gc
+        del cuaderno
+        gc.collect()
+        for p in productos_snap:
+            _agregar_producto_a_agg(agg, p, q_norm, es_dict=False)
 
     return sorted(agg.values(), key=lambda r: (r.get("nombre_comercial") or "").lower())
 
