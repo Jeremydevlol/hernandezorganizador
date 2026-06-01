@@ -125,6 +125,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
     const [selectedAsesoramientos, setSelectedAsesoramientos] = useState<Set<string>>(new Set());
     const [cultivoFilters, setCultivoFilters] = useState<Set<string>>(new Set());
     const [cultivoDropdownOpen, setCultivoDropdownOpen] = useState(false);
+    const cultivoDropdownRef = useRef<HTMLDivElement | null>(null);
     const [colSort, setColSort] = useState<{ key: string; dir: "asc" | "desc" } | null>(null);
     const [parcelaTratamientoFilter, setParcelaTratamientoFilter] = useState<"" | "con_tratamiento" | "sin_tratamiento">("");
     const [tratCultivoFilter, setTratCultivoFilter] = useState<string>("");
@@ -1107,7 +1108,11 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
 
     useEffect(() => {
         if (!cultivoDropdownOpen) return;
-        const handler = () => setCultivoDropdownOpen(false);
+        const handler = (e: MouseEvent) => {
+            // Solo cerrar si el click fue FUERA del contenedor del dropdown
+            if (cultivoDropdownRef.current && cultivoDropdownRef.current.contains(e.target as Node)) return;
+            setCultivoDropdownOpen(false);
+        };
         document.addEventListener("mousedown", handler);
         return () => document.removeEventListener("mousedown", handler);
     }, [cultivoDropdownOpen]);
@@ -1924,7 +1929,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                     <option value="con_tratamiento">Con tratamiento</option>
                                 </select>
                                 {uniqueCultivos.length > 0 && (
-                                <div className="relative">
+                                <div className="relative" ref={cultivoDropdownRef}>
                                     <button
                                         type="button"
                                         onClick={() => setCultivoDropdownOpen(o => !o)}
