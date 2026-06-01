@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { HojaExcel, CellSelection } from "@/lib/types";
-import { Save, X, FileSpreadsheet, Plus, Trash2, Edit3, Send, Table2 } from "lucide-react";
+import { Save, X, FileSpreadsheet, Plus, Trash2, Edit3, Send, Table2, Eraser } from "lucide-react";
 
 type SearchMatch = { rowIndex: number; colKey: string | number };
 
@@ -30,6 +30,7 @@ export default function ImportedSheet({ hoja, onSave, onPatchCell, onDelete, onR
     const [saving, setSaving] = useState(false);
     const [isRenamingSheet, setIsRenamingSheet] = useState(false);
     const [sheetNameValue, setSheetNameValue] = useState(hoja.nombre || "");
+    const containerRef = useRef<HTMLDivElement | null>(null);
 
     // ---- Cell Selection State ----
     const [selectedCells, setSelectedCells] = useState<Set<string>>(new Set());
@@ -370,8 +371,72 @@ export default function ImportedSheet({ hoja, onSave, onPatchCell, onDelete, onR
         else if (e.key === "Escape") cancelEdit();
     };
 
+    // ---- Eliminar filas ----
+    const handleDeleteRows = useCallback(async (rowIndices: number[]) => {
+        if (rowIndices.length === 0) return;
+        const idxSet = new Set(rowIndices);
+        const newData = localData.filter((_: any, i: number) => !idxSet.has(i));
+        setLocalData(newData);
+        setSelectedCells(new Set());
+        setSelectionAnchor(null);
+        setSaving(true);
+        try {
+            await onSave({ datos: newData });
+        } finally {
+            setSaving(false);
+        }
+    }, [localData, onSave]);
+
+    // Filas que tienen al menos una celda seleccionada
+    const selectedRowIndices = useCallback((): number[] => {
+        const rows = new Set<number>();
+        for (const key of selectedCells) rows.add(parseInt(key.split(":")[0], 10));
+        return Array.from(rows).sort((a, b) => a - b);
+    }, [selectedCells]);
+
+    // ---- Limpiar contenido de celdas seleccionadas ----
+    const handleClearSelectedCells = useCallback(async () => {
+        if (selectedCells.size === 0) return;
+        const newData = localData.map((r: any) => [...(r || [])]);
+        for (const key of selectedCells) {
+            const [rStr, cStr] = key.split(":");
+            const rowIdx = parseInt(rStr, 10);
+            const colIdx = parseInt(cStr, 10);
+            if (!isNaN(rowIdx) && !isNaN(colIdx)) {
+                if (!newData[rowIdx]) newData[rowIdx] = [];
+                newData[rowIdx][colIdx] = "";
+            }
+        }
+        setLocalData(newData);
+        setSaving(true);
+        try {
+            await onSave({ datos: newData });
+        } finally {
+            setSaving(false);
+        }
+    }, [selectedCells, localData, onSave]);
+
+    // ---- Teclado: Delete/Backspace limpia celdas seleccionadas ----
+    useEffect(() => {
+        const container = containerRef.current;
+        if (!container) return;
+        const handler = (e: KeyboardEvent) => {
+            if (editingCell) return;
+            if (selectedCells.size === 0) return;
+            // No interferir con inputs/textareas dentro del componente
+            const target = e.target as HTMLElement;
+            if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
+            if (e.key === "Delete" || e.key === "Backspace") {
+                e.preventDefault();
+                handleClearSelectedCells();
+            }
+        };
+        container.addEventListener("keydown", handler);
+        return () => container.removeEventListener("keydown", handler);
+    }, [editingCell, selectedCells, handleClearSelectedCells]);
+
     return (
-        <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+        <div ref={containerRef} tabIndex={-1} className="flex-1 flex flex-col min-h-0 overflow-hidden outline-none">
             <div className="flex items-center gap-2 px-4 py-2 border-b border-gray-200 bg-[var(--bg-dark)] shrink-0">
                 <span className="text-[10px] px-2 py-0.5 rounded-md bg-purple-500/15 text-purple-400">
                     Hoja importada (editable)
@@ -513,11 +578,22 @@ export default function ImportedSheet({ hoja, onSave, onPatchCell, onDelete, onR
                             {displayData.map((row: any, rowIdx: number) => (
                                 <tr key={rowIdx} className="group hover:bg-gray-50 transition-colors">
                                     <td
-                                        className="px-3 py-2 text-gray-500 text-xs font-mono border-b border-r border-gray-200 bg-[var(--bg-dark)] cursor-pointer hover:bg-blue-500/10 hover:text-blue-400 select-none"
+                                        className="group/row px-2 py-2 text-gray-500 text-xs font-mono border-b border-r border-gray-200 bg-[var(--bg-dark)] cursor-pointer hover:bg-blue-500/10 hover:text-blue-400 select-none"
                                         onClick={(e) => handleRowClick(rowIdx, e)}
                                         title="Clic para seleccionar fila"
                                     >
-                                        {rowIdx + 1}
+                                        <div className="flex items-center justify-between gap-1">
+                                            <span>{rowIdx + 1}</span>
+                                            <button
+                                                type="button"
+                                                onClick={(e) => { e.stopPropagation(); handleDeleteRows([rowIdx]); }}
+                                                disabled={saving}
+                                                className="opacity-0 group-hover/row:opacity-100 transition-opacity p-0.5 rounded hover:bg-red-500/20 hover:text-red-400 disabled:opacity-0"
+                                                title="Eliminar esta fila"
+                                            >
+                                                <Trash2 size={10} />
+                                            </button>
+                                        </div>
                                     </td>
                                     {Array.from({ length: numCols }, (_, colIdx) => {
                                         const cell = Array.isArray(row) && colIdx < row.length ? row[colIdx] : undefined;
@@ -608,6 +684,32 @@ export default function ImportedSheet({ hoja, onSave, onPatchCell, onDelete, onR
                         </div>
                     </div>
                     <div className="flex items-center gap-2">
+                        {/* Eliminar filas con celdas seleccionadas */}
+                        <button
+                            onClick={() => {
+                                const rows = selectedRowIndices();
+                                if (rows.length === 0) return;
+                                if (!confirm(`¿Eliminar ${rows.length} fila${rows.length !== 1 ? "s" : ""}? Esta acción no se puede deshacer.`)) return;
+                                handleDeleteRows(rows);
+                            }}
+                            disabled={saving}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-500/15 hover:bg-red-500/25 text-red-400 text-xs font-medium transition-colors disabled:opacity-50"
+                            title="Eliminar las filas que tienen celdas seleccionadas"
+                        >
+                            <Trash2 size={13} />
+                            Eliminar {selectedRowIndices().length} fila{selectedRowIndices().length !== 1 ? "s" : ""}
+                        </button>
+                        {/* Limpiar contenido */}
+                        <button
+                            onClick={handleClearSelectedCells}
+                            disabled={saving}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-orange-500/15 hover:bg-orange-500/25 text-orange-400 text-xs font-medium transition-colors disabled:opacity-50"
+                            title="Borrar el contenido de las celdas seleccionadas (también: tecla Delete)"
+                        >
+                            <Eraser size={13} />
+                            Borrar contenido
+                        </button>
+                        <div className="w-px h-5 bg-gray-200" />
                         {onPatchCell && (
                             <>
                                 <input
