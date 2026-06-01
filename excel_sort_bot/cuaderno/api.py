@@ -1777,6 +1777,19 @@ async def crear_fertilizacion(cuaderno_id: str, data: FertilizacionCreate):
     return {"fertilizacion": fertilizacion.to_dict()}
 
 
+@router.delete("/{cuaderno_id}/fertilizaciones/{fertilizacion_id}")
+async def eliminar_fertilizacion(cuaderno_id: str, fertilizacion_id: str):
+    """Elimina una fertilización."""
+    storage = get_storage()
+    cuaderno = storage.cargar(cuaderno_id)
+    if not cuaderno:
+        raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
+    if not cuaderno.eliminar_fertilizacion(fertilizacion_id):
+        raise HTTPException(status_code=404, detail="Fertilización no encontrada")
+    _guardar_cuaderno(storage, cuaderno)
+    return {"success": True, "message": "Fertilización eliminada"}
+
+
 # ============================================
 # COSECHAS
 # ============================================
@@ -1814,6 +1827,19 @@ async def crear_cosecha(cuaderno_id: str, data: CosechaCreate):
     cuaderno.agregar_cosecha(cosecha)
     storage.guardar(cuaderno)
     return {"cosecha": cosecha.to_dict()}
+
+
+@router.delete("/{cuaderno_id}/cosechas/{cosecha_id}")
+async def eliminar_cosecha(cuaderno_id: str, cosecha_id: str):
+    """Elimina una cosecha."""
+    storage = get_storage()
+    cuaderno = storage.cargar(cuaderno_id)
+    if not cuaderno:
+        raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
+    if not cuaderno.eliminar_cosecha(cosecha_id):
+        raise HTTPException(status_code=404, detail="Cosecha no encontrada")
+    _guardar_cuaderno(storage, cuaderno)
+    return {"success": True, "message": "Cosecha eliminada"}
 
 
 # ============================================

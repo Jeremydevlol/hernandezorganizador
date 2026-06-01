@@ -1540,6 +1540,41 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
         }
     };
 
+    const handleDeleteTratamientosSeleccionados = async () => {
+        const ids = Array.from(selectedTratamientos);
+        if (ids.length === 0) return;
+        if (!confirm(`¿Eliminar ${ids.length} tratamiento${ids.length !== 1 ? "s" : ""}? Esta acción no se puede deshacer.`)) return;
+        let ok = 0;
+        for (const id of ids) {
+            try { await api.deleteTratamiento(cuaderno.id, id); ok++; } catch { /* continue */ }
+        }
+        setSelectedTratamientos(new Set());
+        onRefresh();
+        if (ok < ids.length) alert(`${ok} de ${ids.length} eliminado(s). Algunos fallaron.`);
+    };
+
+    const handleDeleteFertilizacion = async (id: string) => {
+        if (!confirm("¿Eliminar este registro de fertilización?")) return;
+        try {
+            await api.deleteFertilizacion(cuaderno.id, id);
+            onRefresh();
+        } catch (e) {
+            console.error(e);
+            alert("No se pudo eliminar la fertilización.");
+        }
+    };
+
+    const handleDeleteCosecha = async (id: string) => {
+        if (!confirm("¿Eliminar este registro de cosecha?")) return;
+        try {
+            await api.deleteCosecha(cuaderno.id, id);
+            onRefresh();
+        } catch (e) {
+            console.error(e);
+            alert("No se pudo eliminar la cosecha.");
+        }
+    };
+
     const handleDeleteParcela = async (parcelaId: string) => {
         if (!confirm("¿Eliminar esta parcela? Los tratamientos asociados quedarán sin referencia a ella.")) return;
         try {
@@ -2340,6 +2375,13 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                 </div>
                                 <div className="w-px h-5 bg-gray-200" />
                                 <button
+                                    onClick={handleDeleteTratamientosSeleccionados}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-500/15 hover:bg-red-500/25 text-red-500 text-xs font-medium transition-colors"
+                                >
+                                    <Trash2 size={13} />
+                                    Eliminar {selectedTratamientos.size}
+                                </button>
+                                <button
                                     onClick={() => { setOpenTreatFromTratSelection(true); setShowAddModal(true); }}
                                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium transition-colors"
                                 >
@@ -2890,6 +2932,36 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                                             onClick={() => handleDeleteAsesoramiento(row.id)}
                                                             className="p-1.5 rounded-md hover:bg-red-500/20 text-gray-500 hover:text-red-400"
                                                             title="Eliminar"
+                                                        >
+                                                            <Trash2 size={14} />
+                                                        </button>
+                                                    )}
+                                                    {(effectiveSheet === "trat_asesor" || effectiveSheet === "tratamientos_especiales") && row.id && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleDeleteTratamiento(row.id)}
+                                                            className="p-1.5 rounded-md hover:bg-red-500/20 text-gray-500 hover:text-red-400"
+                                                            title="Eliminar tratamiento"
+                                                        >
+                                                            <Trash2 size={14} />
+                                                        </button>
+                                                    )}
+                                                    {effectiveSheet === "fertilizantes" && row.id && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleDeleteFertilizacion(row.id)}
+                                                            className="p-1.5 rounded-md hover:bg-red-500/20 text-gray-500 hover:text-red-400"
+                                                            title="Eliminar fertilización"
+                                                        >
+                                                            <Trash2 size={14} />
+                                                        </button>
+                                                    )}
+                                                    {effectiveSheet === "cosecha" && row.id && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleDeleteCosecha(row.id)}
+                                                            className="p-1.5 rounded-md hover:bg-red-500/20 text-gray-500 hover:text-red-400"
+                                                            title="Eliminar cosecha"
                                                         >
                                                             <Trash2 size={14} />
                                                         </button>

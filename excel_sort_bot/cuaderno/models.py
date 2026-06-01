@@ -1078,6 +1078,24 @@ class CuadernoExplotacion:
                 self._actualizar_modificacion()
                 return True
         return False
+
+    def eliminar_fertilizacion(self, fertilizacion_id: str) -> bool:
+        """Elimina una fertilización por ID."""
+        for i, f in enumerate(self.fertilizaciones):
+            if f.id == fertilizacion_id:
+                self.fertilizaciones.pop(i)
+                self._actualizar_modificacion()
+                return True
+        return False
+
+    def eliminar_cosecha(self, cosecha_id: str) -> bool:
+        """Elimina una cosecha por ID."""
+        for i, c in enumerate(self.cosechas):
+            if c.id == cosecha_id:
+                self.cosechas.pop(i)
+                self._actualizar_modificacion()
+                return True
+        return False
     
     def reparar_tratamientos_multi_cultivo(self) -> int:
         """

@@ -351,10 +351,20 @@ export const api = {
             body: JSON.stringify(data),
         }),
 
+    deleteFertilizacion: (cuadernoId: string, fertilizacionId: string) =>
+        request<{ success: boolean }>(`/${cuadernoId}/fertilizaciones/${fertilizacionId}`, {
+            method: "DELETE",
+        }),
+
     createCosecha: (cuadernoId: string, data: any) =>
         request<{ cosecha: any }>(`/${cuadernoId}/cosechas`, {
             method: "POST",
             body: JSON.stringify(data),
+        }),
+
+    deleteCosecha: (cuadernoId: string, cosechaId: string) =>
+        request<{ success: boolean }>(`/${cuadernoId}/cosechas/${cosechaId}`, {
+            method: "DELETE",
         }),
 
     createAsesoramiento: (cuadernoId: string, data: any) =>
