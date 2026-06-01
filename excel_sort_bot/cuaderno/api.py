@@ -600,7 +600,7 @@ async def _listar_cuadernos_payload():
         return cached
     storage = get_storage()
     payload = {"cuadernos": storage.listar()}
-    _cache_set(cache_key, payload, ttl_sec=20)
+    _cache_set(cache_key, payload, ttl_sec=60)  # era 20s
     return payload
 
 
@@ -1319,7 +1319,13 @@ def _collect_productos_desde_cuadernos(q: str = "") -> List[Dict[str, Any]]:
                 _agregar_producto_a_agg(agg, p, q_norm, es_dict=True)
 
     # -- Paso 2: productos del resto vía método ligero (sin hojas_originales) --
-    todos_productos = storage.listar_todos_productos()
+    # Cacheamos el resultado de listar_todos_productos() 5 minutos para no martillar Supabase
+    _todos_cache_key = "todos_productos_jsonb::"
+    todos_productos = _cache_get(_todos_cache_key)
+    if todos_productos is None:
+        todos_productos = storage.listar_todos_productos()
+        if todos_productos:
+            _cache_set(_todos_cache_key, todos_productos, ttl_sec=300)
     if todos_productos:
         for entry in todos_productos:
             cid = entry.get("cuaderno_id", "")
@@ -1353,15 +1359,16 @@ def _collect_productos_desde_cuadernos(q: str = "") -> List[Dict[str, Any]]:
 async def listar_catalogo_productos(background_tasks: BackgroundTasks, q: str = "", limit: int = Query(default=50, le=200)):
     """Busca productos en el catálogo GLOBAL (compartido entre todos los cuadernos)."""
     global _LAST_CATALOGO_SYNC_TS
-    cache_key = f"catalog_global::{(q or '').strip().lower()}::{int(limit or 50)}"
+    q_norm = (q or "").strip().lower()
+    cache_key = f"catalog_global::{q_norm}::{int(limit or 50)}"
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
 
+    # Sync solo cada 10 minutos (antes era cada 60s → demasiadas queries a Supabase)
     try:
-        # Sync en background (no bloquea la petición): se ejecuta después de responder.
         now = time.time()
-        if now - _LAST_CATALOGO_SYNC_TS > 60:
+        if now - _LAST_CATALOGO_SYNC_TS > 600:
             _LAST_CATALOGO_SYNC_TS = now
             background_tasks.add_task(_sync_catalogo_desde_cuadernos)
         productos_catalogo = get_catalogo().listar(q=q, limit=limit)
@@ -1380,7 +1387,9 @@ async def listar_catalogo_productos(background_tasks: BackgroundTasks, q: str = 
                 merged[key] = p
         productos = sorted(merged.values(), key=lambda r: (r.get("nombre_comercial") or "").lower())[: max(1, int(limit or 50))]
         payload = {"productos": productos, "total": len(productos)}
-        _cache_set(cache_key, payload, ttl_sec=30)
+        # TTL 5 minutos: reduce radicalmente las queries a Supabase
+        # (antes era 30s → cada búsqueda tipada generaba múltiples round-trips)
+        _cache_set(cache_key, payload, ttl_sec=300)
         return payload
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error listando catálogo: {e}")
