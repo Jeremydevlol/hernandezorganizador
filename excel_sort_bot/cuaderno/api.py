@@ -709,26 +709,20 @@ async def obtener_cuaderno(cuaderno_id: str, background_tasks: BackgroundTasks):
     if not cuaderno:
         raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
 
-    # Truncar hojas_originales muy voluminosas ANTES de serializar (protección OOM).
-    # Se hace de forma SÍNCRONA y se guarda ANTES de responder: así la versión reducida
-    # queda en Supabase inmediatamente y cualquier operación posterior (crear tratamiento,
-    # eliminar, etc.) cargará datos ligeros.
-    _MAX_HOJA_ROWS = 3_000
-    truncated = False
+    # Truncar hojas_originales grandes en memoria antes de serializar (protección OOM).
+    # NO se guarda de vuelta en este GET para no bloquear el event loop con I/O Supabase.
+    # La versión truncada se persistirá la próxima vez que ocurra una escritura en el cuaderno
+    # (crear/editar tratamiento, etc.) a través de _guardar_cuaderno, que llama a
+    # _truncar_hojas_si_necesario antes de cada save.
     for h in cuaderno.hojas_originales:
-        if len(h.datos) > _MAX_HOJA_ROWS:
-            h.datos = h.datos[:_MAX_HOJA_ROWS]
-            truncated = True
-    if truncated:
-        print(f"[obtener_cuaderno] Truncando hojas de {cuaderno_id} → guardando en Supabase...")
-        _guardar_cuaderno(storage, cuaderno)  # SÍNCRONO: garantiza que Supabase queda saneado
+        if len(h.datos) > 3_000:
+            h.datos = h.datos[:3_000]
 
     payload = {"cuaderno": cuaderno.to_dict()}
     _cache_set(cache_key, payload, ttl_sec=120)
 
-    # Normalización en segundo plano solo si no hubo truncado (para no guardar dos veces)
-    if not truncated:
-        background_tasks.add_task(_normalizar_y_guardar_bg_obj, cuaderno, storage)
+    # Normalización y guardado en segundo plano (solo si hay algo que normalizar)
+    background_tasks.add_task(_normalizar_y_guardar_bg_obj, cuaderno, storage)
 
     return payload
 
@@ -1686,17 +1680,20 @@ async def crear_tratamiento(cuaderno_id: str, data: TratamientoCreate, backgroun
 
         background_tasks.add_task(_sync_prods_al_catalogo_global)
 
-        # Guardar en Supabase ANTES de responder (síncrono) para que el tratamiento
-        # no se pierda si el servidor se reinicia justo después de responder.
-        _guardar_cuaderno(storage, cuaderno)
+        # Guardar en Supabase (síncrono) para no perder el tratamiento en un crash.
+        # _guardar_cuaderno ya llama a _truncar_hojas_si_necesario antes de guardar.
+        try:
+            _guardar_cuaderno(storage, cuaderno)
+        except Exception as save_err:
+            # Si Supabase falla, intentar de nuevo en background (mejor que perderlo)
+            print(f"[crear_tratamiento] Supabase sync save falló ({save_err}), reintentando en bg")
+            background_tasks.add_task(_bg_guardar_cuaderno, storage, cuaderno)
 
         # Caché caliente: solo si las hojas importadas son pequeñas (evitar OOM).
-        # cuaderno.to_dict() puede pesar 100+ MB si hay hojas grandes importadas.
         _total_hoja_rows = sum(len(h.datos) for h in cuaderno.hojas_originales)
         if _total_hoja_rows <= _MAX_CACHE_HOJA_ROWS:
             _cache_set(cache_key, {"cuaderno": cuaderno.to_dict()}, ttl_sec=120)
         else:
-            # Invalidar caché para que el próximo GET recargue desde Supabase (ya guardado)
             _invalidar_cuaderno(cuaderno_id)
 
         return {
