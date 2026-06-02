@@ -3,6 +3,7 @@ CUADERNO DE EXPLOTACIÓN - API REST v2.0
 Endpoints para gestión de cuadernos, parcelas, productos y tratamientos.
 Soporte para upload y procesamiento de archivos con GPT-4o Vision.
 """
+import asyncio
 import gc
 import os
 import re
@@ -163,6 +164,26 @@ def _truncar_hojas_si_necesario(cuaderno, max_rows: int = 3_000) -> bool:
             h.datos = h.datos[:max_rows]
             changed = True
     return changed
+
+
+# ── Wrappers async para supabase-py (cliente síncrono) ──────────────────────
+# supabase-py bloquea el event loop de asyncio en cada round-trip a la BD.
+# Con asyncio.to_thread() las llamadas corren en un thread pool y el event loop
+# sigue sirviendo otras peticiones mientras Supabase responde.
+
+async def _cargar_cuaderno_async(storage, cuaderno_id: str):
+    """Carga un cuaderno desde Supabase sin bloquear el event loop."""
+    return await asyncio.to_thread(storage.cargar, cuaderno_id)
+
+
+async def _guardar_cuaderno_async(storage, cuaderno) -> None:
+    """Guarda un cuaderno en Supabase sin bloquear el event loop."""
+    await asyncio.to_thread(_guardar_cuaderno, storage, cuaderno)
+
+
+# ── Plan Pro: podemos cachear cuadernos más grandes (4 GB RAM disponibles) ──
+# Subimos el umbral de cacheabilidad de 400 → 5 000 filas de hojas importadas.
+_MAX_CACHE_HOJA_ROWS = 5_000  # sobrescribe el valor definido arriba (400)
 
 
 CULTIVOS_ASESORAMIENTO_OBLIGATORIO = ("PATATA", "REMOLACHA")
@@ -704,16 +725,13 @@ async def obtener_cuaderno(cuaderno_id: str, background_tasks: BackgroundTasks):
         return cached
 
     storage = get_storage()
-    cuaderno = storage.cargar(cuaderno_id)
+    # Carga sin bloquear el event loop → otras peticiones siguen siendo atendidas
+    cuaderno = await _cargar_cuaderno_async(storage, cuaderno_id)
 
     if not cuaderno:
         raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
 
-    # Truncar hojas_originales grandes en memoria antes de serializar (protección OOM).
-    # NO se guarda de vuelta en este GET para no bloquear el event loop con I/O Supabase.
-    # La versión truncada se persistirá la próxima vez que ocurra una escritura en el cuaderno
-    # (crear/editar tratamiento, etc.) a través de _guardar_cuaderno, que llama a
-    # _truncar_hojas_si_necesario antes de cada save.
+    # Truncar hojas grandes en memoria (protección OOM y respuesta más rápida)
     for h in cuaderno.hojas_originales:
         if len(h.datos) > 3_000:
             h.datos = h.datos[:3_000]
@@ -721,7 +739,7 @@ async def obtener_cuaderno(cuaderno_id: str, background_tasks: BackgroundTasks):
     payload = {"cuaderno": cuaderno.to_dict()}
     _cache_set(cache_key, payload, ttl_sec=120)
 
-    # Normalización y guardado en segundo plano (solo si hay algo que normalizar)
+    # Normalización y guardado en segundo plano
     background_tasks.add_task(_normalizar_y_guardar_bg_obj, cuaderno, storage)
 
     return payload
@@ -1054,13 +1072,13 @@ async def actualizar_parcela(cuaderno_id: str, parcela_id: str, data: ParcelaUpd
 async def eliminar_parcela(cuaderno_id: str, parcela_id: str):
     """Elimina una parcela del cuaderno."""
     storage = get_storage()
-    cuaderno = storage.cargar(cuaderno_id)
+    cuaderno = await _cargar_cuaderno_async(storage, cuaderno_id)
     if not cuaderno:
         raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
     if not cuaderno.eliminar_parcela(parcela_id):
         raise HTTPException(status_code=404, detail="Parcela no encontrada")
     _asegurar_asesoramiento_automatico(cuaderno)
-    _guardar_cuaderno(storage, cuaderno)
+    await _guardar_cuaderno_async(storage, cuaderno)
     return {"success": True, "message": "Parcela eliminada"}
 
 
@@ -1156,12 +1174,12 @@ async def crear_producto(cuaderno_id: str, data: ProductoCreate):
 async def eliminar_producto(cuaderno_id: str, producto_id: str):
     """Elimina un producto del inventario del cuaderno."""
     storage = get_storage()
-    cuaderno = storage.cargar(cuaderno_id)
+    cuaderno = await _cargar_cuaderno_async(storage, cuaderno_id)
     if not cuaderno:
         raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
     if not cuaderno.eliminar_producto(producto_id):
         raise HTTPException(status_code=404, detail="Producto no encontrado")
-    _guardar_cuaderno(storage, cuaderno)
+    await _guardar_cuaderno_async(storage, cuaderno)
     _cache_invalidate(["catalog_global::", "stock_global::all"])
     return {"success": True, "message": "Producto eliminado"}
 
@@ -1598,8 +1616,8 @@ async def crear_tratamiento(cuaderno_id: str, data: TratamientoCreate, backgroun
     cache_key = f"cuaderno::{cuaderno_id}"
 
     try:
-        # Escrituras: siempre cargar desde BD (no caché GET) para no pisar cambios concurrentes.
-        cuaderno = storage.cargar(cuaderno_id)
+        # Carga sin bloquear el event loop → otras peticiones siguen siendo atendidas
+        cuaderno = await _cargar_cuaderno_async(storage, cuaderno_id)
         if not cuaderno:
             raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
 
@@ -1680,13 +1698,11 @@ async def crear_tratamiento(cuaderno_id: str, data: TratamientoCreate, backgroun
 
         background_tasks.add_task(_sync_prods_al_catalogo_global)
 
-        # Guardar en Supabase (síncrono) para no perder el tratamiento en un crash.
-        # _guardar_cuaderno ya llama a _truncar_hojas_si_necesario antes de guardar.
+        # Guardar sin bloquear el event loop
         try:
-            _guardar_cuaderno(storage, cuaderno)
+            await _guardar_cuaderno_async(storage, cuaderno)
         except Exception as save_err:
-            # Si Supabase falla, intentar de nuevo en background (mejor que perderlo)
-            print(f"[crear_tratamiento] Supabase sync save falló ({save_err}), reintentando en bg")
+            print(f"[crear_tratamiento] Supabase save falló ({save_err}), reintentando en bg")
             background_tasks.add_task(_bg_guardar_cuaderno, storage, cuaderno)
 
         # Caché caliente: solo si las hojas importadas son pequeñas (evitar OOM).
@@ -1761,12 +1777,12 @@ async def actualizar_tratamiento(cuaderno_id: str, tratamiento_id: str, data: Tr
 async def eliminar_tratamiento(cuaderno_id: str, tratamiento_id: str):
     """Elimina un tratamiento."""
     storage = get_storage()
-    cuaderno = storage.cargar(cuaderno_id)
+    cuaderno = await _cargar_cuaderno_async(storage, cuaderno_id)
     if not cuaderno:
         raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
     if not cuaderno.eliminar_tratamiento(tratamiento_id):
         raise HTTPException(status_code=404, detail="Tratamiento no encontrado")
-    storage.guardar(cuaderno)
+    await _guardar_cuaderno_async(storage, cuaderno)
     return {"success": True, "message": "Tratamiento eliminado"}
 
 
