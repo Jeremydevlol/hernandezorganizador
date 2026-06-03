@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Package } from "lucide-react";
+import { Package, Pencil, X } from "lucide-react";
 import { api } from "@/lib/api";
 
 type GlobalStockRow = {
@@ -22,10 +22,23 @@ const BADGE: Record<string, string> = {
   rojo: "bg-red-500 text-white",
 };
 
+type EditState = {
+  // clave original (para identificar el producto en el backend)
+  origNombre: string;
+  origRegistro: string;
+  origUnidad: string;
+  // valores editables
+  nombre_comercial: string;
+  numero_registro: string;
+  unidad: string;
+};
+
 export default function GlobalStockView() {
   const [rows, setRows] = useState<GlobalStockRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [edit, setEdit] = useState<EditState | null>(null);
+  const [saving, setSaving] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -37,6 +50,46 @@ export default function GlobalStockView() {
       setError(e.message || "Error cargando stock global");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const openEdit = (r: GlobalStockRow) => {
+    setEdit({
+      origNombre: r.nombre_comercial || "",
+      origRegistro: r.numero_registro || "",
+      origUnidad: r.unidad || "L",
+      nombre_comercial: r.nombre_comercial || "",
+      numero_registro: r.numero_registro || "",
+      unidad: r.unidad || "L",
+    });
+  };
+
+  const saveEdit = async () => {
+    if (!edit) return;
+    if (!edit.nombre_comercial.trim()) {
+      alert("El nombre del producto no puede estar vacío.");
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await api.editProductoStockGlobal({
+        match_nombre: edit.origNombre,
+        match_registro: edit.origRegistro,
+        match_unidad: edit.origUnidad,
+        nombre_comercial: edit.nombre_comercial.trim(),
+        numero_registro: edit.numero_registro.trim(),
+        unidad: edit.unidad.trim() || "L",
+      });
+      setEdit(null);
+      await load();
+      if ((res.productos_actualizados ?? 0) > 0) {
+        // feedback discreto: el cambio se aplicó en N cuadernos
+        console.log(`Producto actualizado en ${res.cuadernos_actualizados} cuaderno(s).`);
+      }
+    } catch (e: any) {
+      alert(e.message || "No se pudo actualizar el producto.");
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -113,11 +166,12 @@ export default function GlobalStockView() {
                 <th className="px-3 py-2 text-right font-medium text-gray-500">Entradas</th>
                 <th className="px-3 py-2 text-right font-medium text-gray-500">Consumido</th>
                 <th className="px-3 py-2 text-right font-medium text-gray-500">Cuadernos</th>
+                <th className="px-3 py-2 text-center font-medium text-gray-500">Editar</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((r) => (
-                <tr key={r.producto_id} className="border-b border-gray-100 hover:bg-gray-50">
+                <tr key={r.producto_id} className="border-b border-gray-100 hover:bg-gray-50 group">
                   <td className="px-3 py-2 text-gray-800">{r.nombre_comercial}</td>
                   <td className="px-3 py-2 text-gray-500">{r.numero_registro || "—"}</td>
                   <td className="px-3 py-2 text-center">
@@ -127,12 +181,89 @@ export default function GlobalStockView() {
                   <td className="px-3 py-2 text-right text-gray-600">{r.total_entradas.toFixed(2)} {r.unidad}</td>
                   <td className="px-3 py-2 text-right text-gray-600">{r.total_consumido.toFixed(2)} {r.unidad}</td>
                   <td className="px-3 py-2 text-right text-gray-600">{r.cuadernos_count}</td>
+                  <td className="px-3 py-2 text-center">
+                    <button
+                      onClick={() => openEdit(r)}
+                      className="p-1.5 rounded-md text-gray-400 hover:text-blue-500 hover:bg-blue-50 transition-colors"
+                      title="Corregir nombre / Nº registro / unidad en todos los cuadernos"
+                    >
+                      <Pencil size={13} />
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
       </div>
+
+      {/* Modal de edición de producto global */}
+      {edit && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => !saving && setEdit(null)}>
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
+              <h2 className="font-semibold text-gray-800 text-sm">Corregir producto (todos los cuadernos)</h2>
+              <button onClick={() => !saving && setEdit(null)} className="text-gray-400 hover:text-gray-600">
+                <X size={16} />
+              </button>
+            </div>
+            <div className="p-4 space-y-3">
+              <p className="text-[11px] text-gray-500 bg-amber-50 border border-amber-200 rounded-md px-2.5 py-1.5">
+                El cambio se aplicará a este producto en <b>todos los cuadernos</b> donde aparezca.
+              </p>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Nombre comercial</label>
+                <input
+                  type="text"
+                  className="w-full border border-gray-300 rounded-md px-2.5 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
+                  value={edit.nombre_comercial}
+                  onChange={(e) => setEdit({ ...edit, nombre_comercial: e.target.value })}
+                  autoFocus
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Nº Registro</label>
+                <input
+                  type="text"
+                  className="w-full border border-gray-300 rounded-md px-2.5 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
+                  value={edit.numero_registro}
+                  onChange={(e) => setEdit({ ...edit, numero_registro: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Unidad</label>
+                <select
+                  className="w-full border border-gray-300 rounded-md px-2.5 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
+                  value={edit.unidad}
+                  onChange={(e) => setEdit({ ...edit, unidad: e.target.value })}
+                >
+                  <option>L</option>
+                  <option>Kg</option>
+                  <option>g</option>
+                  <option>mL</option>
+                  <option>ud</option>
+                </select>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-gray-200">
+              <button
+                onClick={() => setEdit(null)}
+                disabled={saving}
+                className="px-3 py-1.5 text-xs rounded-md bg-gray-100 hover:bg-gray-200 text-gray-700 disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={saveEdit}
+                disabled={saving}
+                className="px-3 py-1.5 text-xs rounded-md bg-blue-600 hover:bg-blue-500 text-white font-medium disabled:opacity-50"
+              >
+                {saving ? "Guardando..." : "Guardar cambios"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

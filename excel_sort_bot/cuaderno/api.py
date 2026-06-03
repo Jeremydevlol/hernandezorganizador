@@ -599,6 +599,24 @@ class EliminarMultiplesRequest(BaseModel):
     ids: List[str]
 
 
+class EditarProductoGlobalRequest(BaseModel):
+    """
+    Edita un producto del stock global (corrige errores) propagando el cambio
+    a TODOS los cuadernos donde aparece. El producto se identifica por su clave
+    actual de agregación: (nombre, registro, unidad).
+    """
+    # Clave actual que identifica el producto agregado
+    match_nombre: str
+    match_registro: str = ""
+    match_unidad: str = "L"
+    # Nuevos valores (solo se aplican los que se envían)
+    nombre_comercial: Optional[str] = None
+    numero_registro: Optional[str] = None
+    unidad: Optional[str] = None
+    materia_activa: Optional[str] = None
+    formulacion: Optional[str] = None
+
+
 class CuadernoCreate(BaseModel):
     nombre_explotacion: str
     titular: str = ""
@@ -2175,6 +2193,87 @@ def _calcular_stock_global():
 
     productos.sort(key=lambda x: (x["nombre_comercial"] or "").lower())
     return {"productos": productos, "total": len(productos)}
+
+
+def _editar_producto_global_sync(data: "EditarProductoGlobalRequest") -> Dict[str, Any]:
+    """Aplica la edición de un producto a todos los cuadernos (corre en un thread)."""
+    storage = get_storage()
+    key = (
+        (data.match_nombre or "").strip().lower(),
+        (data.match_registro or "").strip().lower(),
+        (data.match_unidad or "L").strip(),
+    )
+    cuadernos_actualizados = 0
+    productos_actualizados = 0
+
+    for meta in storage.listar():
+        cid = meta.get("id")
+        if not cid:
+            continue
+        cuaderno = storage.cargar(cid)
+        if not cuaderno:
+            continue
+        changed = False
+        for p in cuaderno.productos:
+            pk = (
+                (p.nombre_comercial or "").strip().lower(),
+                (p.numero_registro or "").strip().lower(),
+                (p.unidad or "L").strip(),
+            )
+            if pk != key:
+                continue
+            # Aplicar nuevos valores (solo los enviados)
+            if data.nombre_comercial is not None:
+                p.nombre_comercial = data.nombre_comercial.strip()
+            if data.numero_registro is not None:
+                p.numero_registro = data.numero_registro.strip()
+            if data.unidad is not None:
+                p.unidad = data.unidad.strip()
+            if data.materia_activa is not None:
+                p.materia_activa = data.materia_activa.strip()
+            if data.formulacion is not None:
+                p.formulacion = data.formulacion.strip()
+            productos_actualizados += 1
+            changed = True
+            # Mantener consistentes los snapshots dentro de los tratamientos
+            for t in cuaderno.tratamientos:
+                for pa in t.productos:
+                    if pa.producto_id and pa.producto_id == p.id:
+                        if data.nombre_comercial is not None:
+                            pa.nombre_comercial = p.nombre_comercial
+                        if data.numero_registro is not None:
+                            pa.numero_registro = p.numero_registro
+        if changed:
+            _guardar_cuaderno(storage, cuaderno)
+            cuadernos_actualizados += 1
+
+    return {
+        "success": True,
+        "cuadernos_actualizados": cuadernos_actualizados,
+        "productos_actualizados": productos_actualizados,
+    }
+
+
+@router.put("/catalog/stock-global/producto")
+async def editar_producto_stock_global(data: EditarProductoGlobalRequest):
+    """
+    Corrige un producto del stock global (nombre, registro, unidad, etc.)
+    propagando el cambio a todos los cuadernos donde aparece.
+    Corre en un thread para no bloquear el event loop.
+    """
+    if not (data.match_nombre or "").strip():
+        raise HTTPException(status_code=400, detail="Falta el producto a editar (match_nombre).")
+    result = await asyncio.to_thread(_editar_producto_global_sync, data)
+    # Refrescar cachés afectadas
+    _cache_invalidate(["stock_global::all", "catalog_global::", "todos_productos_jsonb::"])
+    if result.get("productos_actualizados", 0) == 0:
+        raise HTTPException(status_code=404, detail="No se encontró el producto en ningún cuaderno.")
+    # Notificar a los clientes conectados al stock global
+    try:
+        await _stock_ws_hub.publish_stock_changed("global")
+    except Exception:
+        pass
+    return result
 
 
 @router.get("/{cuaderno_id}/stock")

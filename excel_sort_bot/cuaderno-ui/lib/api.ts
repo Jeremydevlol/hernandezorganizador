@@ -561,6 +561,21 @@ export const api = {
     getStockGlobal: () =>
         request<{ productos: any[]; total: number }>(`/catalog/stock-global`),
 
+    editProductoStockGlobal: (data: {
+        match_nombre: string;
+        match_registro?: string;
+        match_unidad?: string;
+        nombre_comercial?: string;
+        numero_registro?: string;
+        unidad?: string;
+        materia_activa?: string;
+        formulacion?: string;
+    }) =>
+        request<{ success: boolean; cuadernos_actualizados: number; productos_actualizados: number }>(
+            `/catalog/stock-global/producto`,
+            { method: "PUT", body: JSON.stringify(data) }
+        ),
+
     createStockEntrada: (cuadernoId: string, data: {
         producto_id?: string;
         nombre_comercial: string;
