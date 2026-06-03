@@ -2063,12 +2063,22 @@ async def ws_stock_cuaderno(websocket: WebSocket, cuaderno_id: str):
 @router.get("/stock/global")
 @router.get("/catalog/stock-global")
 async def get_stock_global():
-    """Resumen global de stock agregando todos los cuadernos."""
+    """Resumen global de stock agregando todos los cuadernos.
+    El cálculo (lecturas síncronas a Supabase + agregación) corre en un thread
+    para NO bloquear el event loop — antes congelaba el servidor varios segundos
+    en cada fallo de caché (cargaba los 7 cuadernos completos de forma síncrona).
+    """
     cache_key = "stock_global::all"
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
+    payload = await asyncio.to_thread(_calcular_stock_global)
+    _cache_set(cache_key, payload, ttl_sec=300)
+    return payload
 
+
+def _calcular_stock_global():
+    """Cálculo síncrono del resumen de stock global (se ejecuta en un thread)."""
     storage = get_storage()
     from collections import defaultdict
     import re
@@ -2164,16 +2174,14 @@ async def get_stock_global():
         })
 
     productos.sort(key=lambda x: (x["nombre_comercial"] or "").lower())
-    payload = {"productos": productos, "total": len(productos)}
-    _cache_set(cache_key, payload, ttl_sec=300)
-    return payload
+    return {"productos": productos, "total": len(productos)}
 
 
 @router.get("/{cuaderno_id}/stock")
 async def get_stock(cuaderno_id: str):
     """Resumen de stock: entradas + stock actual por producto + movimientos de tratamientos."""
     storage = get_storage()
-    cuaderno = storage.cargar(cuaderno_id)
+    cuaderno = await _cargar_cuaderno_async(storage, cuaderno_id)
     if not cuaderno:
         raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
 
