@@ -392,6 +392,12 @@ export const api = {
             method: "DELETE",
         }),
 
+    deleteTratamientosMultiples: (cuadernoId: string, ids: string[]) =>
+        request<{ success: boolean; eliminados: number }>(`/${cuadernoId}/tratamientos/eliminar-multiples`, {
+            method: "POST",
+            body: JSON.stringify({ ids }),
+        }),
+
     duplicarTratamiento: (cuadernoId: string, tratamientoId: string) =>
         request<{ tratamiento: any }>(`/${cuadernoId}/tratamientos/${tratamientoId}/duplicar`, {
             method: "POST",

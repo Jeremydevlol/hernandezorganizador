@@ -1544,13 +1544,18 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
         const ids = Array.from(selectedTratamientos);
         if (ids.length === 0) return;
         if (!confirm(`¿Eliminar ${ids.length} tratamiento${ids.length !== 1 ? "s" : ""}? Esta acción no se puede deshacer.`)) return;
-        let ok = 0;
-        for (const id of ids) {
-            try { await api.deleteTratamiento(cuaderno.id, id); ok++; } catch { /* continue */ }
+        try {
+            // Borrado masivo en una sola petición (1 carga + 1 guardado en backend)
+            const res = await api.deleteTratamientosMultiples(cuaderno.id, ids);
+            setSelectedTratamientos(new Set());
+            onRefresh();
+            if ((res.eliminados ?? 0) < ids.length) {
+                alert(`${res.eliminados} de ${ids.length} eliminado(s).`);
+            }
+        } catch (e) {
+            console.error(e);
+            alert("No se pudieron eliminar los tratamientos.");
         }
-        setSelectedTratamientos(new Set());
-        onRefresh();
-        if (ok < ids.length) alert(`${ok} de ${ids.length} eliminado(s). Algunos fallaron.`);
     };
 
     const handleDeleteFertilizacion = async (id: string) => {

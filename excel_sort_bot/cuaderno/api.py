@@ -186,6 +186,30 @@ async def _guardar_cuaderno_async(storage, cuaderno) -> None:
 _MAX_CACHE_HOJA_ROWS = 5_000  # sobrescribe el valor definido arriba (400)
 
 
+async def _guardar_y_cachear(storage, cuaderno, cache_key: str) -> None:
+    """
+    Guarda un cuaderno tras una escritura y refresca la caché en UN solo paso:
+      1. Trunca hojas voluminosas.
+      2. Serializa el cuaderno UNA sola vez (to_dict) — antes se hacía 2 veces.
+      3. Sube a Supabase sin bloquear el event loop (asyncio.to_thread).
+      4. Refresca la caché caliente con el MISMO dict (evita servir datos viejos).
+
+    Esto corrige el bug de "la modificación no se ve" (la caché quedaba sin
+    invalidar) y reduce a la mitad el coste de CPU por escritura.
+    """
+    _truncar_hojas_si_necesario(cuaderno)
+    data = cuaderno.to_dict()  # ← serialización única
+    # Guardar en Supabase pasando el dict ya calculado
+    await asyncio.to_thread(storage.guardar, cuaderno, data)
+    # Invalida la lista (cambian conteos) y refresca la caché del cuaderno
+    _cache_invalidate(["cuadernos_list::"])
+    total_rows = sum(len(h.datos) for h in cuaderno.hojas_originales)
+    if total_rows <= _MAX_CACHE_HOJA_ROWS:
+        _cache_set(cache_key, {"cuaderno": data}, ttl_sec=120)
+    else:
+        _cache_invalidate([cache_key])
+
+
 CULTIVOS_ASESORAMIENTO_OBLIGATORIO = ("PATATA", "REMOLACHA")
 TIPO_ASESORAMIENTO_AUTO = "AUTO_SUPERFICIE_ESPECIAL"
 
@@ -568,6 +592,11 @@ class TratamientoUpdate(BaseModel):
     firma_asesor: Optional[str] = None
     firma_cliente: Optional[str] = None
     color_fila: Optional[str] = None
+
+
+class EliminarMultiplesRequest(BaseModel):
+    """IDs de elementos a eliminar en una sola operación (1 load + 1 save)."""
+    ids: List[str]
 
 
 class CuadernoCreate(BaseModel):
@@ -1698,19 +1727,12 @@ async def crear_tratamiento(cuaderno_id: str, data: TratamientoCreate, backgroun
 
         background_tasks.add_task(_sync_prods_al_catalogo_global)
 
-        # Guardar sin bloquear el event loop
+        # Guardar + refrescar caché en un solo paso (serialización única, no bloquea).
         try:
-            await _guardar_cuaderno_async(storage, cuaderno)
+            await _guardar_y_cachear(storage, cuaderno, cache_key)
         except Exception as save_err:
             print(f"[crear_tratamiento] Supabase save falló ({save_err}), reintentando en bg")
             background_tasks.add_task(_bg_guardar_cuaderno, storage, cuaderno)
-
-        # Caché caliente: solo si las hojas importadas son pequeñas (evitar OOM).
-        _total_hoja_rows = sum(len(h.datos) for h in cuaderno.hojas_originales)
-        if _total_hoja_rows <= _MAX_CACHE_HOJA_ROWS:
-            _cache_set(cache_key, {"cuaderno": cuaderno.to_dict()}, ttl_sec=120)
-        else:
-            _invalidar_cuaderno(cuaderno_id)
 
         return {
             "success": True,
@@ -1741,13 +1763,15 @@ async def obtener_tratamiento(cuaderno_id: str, tratamiento_id: str):
 async def actualizar_tratamiento(cuaderno_id: str, tratamiento_id: str, data: TratamientoUpdate):
     """Actualiza un tratamiento existente."""
     storage = get_storage()
-    cuaderno = storage.cargar(cuaderno_id)
+    cache_key = f"cuaderno::{cuaderno_id}"
+    # Carga sin bloquear el event loop
+    cuaderno = await _cargar_cuaderno_async(storage, cuaderno_id)
     if not cuaderno:
         raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
     t = cuaderno.obtener_tratamiento(tratamiento_id)
     if not t:
         raise HTTPException(status_code=404, detail="Tratamiento no encontrado")
-    
+
     updates = data.model_dump(exclude_unset=True)
     if "productos" in updates:
         raw = updates["productos"]
@@ -1768,7 +1792,9 @@ async def actualizar_tratamiento(cuaderno_id: str, tratamiento_id: str, data: Tr
             productos_aplicados.append(pa)
         updates["productos"] = productos_aplicados
     cuaderno.actualizar_tratamiento(tratamiento_id, **updates)
-    storage.guardar(cuaderno)
+    # Guardar + refrescar caché (sin esto, el GET seguía devolviendo la versión vieja
+    # y la edición "no se veía"). No bloquea el event loop.
+    await _guardar_y_cachear(storage, cuaderno, cache_key)
     t = cuaderno.obtener_tratamiento(tratamiento_id)
     return {"success": True, "tratamiento": t.to_dict()}
 
@@ -1777,13 +1803,38 @@ async def actualizar_tratamiento(cuaderno_id: str, tratamiento_id: str, data: Tr
 async def eliminar_tratamiento(cuaderno_id: str, tratamiento_id: str):
     """Elimina un tratamiento."""
     storage = get_storage()
+    cache_key = f"cuaderno::{cuaderno_id}"
     cuaderno = await _cargar_cuaderno_async(storage, cuaderno_id)
     if not cuaderno:
         raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
     if not cuaderno.eliminar_tratamiento(tratamiento_id):
         raise HTTPException(status_code=404, detail="Tratamiento no encontrado")
-    await _guardar_cuaderno_async(storage, cuaderno)
+    await _guardar_y_cachear(storage, cuaderno, cache_key)
     return {"success": True, "message": "Tratamiento eliminado"}
+
+
+@router.post("/{cuaderno_id}/tratamientos/eliminar-multiples")
+async def eliminar_tratamientos_multiples(cuaderno_id: str, data: EliminarMultiplesRequest):
+    """
+    Elimina varios tratamientos en UNA sola operación (1 carga + 1 guardado).
+    Antes el frontend borraba uno a uno → N round-trips a Supabase = muy lento.
+    """
+    storage = get_storage()
+    cache_key = f"cuaderno::{cuaderno_id}"
+    cuaderno = await _cargar_cuaderno_async(storage, cuaderno_id)
+    if not cuaderno:
+        raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
+    eliminados = 0
+    for tid in data.ids:
+        if cuaderno.eliminar_tratamiento(tid):
+            eliminados += 1
+    if eliminados:
+        await _guardar_y_cachear(storage, cuaderno, cache_key)
+    return {
+        "success": True,
+        "eliminados": eliminados,
+        "message": f"{eliminados} tratamiento(s) eliminado(s)",
+    }
 
 
 # ============================================

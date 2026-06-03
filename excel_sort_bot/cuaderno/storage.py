@@ -39,7 +39,9 @@ class LocalStorage:
         cuaderno.guardar(str(filepath))
         return cuaderno
 
-    def guardar(self, cuaderno: CuadernoExplotacion) -> CuadernoExplotacion:
+    def guardar(self, cuaderno: CuadernoExplotacion, data: dict = None) -> CuadernoExplotacion:
+        # `data` se ignora en local (se serializa al guardar el fichero); el parámetro
+        # existe para mantener la misma firma que SupabaseStorage.
         filepath = self._get_filepath(cuaderno.id)
         if filepath.exists():
             self._crear_backup(cuaderno.id)
@@ -195,8 +197,11 @@ class SupabaseStorage:
         self.client.table(self.table).insert(self._make_row(cuaderno, data)).execute()
         return cuaderno
 
-    def guardar(self, cuaderno: CuadernoExplotacion) -> CuadernoExplotacion:
-        data = cuaderno.to_dict()
+    def guardar(self, cuaderno: CuadernoExplotacion, data: dict = None) -> CuadernoExplotacion:
+        # Acepta `data` precomputado para evitar serializar el cuaderno dos veces
+        # (una para guardar, otra para la caché).
+        if data is None:
+            data = cuaderno.to_dict()
         # Upsert: inserta si no existe, actualiza si existe
         self.client.table(self.table).upsert(self._make_row(cuaderno, data)).execute()
         return cuaderno
@@ -341,8 +346,8 @@ class CuadernoStorage:
     def crear(self, cuaderno):
         return self._backend.crear(cuaderno)
 
-    def guardar(self, cuaderno):
-        return self._backend.guardar(cuaderno)
+    def guardar(self, cuaderno, data=None):
+        return self._backend.guardar(cuaderno, data)
 
     def cargar(self, cuaderno_id):
         return self._backend.cargar(cuaderno_id)
