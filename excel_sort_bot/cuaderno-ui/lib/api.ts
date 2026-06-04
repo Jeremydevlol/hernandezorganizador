@@ -317,9 +317,16 @@ export const api = {
         }),
 
     deleteCatalogoProducto: (productoId: string) =>
-        request<{ success: boolean }>(`/catalog/global/productos/${productoId}`, {
+        request<{ success: boolean }>(`/catalog/global/productos/${encodeURIComponent(productoId)}`, {
             method: "DELETE",
         }),
+
+    /** Elimina un producto del catálogo Y de todos los cuadernos (por nombre+registro+unidad). */
+    deleteProductoCatalogoCompleto: (data: { nombre_comercial: string; numero_registro?: string; unidad?: string }) =>
+        request<{ success: boolean; eliminados_catalogo: number; productos_eliminados: number; cuadernos_tocados: number }>(
+            `/catalog/global/productos/eliminar`,
+            { method: "POST", body: JSON.stringify(data) }
+        ),
 
     /** Publica un producto del cuaderno en el catálogo global (upsert). */
     publicarProductoEnCatalogo: (cuadernoId: string, productoId: string) =>

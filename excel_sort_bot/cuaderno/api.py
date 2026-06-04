@@ -599,6 +599,18 @@ class EliminarMultiplesRequest(BaseModel):
     ids: List[str]
 
 
+class EliminarProductoCatalogoRequest(BaseModel):
+    """
+    Elimina un producto del catálogo global de forma definitiva: lo quita de la
+    tabla del catálogo Y del inventario de todos los cuadernos donde aparezca.
+    Se identifica por su clave (nombre + registro + unidad), no por id, porque
+    los productos derivados de cuadernos no tienen id real en el catálogo.
+    """
+    nombre_comercial: str
+    numero_registro: str = ""
+    unidad: str = "L"
+
+
 class EditarProductoGlobalRequest(BaseModel):
     """
     Edita un producto del stock global (corrige errores) propagando el cambio
@@ -1483,7 +1495,7 @@ async def actualizar_catalogo_producto(producto_id: str, data: CatalogoProductoU
 
 @router.delete("/catalog/global/productos/{producto_id}")
 async def eliminar_catalogo_producto(producto_id: str):
-    """Elimina un producto del catálogo global."""
+    """Elimina un producto del catálogo global (solo de la tabla del catálogo)."""
     try:
         ok = get_catalogo().eliminar(producto_id)
     except Exception as e:
@@ -1492,6 +1504,83 @@ async def eliminar_catalogo_producto(producto_id: str):
         raise HTTPException(status_code=404, detail="Producto no encontrado en catálogo")
     _cache_invalidate(["catalog_global::"])
     return {"success": True, "message": "Producto eliminado del catálogo global"}
+
+
+def _eliminar_producto_catalogo_sync(data: "EliminarProductoCatalogoRequest") -> Dict[str, Any]:
+    """
+    Elimina un producto definitivamente (corre en thread):
+      1. De la tabla del catálogo global (productos_globales) — todas las
+         coincidencias por nombre+registro.
+      2. Del inventario de TODOS los cuadernos donde aparezca (por nombre+registro+unidad).
+    Así el producto deja de reaparecer por la agregación o el sync periódico.
+    """
+    storage = get_storage()
+    catalogo = get_catalogo()
+    n = (data.nombre_comercial or "").strip().lower()
+    r = (data.numero_registro or "").strip().lower()
+    u = (data.unidad or "L").strip().lower()
+
+    eliminados_catalogo = 0
+    try:
+        # Buscar en el catálogo por nombre y borrar las coincidencias por (nombre+registro)
+        for prod in catalogo.listar(q=data.nombre_comercial, limit=200):
+            pn = (prod.get("nombre_comercial") or "").strip().lower()
+            pr = (prod.get("numero_registro") or "").strip().lower()
+            if pn == n and pr == r:
+                try:
+                    if catalogo.eliminar(prod.get("id")):
+                        eliminados_catalogo += 1
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    cuadernos_tocados = 0
+    productos_eliminados = 0
+    for meta in storage.listar():
+        cid = meta.get("id")
+        if not cid:
+            continue
+        cuaderno = storage.cargar(cid)
+        if not cuaderno:
+            continue
+        antes = len(cuaderno.productos)
+        cuaderno.productos = [
+            p for p in cuaderno.productos
+            if not (
+                (p.nombre_comercial or "").strip().lower() == n
+                and (p.numero_registro or "").strip().lower() == r
+                and (p.unidad or "L").strip().lower() == u
+            )
+        ]
+        quitados = antes - len(cuaderno.productos)
+        if quitados > 0:
+            _guardar_cuaderno(storage, cuaderno)
+            cuadernos_tocados += 1
+            productos_eliminados += quitados
+
+    return {
+        "success": True,
+        "eliminados_catalogo": eliminados_catalogo,
+        "productos_eliminados": productos_eliminados,
+        "cuadernos_tocados": cuadernos_tocados,
+    }
+
+
+@router.post("/catalog/global/productos/eliminar")
+async def eliminar_producto_catalogo_completo(data: EliminarProductoCatalogoRequest):
+    """
+    Elimina un producto del catálogo DE VERDAD: de la tabla del catálogo y del
+    inventario de todos los cuadernos donde aparezca. Corre en thread (no bloquea).
+    """
+    if not (data.nombre_comercial or "").strip():
+        raise HTTPException(status_code=400, detail="Falta el nombre del producto a eliminar.")
+    result = await asyncio.to_thread(_eliminar_producto_catalogo_sync, data)
+    _cache_invalidate(["catalog_global::", "stock_global::all", "todos_productos_jsonb::"])
+    total = result.get("eliminados_catalogo", 0) + result.get("productos_eliminados", 0)
+    if total == 0:
+        raise HTTPException(status_code=404, detail="No se encontró el producto en ningún sitio.")
+    return result
 
 
 @router.post("/{cuaderno_id}/productos/{producto_id}/publicar-catalogo")

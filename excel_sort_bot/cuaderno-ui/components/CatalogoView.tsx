@@ -17,6 +17,7 @@ export default function CatalogoView({ cuadernoId, standalone }: CatalogoViewPro
     const [loading, setLoading] = useState(false);
     const [editingId, setEditingId] = useState<string | null>(null);
     const [editFields, setEditFields] = useState<Record<string, any>>({});
+    const [editOriginal, setEditOriginal] = useState<Record<string, any>>({});
     const [showNew, setShowNew] = useState(false);
     const [newProd, setNewProd] = useState({
         nombre_comercial: "", numero_registro: "", materia_activa: "",
@@ -35,19 +36,48 @@ export default function CatalogoView({ cuadernoId, standalone }: CatalogoViewPro
 
     const handleSearch = (e: React.FormEvent) => { e.preventDefault(); load(query); };
 
-    const handleDelete = async (id: string) => {
-        if (!confirm("¿Eliminar este producto del catálogo global?")) return;
-        await api.deleteCatalogoProducto(id);
-        load(query);
+    const handleDelete = async (p: any) => {
+        if (!confirm(`¿Eliminar "${p.nombre_comercial}" del catálogo?\n\nSe quitará del catálogo y del inventario de todos los cuadernos donde aparezca. Esta acción no se puede deshacer.`)) return;
+        try {
+            await api.deleteProductoCatalogoCompleto({
+                nombre_comercial: p.nombre_comercial || "",
+                numero_registro: p.numero_registro || "",
+                unidad: p.unidad || "L",
+            });
+            load(query);
+        } catch (e: any) {
+            alert(e?.message || "No se pudo eliminar el producto.");
+        }
     };
 
-    const handleEdit = (p: any) => { setEditingId(p.id); setEditFields({ ...p }); };
+    const handleEdit = (p: any) => { setEditingId(p.id); setEditFields({ ...p }); setEditOriginal({ ...p }); };
 
     const handleSave = async () => {
         if (!editingId) return;
-        await api.updateCatalogoProducto(editingId, editFields);
-        setEditingId(null);
-        load(query);
+        try {
+            const esDerivadoDeCuaderno = String(editingId).startsWith("cuaderno::");
+            if (!esDerivadoDeCuaderno) {
+                // Producto real del catálogo → actualiza la tabla del catálogo
+                await api.updateCatalogoProducto(editingId, editFields);
+            }
+            // Propagar nombre/registro/unidad a TODOS los cuadernos donde aparezca
+            // (para productos derivados de cuaderno es la única vía; para los reales
+            //  mantiene la coherencia en la agregación).
+            await api.editProductoStockGlobal({
+                match_nombre: editOriginal.nombre_comercial || "",
+                match_registro: editOriginal.numero_registro || "",
+                match_unidad: editOriginal.unidad || "L",
+                nombre_comercial: editFields.nombre_comercial,
+                numero_registro: editFields.numero_registro,
+                unidad: editFields.unidad,
+                materia_activa: editFields.materia_activa,
+                formulacion: editFields.formulacion,
+            }).catch(() => { /* si no está en ningún cuaderno, no pasa nada */ });
+            setEditingId(null);
+            load(query);
+        } catch (e: any) {
+            alert(e?.message || "No se pudo guardar el producto.");
+        }
     };
 
     const handleCreate = async (e: React.FormEvent) => {
@@ -259,7 +289,7 @@ export default function CatalogoView({ cuadernoId, standalone }: CatalogoViewPro
                                                 <button onClick={() => handleEdit(p)} title="Editar" className="p-1.5 rounded hover:bg-blue-500/15 text-gray-400 hover:text-blue-500 transition-colors">
                                                     <Pencil size={13} />
                                                 </button>
-                                                <button onClick={() => handleDelete(p.id)} title="Eliminar del catálogo" className="p-1.5 rounded hover:bg-red-500/15 text-gray-400 hover:text-red-400 transition-colors">
+                                                <button onClick={() => handleDelete(p)} title="Eliminar del catálogo" className="p-1.5 rounded hover:bg-red-500/15 text-gray-400 hover:text-red-400 transition-colors">
                                                     <Trash2 size={13} />
                                                 </button>
                                             </div>

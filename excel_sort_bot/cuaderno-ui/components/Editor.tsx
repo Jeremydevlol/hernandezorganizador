@@ -400,8 +400,10 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                 return cultivo === (tratCultivoFilter || "").trim().toLowerCase();
             });
             const sorted = [...tratamientos].sort((a: any, b: any) => {
-                const aFecha = String(a.fecha_aplicacion || "").toLowerCase();
-                const bFecha = String(b.fecha_aplicacion || "").toLowerCase();
+                // Fecha normalizada a ISO (YYYY-MM-DD) para que el orden cronológico
+                // sea correcto aunque la fecha venga en DD/MM/YYYY (datos importados).
+                const aFecha = fechaFlexibleAISO(String(a.fecha_aplicacion || ""));
+                const bFecha = fechaFlexibleAISO(String(b.fecha_aplicacion || ""));
                 const aCultivo = String(a.cultivo_especie || "").toLowerCase();
                 const bCultivo = String(b.cultivo_especie || "").toLowerCase();
                 const aParcela = String(a.parcela_nombres || a.num_orden_parcelas || "").toLowerCase();
@@ -413,7 +415,9 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                         if (aFecha !== bFecha) return aFecha.localeCompare(bFecha, "es");
                         return (a.id || "").localeCompare(b.id || "");
                     case "cultivo":
+                        // cultivo (A-Z) → parcela → fecha cronológica (antiguo primero)
                         if (aCultivo !== bCultivo) return aCultivo.localeCompare(bCultivo, "es");
+                        if (aParcela !== bParcela) return aParcela.localeCompare(bParcela, "es");
                         if (aFecha !== bFecha) return aFecha.localeCompare(bFecha, "es");
                         return (a.num_orden || 0) - (b.num_orden || 0);
                     case "parcela": {
@@ -422,12 +426,13 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                         if (ao !== bo) return ao - bo;
                         if (aCultivo !== bCultivo) return aCultivo.localeCompare(bCultivo, "es", { sensitivity: "base" });
                         if (aParcela !== bParcela) return aParcela.localeCompare(bParcela, "es");
-                        if (aFecha !== bFecha) return bFecha.localeCompare(aFecha, "es");
+                        // fecha cronológica (antiguo primero) dentro de la misma parcela
+                        if (aFecha !== bFecha) return aFecha.localeCompare(bFecha, "es");
                         return (a.id || "").localeCompare(b.id || "");
                     }
                     case "producto":
                         if (aProd !== bProd) return aProd.localeCompare(bProd, "es");
-                        return bFecha.localeCompare(aFecha, "es");
+                        return aFecha.localeCompare(bFecha, "es");
                     case "fecha_desc":
                     default:
                         if (bFecha !== aFecha) return bFecha.localeCompare(aFecha, "es");
@@ -2061,8 +2066,8 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                 >
                                     <option value="fecha_desc">Orden: Fecha (reciente primero)</option>
                                     <option value="fecha_asc">Orden: Fecha (antiguo primero)</option>
-                                    <option value="cultivo">Orden: cultivo → fecha (antiguo primero)</option>
-                                    <option value="parcela">Orden: cultivo → parcela (Nº orden) → fecha</option>
+                                    <option value="cultivo">Orden: cultivo → parcela → fecha (antiguo primero)</option>
+                                    <option value="parcela">Orden: parcela (Nº orden) → fecha (antiguo primero)</option>
                                     <option value="producto">Orden: por producto</option>
                                 </select>
                                 <div className="w-px h-5 bg-gray-200" />
