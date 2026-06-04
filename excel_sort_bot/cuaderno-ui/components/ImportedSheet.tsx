@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { HojaExcel, CellSelection } from "@/lib/types";
-import { Save, X, FileSpreadsheet, Plus, Trash2, Edit3, Send, Table2, Eraser } from "lucide-react";
+import { Save, X, FileSpreadsheet, Plus, Trash2, Edit3, Send, Table2, Eraser, ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
 
 type SearchMatch = { rowIndex: number; colKey: string | number };
 
@@ -40,11 +40,46 @@ export default function ImportedSheet({ hoja, onSave, onPatchCell, onDelete, onR
     const [buscarValue, setBuscarValue] = useState("");
     const [reemplazarValue, setReemplazarValue] = useState("");
     const [bulkApplying, setBulkApplying] = useState(false);
+    const [sortState, setSortState] = useState<{ col: number; dir: "asc" | "desc" } | null>(null);
 
     useEffect(() => {
         setLocalData(hoja.datos || []);
         setLocalColumnas(hoja.columnas || []);
     }, [hoja.sheet_id, hoja.datos, hoja.columnas]);
+
+    // Ordenar las filas por una columna (A-Z / Z-A). Reordena de verdad y guarda,
+    // para que edición y selección (que usan índices) sigan siendo coherentes.
+    const handleSortByColumn = useCallback(async (colIdx: number) => {
+        const dir: "asc" | "desc" =
+            sortState && sortState.col === colIdx && sortState.dir === "asc" ? "desc" : "asc";
+        const sorted = [...localData].sort((ra: any, rb: any) => {
+            const va = Array.isArray(ra) && colIdx < ra.length ? ra[colIdx] : "";
+            const vb = Array.isArray(rb) && colIdx < rb.length ? rb[colIdx] : "";
+            const sa = String(va ?? "").trim();
+            const sb = String(vb ?? "").trim();
+            // Vacíos siempre al final
+            if (!sa && sb) return 1;
+            if (sa && !sb) return -1;
+            if (!sa && !sb) return 0;
+            // Numérico si ambos son números
+            const na = Number(sa.replace(",", "."));
+            const nb = Number(sb.replace(",", "."));
+            let cmp: number;
+            if (!isNaN(na) && !isNaN(nb)) cmp = na - nb;
+            else cmp = sa.localeCompare(sb, "es", { numeric: true, sensitivity: "base" });
+            return dir === "asc" ? cmp : -cmp;
+        });
+        setSortState({ col: colIdx, dir });
+        setSelectedCells(new Set());
+        setSelectionAnchor(null);
+        setLocalData(sorted);
+        setSaving(true);
+        try {
+            await onSave({ datos: sorted });
+        } finally {
+            setSaving(false);
+        }
+    }, [localData, sortState, onSave]);
 
     // Clear selection when sheet changes
     useEffect(() => {
@@ -550,12 +585,28 @@ export default function ImportedSheet({ hoja, onSave, onPatchCell, onDelete, onR
                                         ) : (
                                             <>
                                                 <span
-                                                    className="truncate block cursor-pointer hover:bg-gray-100 rounded px-1 -mx-1 pr-6"
+                                                    className="truncate block cursor-pointer hover:bg-gray-100 rounded px-1 -mx-1 pr-12"
                                                     title="Doble clic para renombrar"
                                                     onDoubleClick={(e) => { e.stopPropagation(); startRenameCol(idx); }}
                                                 >
                                                     {String(col || `Col ${idx + 1}`)}
                                                 </span>
+                                                {/* Orden A-Z / Z-A por esta columna */}
+                                                <button
+                                                    type="button"
+                                                    onClick={(e) => { e.stopPropagation(); handleSortByColumn(idx); }}
+                                                    disabled={saving}
+                                                    className={`absolute right-6 top-1/2 -translate-y-1/2 p-1 rounded-md transition-opacity hover:bg-blue-500/10 disabled:cursor-not-allowed ${
+                                                        sortState?.col === idx
+                                                            ? "opacity-100 text-blue-500"
+                                                            : "opacity-0 group-hover:opacity-100 text-gray-500 hover:text-blue-400"
+                                                    }`}
+                                                    title="Ordenar A-Z / Z-A por esta columna"
+                                                >
+                                                    {sortState?.col === idx
+                                                        ? (sortState.dir === "asc" ? <ArrowUp size={10} /> : <ArrowDown size={10} />)
+                                                        : <ArrowUpDown size={10} />}
+                                                </button>
                                                 <button
                                                     type="button"
                                                     onClick={(e) => {
