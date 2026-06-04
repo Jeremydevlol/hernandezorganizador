@@ -226,6 +226,16 @@ export const api = {
 
     getCuaderno: (id: string) => request<{ cuaderno: any }>(`/${id}`),
 
+    /** Deshace la última acción del cuaderno (restaura el estado anterior). */
+    undo: (cuadernoId: string) =>
+        request<{ success: boolean; cuaderno: any; puede_deshacer: boolean }>(`/${cuadernoId}/undo`, {
+            method: "POST",
+        }),
+
+    /** Indica si hay acciones que se pueden deshacer. */
+    getUndoStatus: (cuadernoId: string) =>
+        request<{ puede_deshacer: boolean; niveles: number }>(`/${cuadernoId}/undo/status`),
+
     updateHoja: (cuadernoId: string, sheetId: string, data: { datos?: any[][]; columnas?: string[]; nombre?: string }) =>
         request<{ success: boolean; hoja: any }>(`/${cuadernoId}/hojas/${sheetId}`, {
             method: "PUT",

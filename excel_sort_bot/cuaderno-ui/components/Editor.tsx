@@ -31,7 +31,8 @@ import {
     Send,
     Palette,
     AlertTriangle,
-    Package
+    Package,
+    Undo2
 } from "lucide-react";
 import { Cuaderno, SheetType, SHEET_CONFIG, HistoricoRow, HojaExcel, CellSelection } from "@/lib/types";
 import { fechaFlexibleAISO, formatDateTableES } from "@/lib/dateSpanish";
@@ -127,6 +128,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
     const [cultivoDropdownOpen, setCultivoDropdownOpen] = useState(false);
     const cultivoDropdownRef = useRef<HTMLDivElement | null>(null);
     const [colSort, setColSort] = useState<{ key: string; dir: "asc" | "desc" } | null>(null);
+    const [undoing, setUndoing] = useState(false);
     const [parcelaTratamientoFilter, setParcelaTratamientoFilter] = useState<"" | "con_tratamiento" | "sin_tratamiento">("");
     const [tratCultivoFilter, setTratCultivoFilter] = useState<string>("");
     const [parcelSortMode, setParcelSortMode] = useState<ParcelSortMode>("num_orden");
@@ -1111,6 +1113,21 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
         setSelectionAnchor(null);
     }, []);
 
+    // Atajo ⌘Z / Ctrl+Z → deshacer última acción (si no se está editando texto)
+    useEffect(() => {
+        const onKey = (e: KeyboardEvent) => {
+            if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "z" || e.shiftKey) return;
+            const tgt = e.target as HTMLElement;
+            const tag = (tgt?.tagName || "").toUpperCase();
+            if (tag === "INPUT" || tag === "TEXTAREA" || tgt?.isContentEditable) return;
+            e.preventDefault();
+            handleUndo();
+        };
+        document.addEventListener("keydown", onKey);
+        return () => document.removeEventListener("keydown", onKey);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [cuaderno.id, undoing]);
+
     useEffect(() => {
         if (!cultivoDropdownOpen) return;
         const handler = (e: MouseEvent) => {
@@ -1563,6 +1580,24 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
         }
     };
 
+    const handleUndo = async () => {
+        if (undoing) return;
+        setUndoing(true);
+        try {
+            await api.undo(cuaderno.id);
+            onRefresh();
+        } catch (e: any) {
+            const msg = String(e?.message || e || "");
+            if (msg.includes("deshacer") || msg.includes("400")) {
+                alert("No hay ninguna acción reciente que deshacer.");
+            } else {
+                alert("No se pudo deshacer la última acción.");
+            }
+        } finally {
+            setUndoing(false);
+        }
+    };
+
     const handleDeleteFertilizacion = async (id: string) => {
         if (!confirm("¿Eliminar este registro de fertilización?")) return;
         try {
@@ -1959,6 +1994,17 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2 electron-no-drag shrink-0 ml-auto justify-end">
+                        {/* Deshacer última acción (⌘Z) */}
+                        <button
+                            type="button"
+                            onClick={handleUndo}
+                            disabled={undoing}
+                            title="Deshacer la última acción (⌘Z / Ctrl+Z)"
+                            className="flex items-center gap-1.5 rounded-md border border-gray-300 bg-gray-100 hover:bg-gray-200 px-2 py-1.5 text-xs text-gray-700 transition-colors disabled:opacity-50"
+                        >
+                            <Undo2 size={14} className={undoing ? "animate-pulse" : ""} />
+                            <span className="hidden sm:inline">{undoing ? "Deshaciendo…" : "Deshacer"}</span>
+                        </button>
                         {/* Filtro por cultivo y tratamiento - solo en parcelas */}
                         {effectiveSheet === "parcelas" && (
                             <div className="flex flex-wrap items-center gap-1.5">

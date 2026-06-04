@@ -145,9 +145,39 @@ def _invalidar_cuaderno(cuaderno_id: str) -> None:
     _cache_invalidate([f"cuaderno::{cuaderno_id}", "cuadernos_list::"])
 
 
+# ── DESHACER (undo) ─────────────────────────────────────────────────────────
+# Pila por cuaderno con los estados ANTERIORES (data dict). Antes de cada
+# escritura capturamos el estado actual desde la caché (sin coste extra), para
+# poder restaurarlo. Cubre el caso normal: el usuario abre el cuaderno (GET
+# calienta la caché) y luego edita.
+_UNDO_STACK: Dict[str, List[dict]] = {}
+_UNDO_MAX = 12               # niveles de deshacer por cuaderno
+_UNDO_MAX_CUADERNOS = 40     # límite de cuadernos con historial (evita fuga de RAM)
+
+
+def _capturar_undo(cuaderno_id: str) -> None:
+    """Guarda en la pila de undo el estado actual del cuaderno (desde la caché)."""
+    cached = _cache_get(f"cuaderno::{cuaderno_id}")
+    if not cached or not isinstance(cached, dict):
+        return
+    data = cached.get("cuaderno")
+    if not isinstance(data, dict):
+        return
+    stack = _UNDO_STACK.setdefault(cuaderno_id, [])
+    stack.append(data)
+    if len(stack) > _UNDO_MAX:
+        del stack[0]
+    # Limitar nº de cuadernos con historial (descarta los más antiguos)
+    if len(_UNDO_STACK) > _UNDO_MAX_CUADERNOS:
+        for k in list(_UNDO_STACK.keys())[: len(_UNDO_STACK) - _UNDO_MAX_CUADERNOS]:
+            if k != cuaderno_id:
+                _UNDO_STACK.pop(k, None)
+
+
 def _guardar_cuaderno(storage, cuaderno) -> None:
     """Guarda y limpia caché automáticamente. Usar en lugar de storage.guardar()."""
-    _truncar_hojas_si_necesario(cuaderno)  # Siempre saneamos antes de guardar
+    _capturar_undo(cuaderno.id)              # captura el estado previo (desde caché)
+    _truncar_hojas_si_necesario(cuaderno)    # Siempre saneamos antes de guardar
     storage.guardar(cuaderno)
     _invalidar_cuaderno(cuaderno.id)
 
@@ -197,6 +227,7 @@ async def _guardar_y_cachear(storage, cuaderno, cache_key: str) -> None:
     Esto corrige el bug de "la modificación no se ve" (la caché quedaba sin
     invalidar) y reduce a la mitad el coste de CPU por escritura.
     """
+    _capturar_undo(cuaderno.id)  # captura el estado previo (desde caché) para deshacer
     _truncar_hojas_si_necesario(cuaderno)
     data = cuaderno.to_dict()  # ← serialización única
     # Guardar en Supabase pasando el dict ya calculado
@@ -814,7 +845,42 @@ async def eliminar_cuaderno(cuaderno_id: str):
         raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
 
     _invalidar_cuaderno(cuaderno_id)
+    _UNDO_STACK.pop(cuaderno_id, None)  # limpiar historial de undo del cuaderno borrado
     return {"success": True, "message": "Cuaderno eliminado (backup creado)"}
+
+
+@router.get("/{cuaderno_id}/undo/status")
+async def estado_deshacer(cuaderno_id: str):
+    """Indica si hay acciones que se pueden deshacer en este cuaderno."""
+    niveles = len(_UNDO_STACK.get(cuaderno_id) or [])
+    return {"puede_deshacer": niveles > 0, "niveles": niveles}
+
+
+@router.post("/{cuaderno_id}/undo")
+async def deshacer_ultima_accion(cuaderno_id: str):
+    """
+    Deshace la última acción: restaura el estado anterior del cuaderno guardado
+    en la pila de undo. Se puede llamar varias veces (deshacer en cascada).
+    """
+    stack = _UNDO_STACK.get(cuaderno_id) or []
+    if not stack:
+        raise HTTPException(status_code=400, detail="No hay ninguna acción que deshacer.")
+    snapshot = stack.pop()
+    storage = get_storage()
+    try:
+        cuaderno = CuadernoExplotacion.from_dict(snapshot)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"No se pudo restaurar el estado anterior: {e}")
+    # Guardar el estado restaurado SIN volver a capturar undo (evita bucles)
+    await asyncio.to_thread(storage.guardar, cuaderno, snapshot)
+    _cache_set(f"cuaderno::{cuaderno_id}", {"cuaderno": snapshot}, ttl_sec=120)
+    _cache_invalidate(["cuadernos_list::", "catalog_global::", "stock_global::all", "todos_productos_jsonb::"])
+    return {
+        "success": True,
+        "cuaderno": snapshot,
+        "puede_deshacer": len(stack) > 0,
+        "message": "Última acción deshecha",
+    }
 
 
 # ============================================
