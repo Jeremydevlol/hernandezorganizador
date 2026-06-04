@@ -344,10 +344,16 @@ class CuadernoStorage:
             self._backend = LocalStorage(base_dir)
 
     def crear(self, cuaderno):
-        return self._backend.crear(cuaderno)
+        result = self._backend.crear(cuaderno)
+        _ejecutar_guardar_hook(getattr(cuaderno, "id", None))
+        return result
 
     def guardar(self, cuaderno, data=None):
-        return self._backend.guardar(cuaderno, data)
+        result = self._backend.guardar(cuaderno, data)
+        # Hook: invalida la caché de la API tras CUALQUIER guardado, sin que cada
+        # endpoint tenga que acordarse de hacerlo (evita servir datos viejos).
+        _ejecutar_guardar_hook(getattr(cuaderno, "id", None))
+        return result
 
     def cargar(self, cuaderno_id):
         return self._backend.cargar(cuaderno_id)
@@ -366,6 +372,28 @@ class CuadernoStorage:
 
     def listar_todos_productos(self) -> List[Dict]:
         return self._backend.listar_todos_productos()
+
+
+# ============================================
+# HOOK POST-GUARDADO (invalidación de caché)
+# ============================================
+# La API registra aquí una función que se llama tras cada guardar/crear con el
+# id del cuaderno, para invalidar su caché en memoria automáticamente.
+
+_guardar_hook = None  # callable(cuaderno_id: str) | None
+
+
+def set_guardar_hook(fn) -> None:
+    global _guardar_hook
+    _guardar_hook = fn
+
+
+def _ejecutar_guardar_hook(cuaderno_id) -> None:
+    if _guardar_hook and cuaderno_id:
+        try:
+            _guardar_hook(cuaderno_id)
+        except Exception:
+            pass
 
 
 # ============================================

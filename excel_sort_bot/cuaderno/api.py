@@ -145,6 +145,16 @@ def _invalidar_cuaderno(cuaderno_id: str) -> None:
     _cache_invalidate([f"cuaderno::{cuaderno_id}", "cuadernos_list::"])
 
 
+# Registrar el hook: TODO storage.guardar()/crear() invalida la caché del cuaderno
+# automáticamente. Así ningún endpoint puede dejar datos viejos en caché por
+# olvidar invalidar (era la causa de "la fertilización no aparece tras crearla").
+try:
+    from .storage import set_guardar_hook as _set_guardar_hook
+    _set_guardar_hook(_invalidar_cuaderno)
+except Exception as _e:
+    print(f"[api] No se pudo registrar el hook de guardado: {_e}")
+
+
 # ── DESHACER (undo) ─────────────────────────────────────────────────────────
 # Pila por cuaderno con los estados ANTERIORES (data dict). Antes de cada
 # escritura capturamos el estado actual desde la caché (sin coste extra), para
@@ -906,7 +916,7 @@ async def actualizar_hoja_importada(cuaderno_id: str, sheet_id: str, data: HojaU
     )
     if not hoja:
         raise HTTPException(status_code=404, detail="Hoja no encontrada")
-    storage.guardar(cuaderno)
+    _guardar_cuaderno(storage, cuaderno)
     return {"success": True, "hoja": hoja.to_dict(), "message": "Hoja actualizada"}
 
 
@@ -919,7 +929,7 @@ async def eliminar_hoja_importada(cuaderno_id: str, sheet_id: str):
         raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
     if not cuaderno.eliminar_hoja(sheet_id):
         raise HTTPException(status_code=404, detail="Hoja no encontrada")
-    storage.guardar(cuaderno)
+    _guardar_cuaderno(storage, cuaderno)
     return {"success": True, "message": "Hoja eliminada"}
 
 
@@ -939,7 +949,7 @@ async def renombrar_hoja(cuaderno_id: str, sheet_id: str, data: RenameSheet):
         raise HTTPException(status_code=404, detail="Hoja no encontrada")
     hoja.nombre = data.nombre.strip()
     cuaderno._actualizar_modificacion()
-    storage.guardar(cuaderno)
+    _guardar_cuaderno(storage, cuaderno)
     return {"success": True, "message": f"Hoja renombrada a '{hoja.nombre}'", "nombre": hoja.nombre}
 
 
@@ -1720,7 +1730,7 @@ async def importar_desde_catalogo(cuaderno_id: str, data: ImportarDesdeCatalogoR
             notas=cat.get("notas", ""),
         )
         cuaderno.agregar_producto(producto)
-        storage.guardar(cuaderno)
+        _guardar_cuaderno(storage, cuaderno)
         return {
             "success": True,
             "producto": producto.to_dict(),
@@ -2045,7 +2055,7 @@ async def crear_fertilizacion(cuaderno_id: str, data: FertilizacionCreate):
         observaciones=data.observaciones,
     )
     cuaderno.agregar_fertilizacion(fertilizacion)
-    storage.guardar(cuaderno)
+    _guardar_cuaderno(storage, cuaderno)
     return {"fertilizacion": fertilizacion.to_dict()}
 
 
@@ -2097,7 +2107,7 @@ async def crear_cosecha(cuaderno_id: str, data: CosechaCreate):
         cliente_rgseaa=data.cliente_rgseaa,
     )
     cuaderno.agregar_cosecha(cosecha)
-    storage.guardar(cuaderno)
+    _guardar_cuaderno(storage, cuaderno)
     return {"cosecha": cosecha.to_dict()}
 
 
@@ -2164,7 +2174,7 @@ async def crear_asesoramiento(cuaderno_id: str, data: AsesoramientoCreate):
         cuaderno.agregar_asesoramiento(asesoramiento)
         asesoramientos_creados.append(asesoramiento)
 
-    storage.guardar(cuaderno)
+    _guardar_cuaderno(storage, cuaderno)
     first = asesoramientos_creados[0] if asesoramientos_creados else None
     return {
         "asesoramiento": first.to_dict() if first else None,
@@ -2183,7 +2193,7 @@ async def eliminar_asesoramiento(cuaderno_id: str, asesoramiento_id: str):
     ok = cuaderno.eliminar_asesoramiento(asesoramiento_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Asesoramiento no encontrado")
-    storage.guardar(cuaderno)
+    _guardar_cuaderno(storage, cuaderno)
     return {"success": True}
 
 
@@ -2543,7 +2553,7 @@ async def crear_stock_entrada(cuaderno_id: str, data: StockEntradaCreate):
         notas=data.notas,
     )
     cuaderno.agregar_stock_entrada(entrada)
-    storage.guardar(cuaderno)
+    _guardar_cuaderno(storage, cuaderno)
     _cache_invalidate(["stock_global::all"])
     await _stock_ws_hub.publish_stock_changed(cuaderno_id)
     return {"success": True, "entrada": entrada.to_dict(), "stock_actual": prod.cantidad_adquirida}
