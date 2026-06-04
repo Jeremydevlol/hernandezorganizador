@@ -74,6 +74,36 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
         return Array.from(vals).sort();
     }, [cuaderno.tratamientos]);
 
+    // Mapa producto → última problemática usada con él (inferida del historial).
+    // Permite autocompletar la problemática al elegir un producto que ya se usó antes.
+    const problematicaPorProducto = useMemo(() => {
+        const map = new Map<string, string>();
+        const trats = [...(cuaderno.tratamientos || [])].sort((a: any, b: any) => {
+            // más reciente primero (ISO o lo que haya; suficiente para preferir el último)
+            const fa = String(a.fecha_aplicacion || "");
+            const fb = String(b.fecha_aplicacion || "");
+            return fb.localeCompare(fa);
+        });
+        for (const t of trats) {
+            const probTrat = (t.problema_fitosanitario || t.plaga_enfermedad || "").trim();
+            for (const pr of (t.productos || []) as any[]) {
+                const prob = (pr.problema_fitosanitario || pr.plaga_enfermedad || probTrat || "").trim();
+                if (!prob) continue;
+                if (pr.producto_id && !map.has(pr.producto_id)) map.set(pr.producto_id, prob);
+                const nom = (pr.nombre_comercial || "").trim().toLowerCase();
+                if (nom && !map.has("n:" + nom)) map.set("n:" + nom, prob);
+            }
+        }
+        return map;
+    }, [cuaderno.tratamientos]);
+
+    const problematicaDeProducto = (id?: string, nombre?: string): string => {
+        if (id && problematicaPorProducto.has(id)) return problematicaPorProducto.get(id) || "";
+        const nom = (nombre || "").trim().toLowerCase();
+        if (nom && problematicaPorProducto.has("n:" + nom)) return problematicaPorProducto.get("n:" + nom) || "";
+        return "";
+    };
+
     // Catálogo global: cache único de resultados de la última búsqueda que se
     // reusa para primario/secundarios/fertilizante (la query es la misma).
     const [catalogoQuery, setCatalogoQuery] = useState("");
@@ -911,7 +941,7 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                                             nombre_comercial: p.nombre_comercial,
                                                             numero_registro: p.numero_registro,
                                                             numero_lote: p.numero_lote,
-                                                            plaga_enfermedad: (p as any).problema_fitosanitario || (p as any).plaga_enfermedad || (prev as any).plaga_enfermedad || "",
+                                                            plaga_enfermedad: (p as any).problema_fitosanitario || (p as any).plaga_enfermedad || problematicaDeProducto(p.id, p.nombre_comercial) || (prev as any).plaga_enfermedad || "",
                                                         }));
                                                         setProductDropdownOpen(false);
                                                     }}
@@ -951,7 +981,7 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                                                 nombre_comercial: imported.nombre_comercial,
                                                                 numero_registro: imported.numero_registro,
                                                                 numero_lote: imported.numero_lote,
-                                                                plaga_enfermedad: (imported as any).problema_fitosanitario || (imported as any).plaga_enfermedad || (prev as any).plaga_enfermedad || "",
+                                                                plaga_enfermedad: (imported as any).problema_fitosanitario || (imported as any).plaga_enfermedad || problematicaDeProducto(imported.id, imported.nombre_comercial) || (prev as any).plaga_enfermedad || "",
                                                             }));
                                                             setProductDropdownOpen(false);
                                                         }}
