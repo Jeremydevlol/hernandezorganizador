@@ -301,6 +301,37 @@ Responde SOLO con el JSON, sin markdown, sin explicaciones."""
         data_rows = rows[start_idx:]
         max_col = max(columns_cfg.values()) if columns_cfg else 0
 
+        # Columnas EXTRA no contempladas en el diccionario (p. ej. "Parcela
+        # ubicada en zona nitratos" en 2.1 DATOS PARCELAS, que está más allá de
+        # secano_regadio): se detectan leyendo las cabeceras REALES de la hoja
+        # y se añaden al final con su texto original, para no perder esos datos.
+        header_zone = rows[:start_idx]
+        ncols = max((len(r) for r in rows), default=0)
+        extras_added = 0
+        for col_1b in range(max_col + 1, ncols + 1):
+            if extras_added >= 12:  # tope de seguridad
+                break
+            idx0 = col_1b - 1
+            label = None
+            # Buscar el texto de cabecera más cercano a los datos (de abajo arriba)
+            for r in reversed(header_zone):
+                v = r[idx0] if idx0 < len(r) else None
+                if v is not None and str(v).strip():
+                    label = " ".join(str(v).split())
+                    break
+            if not label:
+                continue
+            # Solo añadir si la columna tiene algún dato real
+            tiene_datos = any(
+                idx0 < len(r) and r[idx0] is not None and str(r[idx0]).strip()
+                for r in data_rows
+            )
+            if not tiene_datos:
+                continue
+            headers.append(label)
+            sorted_cols.append((label, col_1b))
+            extras_added += 1
+
         # Extraer valores de las columnas correctas
         datos = []
         for row in data_rows:

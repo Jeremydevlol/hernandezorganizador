@@ -221,6 +221,27 @@ async def _guardar_cuaderno_async(storage, cuaderno) -> None:
     await asyncio.to_thread(_guardar_cuaderno, storage, cuaderno)
 
 
+async def _cargar_para_escritura(storage, cuaderno_id: str):
+    """
+    Carga un cuaderno para EDITARLO, usando la caché caliente si existe.
+
+    Reconstruir el objeto desde el dict cacheado (~ms de CPU) evita descargar
+    el JSONB completo de Supabase (varios MB y cientos de ms) en cada edición
+    de celda. Es coherente porque el servidor corre con UN solo worker y TODAS
+    las escrituras refrescan/invalidan la caché (hook en storage.guardar +
+    _guardar_y_cachear). Si no hay caché, cae a la carga async normal.
+    """
+    cached = _cache_get(f"cuaderno::{cuaderno_id}")
+    if cached is not None and isinstance(cached, dict):
+        data = cached.get("cuaderno")
+        if isinstance(data, dict) and data.get("id"):
+            try:
+                return CuadernoExplotacion.from_dict(data)
+            except Exception:
+                pass  # dict corrupto → carga normal desde BD
+    return await _cargar_cuaderno_async(storage, cuaderno_id)
+
+
 # ── Plan Pro: podemos cachear cuadernos más grandes (4 GB RAM disponibles) ──
 # Subimos el umbral de cacheabilidad de 400 → 5 000 filas de hojas importadas.
 _MAX_CACHE_HOJA_ROWS = 5_000  # sobrescribe el valor definido arriba (400)
@@ -961,7 +982,9 @@ async def actualizar_celda(cuaderno_id: str, data: CellPatch):
     - Hojas importadas: sheet_id = uuid de la hoja, row = índice fila, column = índice columna.
     """
     storage = get_storage()
-    cuaderno = storage.cargar(cuaderno_id)
+    # Caché-first + async: una edición de celda ya no descarga MB de Supabase
+    # ni congela el event loop (era la causa de "editar manualmente es muy lento").
+    cuaderno = await _cargar_para_escritura(storage, cuaderno_id)
     if not cuaderno:
         raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
     sheet_id = data.sheet_id
@@ -1024,7 +1047,8 @@ async def actualizar_celda(cuaderno_id: str, data: CellPatch):
         _normalizar_parcelas_cultivo_variante(cuaderno)
         _asegurar_asesoramiento_automatico(cuaderno)
 
-    _guardar_cuaderno(storage, cuaderno)
+    # Guardado async (no bloquea) + refresca la caché para la siguiente edición
+    await _guardar_y_cachear(storage, cuaderno, f"cuaderno::{cuaderno_id}")
     return {"success": True, "timestamp": datetime.now().isoformat()}
 
 
@@ -1038,7 +1062,7 @@ async def actualizar_celdas_batch(cuaderno_id: str, data: CellPatchBatch):
         return {"success": True, "updated": 0, "timestamp": datetime.now().isoformat()}
 
     storage = get_storage()
-    cuaderno = storage.cargar(cuaderno_id)
+    cuaderno = await _cargar_para_escritura(storage, cuaderno_id)
     if not cuaderno:
         raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
 
@@ -1107,7 +1131,7 @@ async def actualizar_celdas_batch(cuaderno_id: str, data: CellPatchBatch):
         _normalizar_parcelas_cultivo_variante(cuaderno)
         _asegurar_asesoramiento_automatico(cuaderno)
 
-    _guardar_cuaderno(storage, cuaderno)
+    await _guardar_y_cachear(storage, cuaderno, f"cuaderno::{cuaderno_id}")
     return {"success": True, "updated": updated, "timestamp": datetime.now().isoformat()}
 
 
@@ -4068,6 +4092,10 @@ _PARCELAS_COLUMN_MAP = {
     "Secano Regadio": "secano_regadio",
     "Parcela Ubicada En Zonas Vulnerables": "zona_vulnerables_raw",
     "Parcela ubicada en zonas vulnerables": "zona_vulnerables_raw",
+    "Parcela Ubicada En Zona Nitratos": "zona_vulnerables_raw",
+    "Parcela ubicada en zona nitratos": "zona_vulnerables_raw",
+    "Parcela Ubicada En Zona De Nitratos": "zona_vulnerables_raw",
+    "Parcela ubicada en zona de nitratos": "zona_vulnerables_raw",
 }
 
 _TRATAMIENTOS_COLUMN_MAP = {
@@ -4250,6 +4278,25 @@ _PARCELAS_RAW_ALIASES = {
     "secano/\nregadío": "secano_regadio",
     "parcela ubicada en zonas vulnerables": "zona_vulnerables_raw",
     "parcela ubicada en zonas vulnerables (s/n)": "zona_vulnerables_raw",
+    # Columnas extra del Excel oficial (detectadas por cabecera real)
+    "cultivo principal/secundario": "cultivo_tipo",
+    "cultivo principal/ secundario": "cultivo_tipo",
+    "fecha inicio cultivo": "fecha_inicio_cultivo",
+    "fecha fin cultivo": "fecha_fin_cultivo",
+    "aire libre o protegido": "aire_libre_protegido",
+    "aire libre o protegido (3)": "aire_libre_protegido",
+    "sistema de asesoramiento": "sistema_asesoramiento",
+    # Variantes con "nitratos" (el Excel oficial SIGPAC usa este nombre)
+    "parcela ubicada en zona nitratos": "zona_vulnerables_raw",
+    "parcela ubicada en zona de nitratos": "zona_vulnerables_raw",
+    "parcela ubicada en zona nitratos (s/n)": "zona_vulnerables_raw",
+    "parcela ubicada en zona de nitratos (s/n)": "zona_vulnerables_raw",
+    "parcela ubicada en zona vulnerable a nitratos": "zona_vulnerables_raw",
+    "parcela ubicada en zona vulnerable nitratos": "zona_vulnerables_raw",
+    "zona nitratos": "zona_vulnerables_raw",
+    "zona de nitratos": "zona_vulnerables_raw",
+    "zona vulnerable": "zona_vulnerables_raw",
+    "zonas vulnerables": "zona_vulnerables_raw",
 }
 
 
@@ -4266,6 +4313,10 @@ def _row_to_dict(columnas: List[str], row: list, col_map: dict, raw_aliases: dic
                 field = "dosis"
             elif not field and "dose" in norm:
                 field = "dosis"
+            # Fallback flexible para la columna de zona vulnerable / nitratos:
+            # cualquier cabecera que mencione "nitrato" o "vulnerable" cuenta.
+            elif not field and ("nitrato" in norm or "vulnerable" in norm):
+                field = "zona_vulnerables_raw"
         if field and i < len(row):
             val = row[i]
             if val is not None and str(val).strip():
@@ -4363,6 +4414,11 @@ def _extraer_parcelas_directas(hojas: List[dict]) -> List[Parcela]:
                 cultivo=especie,
                 ecoregimen=str(d.get("ecoregimen", "")).strip(),
                 secano_regadio=str(d.get("secano_regadio", "")).strip(),
+                cultivo_tipo=str(d.get("cultivo_tipo", "")).strip(),
+                fecha_inicio_cultivo=str(d.get("fecha_inicio_cultivo", "")).strip(),
+                fecha_fin_cultivo=str(d.get("fecha_fin_cultivo", "")).strip(),
+                aire_libre_protegido=str(d.get("aire_libre_protegido", "")).strip(),
+                sistema_asesoramiento=str(d.get("sistema_asesoramiento", "")).strip(),
                 zona_nitratos=_parse_si_no_zona(d.get("zona_vulnerables_raw"))
                 if "zona_vulnerables_raw" in d
                 else False,

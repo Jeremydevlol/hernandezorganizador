@@ -114,6 +114,10 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
     const [editValue, setEditValue] = useState("");
     const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
     const [saving, setSaving] = useState(false);
+    // Ediciones optimistas: la celda muestra el valor nuevo al instante y el
+    // refresh completo del cuaderno se difiere (evita recargar MB por celda).
+    const [pendingEdits, setPendingEdits] = useState<Map<string, any>>(new Map());
+    const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const [searchOpen, setSearchOpen] = useState(false);
     const [searchQuery, setSearchQuery] = useState("");
     const [searchActiveIndex, setSearchActiveIndex] = useState(0);
@@ -553,6 +557,42 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
         });
         return sorted;
     }, [data, effectiveSheet, cultivoFilters, parcelaTratamientoFilter, parcelaIdsConTratamiento, parcelSortMode, tratCultivoFilter, tratSortMode, fertSortMode, minNumOrdenTratamiento, colSort]);
+
+    // ---- Ediciones optimistas sobre displayData ----
+    // Cuando llega el cuaderno fresco (refresh), las ediciones pendientes ya
+    // están incluidas en los datos → se descartan.
+    useEffect(() => {
+        setPendingEdits(new Map());
+    }, [cuaderno]);
+
+    useEffect(() => () => {
+        if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+    }, []);
+
+    /** Refresh diferido: agrupa varias ediciones seguidas en UNA sola recarga. */
+    const scheduleRefresh = useCallback(() => {
+        if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = setTimeout(() => {
+            refreshTimerRef.current = null;
+            onRefresh();
+        }, 1200);
+    }, [onRefresh]);
+
+    const renderData = useMemo(() => {
+        if (pendingEdits.size === 0) return displayData;
+        return (displayData as any[]).map((row: any) => {
+            if (!row?.id) return row;
+            let out = row;
+            for (const [key, val] of pendingEdits) {
+                const [sheet, rowId, colKey] = key.split("|");
+                if (sheet === effectiveSheet && rowId === String(row.id)) {
+                    if (out === row) out = { ...row };
+                    out[colKey] = val;
+                }
+            }
+            return out;
+        });
+    }, [displayData, pendingEdits, effectiveSheet]);
 
     // ---- Orden para exportar (parcelas con el orden actual del editor) ----
     const sortedParcelasForExport = useMemo(() => {
@@ -1537,13 +1577,28 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
             if (n !== null) valueToSend = n;
         }
         const payload = { sheet_id: effectiveSheet, row: rowId, column: colKey, value: valueToSend };
+        // Optimista: la celda muestra el valor nuevo YA, sin esperar al servidor
+        // ni recargar el cuaderno entero (eso bloqueaba la edición manual).
+        const editKey = `${effectiveSheet}|${rowId}|${colKey}`;
+        setPendingEdits(prev => {
+            const next = new Map(prev);
+            next.set(editKey, valueToSend);
+            return next;
+        });
         setSaving(true);
         try {
             await api.patchCell(cuaderno.id, payload);
             setLastSavedAt(Date.now());
-            onRefresh();
+            scheduleRefresh();
         } catch (e) {
             console.error("Error guardando celda:", e);
+            // Revertir la edición optimista si el guardado falló
+            setPendingEdits(prev => {
+                const next = new Map(prev);
+                next.delete(editKey);
+                return next;
+            });
+            alert("No se pudo guardar el cambio. Inténtalo de nuevo.");
         } finally {
             setSaving(false);
         }
@@ -2688,7 +2743,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                     </td>
                                 </tr>
                             ) : (
-                                displayData.map((row: any, idx: number) => {
+                                (renderData as any[]).map((row: any, idx: number) => {
                                     const isHighlighted =
                                         highlight &&
                                         highlight.sheet === effectiveSheet &&
