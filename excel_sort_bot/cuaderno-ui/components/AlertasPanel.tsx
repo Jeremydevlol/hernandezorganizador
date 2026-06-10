@@ -32,6 +32,7 @@ const ACCION_LABEL: Record<string, string> = {
     crear_asesoramiento: "Registrar asesoramiento",
     ver_asesoramiento: "Ver asesoramiento",
     crear_tratamiento: "Nuevo tratamiento",
+    reimportar_excel: "Ver parcelas (columna Zona nitratos)",
 };
 
 const ACCION_SHEET: Record<string, SheetType> = {
@@ -39,6 +40,7 @@ const ACCION_SHEET: Record<string, SheetType> = {
     crear_asesoramiento: "asesoramiento",
     ver_asesoramiento: "asesoramiento",
     crear_tratamiento: "tratamientos",
+    reimportar_excel: "parcelas",
 };
 
 export default function AlertasPanel({ cuaderno, onNavigate, onClose }: AlertasPanelProps) {

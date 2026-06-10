@@ -2652,6 +2652,32 @@ async def get_alertas(cuaderno_id: str):
 
     CULTIVOS_ESPECIALES = ["PATATA", "REMOLACHA"]
 
+    # 0. Importación antigua: la hoja "2.1. DATOS PARCELAS" se importó con una
+    # versión que descartaba la columna "Parcela ubicada en zona nitratos".
+    # Si ninguna parcela tiene el dato y la hoja importada no trae la columna,
+    # avisar con instrucciones claras de cómo arreglarlo.
+    alguna_con_nitratos = any(getattr(p, "zona_nitratos", False) for p in cuaderno.parcelas)
+    if not alguna_con_nitratos:
+        for h in (cuaderno.hojas_originales or []):
+            if "DATOS PARCELAS" not in (h.nombre or "").upper():
+                continue
+            cols_norm = [str(c or "").lower() for c in (h.columnas or [])]
+            tiene_col_nitratos = any("nitrato" in c or "vulnerable" in c for c in cols_norm)
+            if not tiene_col_nitratos:
+                alertas.append({
+                    "tipo": "columna_nitratos_no_importada",
+                    "severidad": "alta",
+                    "mensaje": (
+                        "Zona de nitratos sin datos: este cuaderno se importó con una versión "
+                        "que no capturaba la columna «Parcela ubicada en zona nitratos». "
+                        "Para corregirlo: vuelve a subir el Excel original a ESTE cuaderno "
+                        "(botón Importar) y se actualizarán las parcelas automáticamente; "
+                        "o marca la casilla «Zona nitratos» a mano en las parcelas afectadas."
+                    ),
+                    "accion": "reimportar_excel",
+                })
+            break  # solo evaluar la primera hoja de parcelas
+
     # 1. Stock bajo o agotado
     for p in cuaderno.productos:
         if p.cantidad_adquirida <= 0:
@@ -4815,17 +4841,16 @@ async def importar_datos_archivo(cuaderno_id: str, file: UploadFile = File(...))
                 tipo="custom",
                 origen="importado",
             )
-            # Reemplazar inf.gral 1/2 existentes (nueva extracción ordenada)
+            # Si ya existe una hoja con el MISMO nombre, REEMPLAZARLA (re-importación):
+            # así una re-importación refresca las hojas (p. ej. para capturar la
+            # columna "zona nitratos" que versiones antiguas descartaban) en vez
+            # de acumular duplicados.
             nombre_norm = nombre.lower().strip()
-            if nombre_norm in {"inf.gral 1", "inf.gral 2"}:
-                for i, h in enumerate(cuaderno.hojas_originales):
-                    if (h.nombre or "").strip().lower() == nombre_norm:
-                        cuaderno.hojas_originales[i] = hoja_original
-                        hojas_añadidas += 1
-                        break
-                else:
-                    cuaderno.hojas_originales.append(hoja_original)
+            for i, h in enumerate(cuaderno.hojas_originales):
+                if (h.nombre or "").strip().lower() == nombre_norm:
+                    cuaderno.hojas_originales[i] = hoja_original
                     hojas_añadidas += 1
+                    break
             else:
                 cuaderno.hojas_originales.append(hoja_original)
                 hojas_añadidas += 1
@@ -4833,12 +4858,30 @@ async def importar_datos_archivo(cuaderno_id: str, file: UploadFile = File(...))
         # Importar parcelas: mapeo directo primero, GPT como fallback. Evitar duplicados.
         hojas_procesadas = result.get("hojas", [])
         parcelas_directas = _extraer_parcelas_directas(hojas_procesadas)
-        claves_existentes = {_parcela_clave_importacion(p) for p in cuaderno.parcelas}
+        existentes_por_clave = {_parcela_clave_importacion(p): p for p in cuaderno.parcelas}
+        claves_existentes = set(existentes_por_clave.keys())
         nombres_existentes = {(getattr(p, "nombre", "") or "").strip() for p in cuaderno.parcelas}
+        parcelas_actualizadas = 0
         if parcelas_directas:
             for p in parcelas_directas:
                 clave = _parcela_clave_importacion(p)
                 if clave in claves_existentes:
+                    # Re-importación: actualizar campos agronómicos del archivo
+                    # (zona nitratos, asesoramiento, fechas...) en la parcela
+                    # existente SIN tocar lo editado por el usuario (nombre, color).
+                    existente = existentes_por_clave[clave]
+                    cambiado = False
+                    if existente.zona_nitratos != p.zona_nitratos:
+                        existente.zona_nitratos = p.zona_nitratos
+                        cambiado = True
+                    for campo in ("sistema_asesoramiento", "aire_libre_protegido",
+                                  "cultivo_tipo", "fecha_inicio_cultivo", "fecha_fin_cultivo"):
+                        nuevo_val = getattr(p, campo, "") or ""
+                        if nuevo_val and getattr(existente, campo, "") != nuevo_val:
+                            setattr(existente, campo, nuevo_val)
+                            cambiado = True
+                    if cambiado:
+                        parcelas_actualizadas += 1
                     continue
                 cuaderno.agregar_parcela(p)
                 claves_existentes.add(clave)
@@ -4884,15 +4927,21 @@ async def importar_datos_archivo(cuaderno_id: str, file: UploadFile = File(...))
                 productos_añadidos += 1
         
         storage.guardar(cuaderno)
-        
+
+        partes = [f"{parcelas_añadidas} parcelas nuevas"]
+        if parcelas_actualizadas:
+            partes.append(f"{parcelas_actualizadas} parcelas actualizadas (zona nitratos y datos agronómicos)")
+        partes.append(f"{productos_añadidos} productos")
+        partes.append(f"{hojas_añadidas} hojas")
         return {
             "success": True,
             "cuaderno_id": cuaderno_id,
             "parcelas_añadidas": parcelas_añadidas,
+            "parcelas_actualizadas": parcelas_actualizadas,
             "productos_añadidos": productos_añadidos,
             "hojas_añadidas": hojas_añadidas,
             "datos_extraidos": analisis,
-            "message": f"Importados {parcelas_añadidas} parcelas, {productos_añadidos} productos y {hojas_añadidas} hojas"
+            "message": "Importados: " + ", ".join(partes)
         }
         
     except HTTPException:
