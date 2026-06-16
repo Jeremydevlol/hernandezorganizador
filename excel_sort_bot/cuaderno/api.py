@@ -4387,35 +4387,47 @@ def _parse_si_no_zona(val) -> bool:
     return False
 
 
-def _parse_dosis_y_unidad(val) -> tuple:
+def _unidad_desde_texto(texto) -> Optional[str]:
     """
-    Extrae (valor numérico, unidad) de cualquier cadena de dosis.
-    Unidades reconocidas: L/Ha, Kg/Ha, ml/H, g/Ha, cc/Ha, cc/L, g/L.
-    Alias soportados: cc (→ ml/H), g/l (→ g/Ha), l/ha, kg/ha, etc.
+    Detecta la unidad de dosis a partir de un texto (valor de celda O cabecera de
+    columna como "Dosis (g/Ha)"). Devuelve la unidad normalizada o None si no hay.
     """
-    if val is None:
-        return 0.0, "L/Ha"
-    raw = str(val).strip()
-    if not raw:
-        return 0.0, "L/Ha"
-    s_compact = re.sub(r"\s+", "", raw.lower())
-    unidad = "L/Ha"
-    # Orden de mayor a menor especificidad para evitar falsos match
-    if "cc/ha" in s_compact or "cc/h" in s_compact:
-        unidad = "ml/H"   # cc/Ha se trata como ml/H (mismo orden de magnitud)
-    elif "cc/l" in s_compact:
-        unidad = "ml/H"
-    elif "ml/ha" in s_compact or "ml/h" in s_compact:
-        unidad = "ml/H"
-    elif "kg/ha" in s_compact:
-        unidad = "Kg/Ha"
-    elif "g/ha" in s_compact or "g/h" in s_compact:
-        unidad = "g/Ha"
-    elif "g/l" in s_compact:
-        unidad = "g/Ha"   # g/L se mapea a g/Ha (unidades equivalentes en contexto fitosanitario)
-    elif "l/ha" in s_compact:
-        unidad = "L/Ha"
-    return _parse_dosis(val), unidad
+    s = re.sub(r"\s+", "", str(texto or "").lower())
+    if not s:
+        return None
+    # Compuestas (unidad/superficie): más específicas primero
+    if "cc/ha" in s or "cc/h" in s or "cc/l" in s or "ml/ha" in s or "ml/h" in s:
+        return "ml/H"
+    if "kg/ha" in s:
+        return "Kg/Ha"
+    if "g/ha" in s or "g/h" in s or "g/l" in s:
+        return "g/Ha"
+    if "l/ha" in s:
+        return "L/Ha"
+    # Unidad simple suelta (típico en cabeceras: "dosis(g)", "dosis(kg)", "dosisgramos").
+    # Orden importa: kilo antes que gramo (kilogramos), mililitro antes que litro.
+    if re.search(r"\(kgs?\)|kilos?|kg/", s):
+        return "Kg/Ha"
+    if re.search(r"\(grs?\)|\(gr\)|gramos?", s):
+        return "g/Ha"
+    if re.search(r"\(ml\)|\(cc\)|mililitros?", s):
+        return "ml/H"
+    if re.search(r"\(lt?\)|litros?", s):
+        return "L/Ha"
+    return None
+
+
+def _parse_dosis_y_unidad(val, header: str = "") -> tuple:
+    """
+    Extrae (valor numérico, unidad) de la dosis.
+    La unidad se busca: 1) en el propio valor ("250 g/Ha"); 2) si no, en la
+    cabecera de la columna ("Dosis (g/Ha)"); 3) si tampoco, L/Ha por defecto.
+    """
+    num = _parse_dosis(val)
+    unidad = _unidad_desde_texto(val)            # 1. del valor de la celda
+    if not unidad:
+        unidad = _unidad_desde_texto(header)     # 2. de la cabecera de la columna
+    return num, unidad or "L/Ha"                 # 3. por defecto
 
 
 def _parse_dosis(val) -> float:
@@ -4428,8 +4440,10 @@ def _parse_dosis(val) -> float:
     s = str(val).strip()
     if not s:
         return 0.0
-    # Normalizar separador de miles español (1.500 → 1500) solo si hay patrón \d{1,3}.\d{3}
-    s = re.sub(r'(\d{1,3})\.(\d{3})(?=[^\d]|$)', r'\1\2', s)
+    # Normalizar separador de miles español (1.500 → 1500) SOLO si la parte entera
+    # empieza por 1-9 (no "0."). Así "0.015"/"0.125" se conservan como decimales
+    # (dosis fitosanitarias típicas) y no se corrompen a 15/125.
+    s = re.sub(r'([1-9]\d{0,2})\.(\d{3})(?=[^\d]|$)', r'\1\2', s)
     # Quitar unidades compuestas primero (orden importa: cc/Ha antes que cc)
     s = re.sub(
         r'\s*(cc/ha|cc/h|cc/l|ml/ha|ml/h|l/ha|kg/ha|g/ha|g/h|g/l)\s*',
@@ -4662,6 +4676,12 @@ def _extraer_tratamientos_directos(hojas: List[dict], parcelas: List[Parcela]) -
         if not es_trat:
             continue
         columnas = hoja.get("columnas", [])
+        # Cabecera de la columna de dosis (para detectar la unidad si no está en la celda,
+        # p. ej. "Dosis (g/Ha)" con valores numéricos sueltos).
+        dosis_header = next(
+            (str(c) for c in columnas if "dosis" in str(c).lower() or "dose" in str(c).lower()),
+            "",
+        )
         for row in hoja.get("datos", []):
             d = _row_to_dict(columnas, row, _TRATAMIENTOS_COLUMN_MAP, _TRATAMIENTOS_RAW_ALIASES)
             if not d:
@@ -4693,7 +4713,7 @@ def _extraer_tratamientos_directos(hojas: List[dict], parcelas: List[Parcela]) -
                 sup = float(str(d.get("superficie_tratada", 0)).replace(",", "."))
             except (ValueError, TypeError):
                 pass
-            dosis, unidad_dosis = _parse_dosis_y_unidad(d.get("dosis"))
+            dosis, unidad_dosis = _parse_dosis_y_unidad(d.get("dosis"), dosis_header)
             nro_reg = str(d.get("nro_registro", "")).strip()
 
             especie_excel = str(d.get("especie", "")).strip()
