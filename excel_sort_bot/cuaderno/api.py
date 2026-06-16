@@ -4,11 +4,13 @@ Endpoints para gestión de cuadernos, parcelas, productos y tratamientos.
 Soporte para upload y procesamiento de archivos con GPT-4o Vision.
 """
 import asyncio
+import base64
 import gc
 import os
 import re
 import json
 import time
+from io import BytesIO
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 from datetime import datetime, date
@@ -659,6 +661,20 @@ class TratamientoUpdate(BaseModel):
 class EliminarMultiplesRequest(BaseModel):
     """IDs de elementos a eliminar en una sola operación (1 load + 1 save)."""
     ids: List[str]
+
+
+class AsesorTratamientosRequest(BaseModel):
+    """
+    Datos del asesor a aplicar a los tratamientos asesorados (hoja 3.2 / Trat.
+    Asesorados) justo antes de exportar. Si `solo_vacios` es True solo rellena
+    los tratamientos que aún no tienen ese dato; si es False, sobreescribe todos.
+    """
+    nombre_asesor_trat: str = ""
+    num_colegiado_asesor: str = ""
+    fecha_recomendacion_asesor: str = ""
+    firma_asesor: str = ""
+    firma_cliente: str = ""
+    solo_vacios: bool = False
 
 
 class EliminarProductoCatalogoRequest(BaseModel):
@@ -2103,6 +2119,50 @@ async def eliminar_tratamientos_multiples(cuaderno_id: str, data: EliminarMultip
     }
 
 
+@router.post("/{cuaderno_id}/tratamientos/asesor")
+async def aplicar_asesor_tratamientos(cuaderno_id: str, data: AsesorTratamientosRequest):
+    """
+    Aplica los datos del asesor (nombre, nº colegiado, fecha de recomendación y
+    firmas) a TODOS los tratamientos asesorados del cuaderno. Se usa al exportar
+    con la hoja "Trat. Asesorados" seleccionada, para que esos campos y la firma
+    aparezcan en el documento sin tener que editar tratamiento por tratamiento.
+    """
+    storage = get_storage()
+    cache_key = f"cuaderno::{cuaderno_id}"
+    cuaderno = await _cargar_para_escritura(storage, cuaderno_id)
+    if not cuaderno:
+        raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
+
+    campos = {
+        "nombre_asesor_trat": (data.nombre_asesor_trat or "").strip(),
+        "num_colegiado_asesor": (data.num_colegiado_asesor or "").strip(),
+        "fecha_recomendacion_asesor": (data.fecha_recomendacion_asesor or "").strip(),
+        "firma_asesor": data.firma_asesor or "",
+        "firma_cliente": data.firma_cliente or "",
+    }
+
+    actualizados = 0
+    for trat in cuaderno.tratamientos:
+        if not getattr(trat, "asesorado", False):
+            continue
+        for campo, valor in campos.items():
+            if not valor:
+                continue
+            if data.solo_vacios and (getattr(trat, campo, "") or "").strip():
+                continue
+            setattr(trat, campo, valor)
+        actualizados += 1
+
+    if actualizados:
+        await _guardar_y_cachear(storage, cuaderno, cache_key)
+
+    return {
+        "success": True,
+        "actualizados": actualizados,
+        "message": f"Datos del asesor aplicados a {actualizados} tratamiento(s) asesorado(s)",
+    }
+
+
 # ============================================
 # FERTILIZACIONES
 # ============================================
@@ -3453,6 +3513,73 @@ async def exportar_excel_cuaderno(
     def _freeze(ws, cell="A2"):
         ws.freeze_panes = cell
 
+    def _firma_xlimage(data: str, max_w: int = 220, max_h: int = 80):
+        """Convierte una firma base64 (PNG data-url) en una imagen de openpyxl
+        escalada para caber en la celda. Devuelve None si no se puede."""
+        if not data or not str(data).strip():
+            return None
+        try:
+            from openpyxl.drawing.image import Image as XLImage
+            s = str(data).strip()
+            if "," in s and s.lower().startswith("data:"):
+                s = s.split(",", 1)[1]
+            stream = BytesIO(base64.b64decode(s))
+            img = XLImage(stream)
+            # Escalar manteniendo proporción
+            if img.width and img.height:
+                ratio = min(max_w / img.width, max_h / img.height, 1.0)
+                img.width = int(img.width * ratio)
+                img.height = int(img.height * ratio)
+            return img
+        except Exception:
+            return None
+
+    def _bloque_firmas_excel(ws, *, start_row: int, num_cols: int, nombre_asesor: str,
+                             num_colegiado: str, fecha_recom: str, nombre_titular: str,
+                             firma_asesor: str, firma_cliente: str):
+        """Escribe al pie de la hoja un bloque con los datos del asesor
+        (nombre, nº inscripción/colegiado, fecha) y las firmas como imagen."""
+        title_c = ws.cell(row=start_row, column=1, value="FIRMAS")
+        title_c.font = Font(name="Calibri", bold=True, size=11, color="6A1B9A")
+
+        r = start_row + 1
+        # Columna izquierda: asesor / derecha: titular
+        col_der = min(max(num_cols // 2 + 1, 5), num_cols)
+        label_font = Font(name="Calibri", bold=True, size=9)
+        val_font = Font(name="Calibri", size=9)
+
+        def _par(row, col, label, value):
+            lc = ws.cell(row=row, column=col, value=label)
+            lc.font = label_font
+            vc = ws.cell(row=row, column=col + 1, value=value or "—")
+            vc.font = val_font
+
+        _par(r, 1, "Asesor:", nombre_asesor)
+        _par(r + 1, 1, "Nº inscripción/colegiado:", num_colegiado)
+        _par(r + 2, 1, "Fecha recomendación:", fecha_recom)
+        _par(r, col_der, "Titular:", nombre_titular)
+
+        # Etiquetas "Firma del asesor / del titular"
+        firma_row = r + 4
+        ws.cell(row=firma_row, column=1, value="Firma del asesor").font = label_font
+        ws.cell(row=firma_row, column=col_der, value="Firma del titular").font = label_font
+
+        # Incrustar imágenes (o dejar línea para firma manuscrita)
+        img_row = firma_row + 1
+        for col, firma in ((1, firma_asesor), (col_der, firma_cliente)):
+            ximg = _firma_xlimage(firma)
+            anchor = f"{get_column_letter(col)}{img_row}"
+            if ximg is not None:
+                try:
+                    ws.add_image(ximg, anchor)
+                except Exception:
+                    ws.cell(row=img_row, column=col, value="(firma no disponible)").font = val_font
+            else:
+                ws.cell(row=img_row + 3, column=col, value="__________________").font = val_font
+        # Reservar alto para las firmas
+        for rr in range(img_row, img_row + 4):
+            ws.row_dimensions[rr].height = 22
+
     def _build_oficial_sheet(ws, *, sheet_title: str, section_title: str, section_subtitle: str,
                              group_headers: list, col_headers: list, col_types: list,
                              col_widths: list, data_rows: list, total_col: int = 0,
@@ -3973,12 +4100,30 @@ async def exportar_excel_cuaderno(
                 getattr(t, "nombre_asesor_trat", ""), getattr(t, "num_colegiado_asesor", ""),
                 getattr(t, "fecha_recomendacion_asesor", ""), firmado,
             ])
-        _build_oficial_sheet(
+        ta_data_start = _build_oficial_sheet(
             ws_ta, sheet_title="Trat. Asesorados",
             section_title="TRATAMIENTOS ASESORADOS",
-            section_subtitle="Tratamientos con recomendación de asesor (la firma se incluye en el PDF)",
+            section_subtitle="Tratamientos con recomendación de asesor",
             group_headers=[], col_headers=ta_headers, col_types=ta_types,
             col_widths=ta_widths, data_rows=ta_rows, row_colors=[None] * len(ta_rows),
+        )
+        # Bloque de firmas al pie de la hoja: asesor, nº inscripción, fecha y las
+        # firmas digitales (asesor + titular) incrustadas como imagen.
+        _bloque_firmas_excel(
+            ws_ta,
+            start_row=ta_data_start + len(ta_rows) + 2,
+            num_cols=len(ta_headers),
+            nombre_asesor=next((getattr(t, "nombre_asesor_trat", "") for t in trat_asesorados
+                                if getattr(t, "nombre_asesor_trat", "")), ""),
+            num_colegiado=next((getattr(t, "num_colegiado_asesor", "") for t in trat_asesorados
+                                if getattr(t, "num_colegiado_asesor", "")), ""),
+            fecha_recom=next((getattr(t, "fecha_recomendacion_asesor", "") for t in trat_asesorados
+                              if getattr(t, "fecha_recomendacion_asesor", "")), ""),
+            nombre_titular=cuaderno.titular or cuaderno.nombre_explotacion or "",
+            firma_asesor=next((getattr(t, "firma_asesor", "") for t in trat_asesorados
+                               if getattr(t, "firma_asesor", "")), ""),
+            firma_cliente=next((getattr(t, "firma_cliente", "") for t in trat_asesorados
+                                if getattr(t, "firma_cliente", "")), ""),
         )
 
     # ================================================================

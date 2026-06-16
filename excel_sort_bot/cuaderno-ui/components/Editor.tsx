@@ -35,7 +35,8 @@ import {
     Undo2
 } from "lucide-react";
 import { Cuaderno, SheetType, SHEET_CONFIG, HistoricoRow, HojaExcel, CellSelection } from "@/lib/types";
-import { fechaFlexibleAISO, formatDateTableES } from "@/lib/dateSpanish";
+import { fechaFlexibleAISO, formatDateTableES, isoToDisplayDDMM } from "@/lib/dateSpanish";
+import AsesorExportModal, { AsesorExportData } from "./modals/AsesorExportModal";
 import { parseDecimalInput, parseTratamientoDosisInput } from "@/lib/parseDecimal";
 import { api } from "@/lib/api";
 import AddRowModal from "./modals/AddRowModal";
@@ -89,6 +90,8 @@ const BASE_EDITABLE_SHEETS: SheetType[] = ["parcelas", "productos", "tratamiento
 const BULK_EDIT_SHEETS: SheetType[] = ["parcelas", "productos", "tratamientos", "fertilizantes", "cosecha"];
 
 const BASE_SHEET_IDS: SheetType[] = ["parcelas", "productos", "tratamientos", "fertilizantes", "cosecha", "asesoramiento", "historico", "catalogo", "tratamientos_especiales", "trat_asesor", "stock"];
+/** sheet_id que el backend usa para la hoja "Trat. Asesorados" en la exportación. */
+const TRAT_ASESOR_SHEET_ID = "__trat_asesor__";
 /** Hojas base con casilla de selección y color de fila */
 const SHEETS_WITH_ROW_SELECT: SheetType[] = ["parcelas", "productos", "tratamientos", "fertilizantes", "cosecha", "asesoramiento"];
 const ROW_COLOR_SWATCHES = ["#ffffff", "#fef3c7", "#fde68a", "#bbf7d0", "#bfdbfe", "#e9d5ff", "#fbcfe8", "#fecaca"] as const;
@@ -166,6 +169,8 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
     const [copyingToParcels, setCopyingToParcels] = useState(false);
     const [exportHojasModal, setExportHojasModal] = useState<{ hojas: { sheet_id: string; nombre: string; num_filas: number }[]; type: "pdf" | "excel"; params: Record<string, any> } | null>(null);
     const [selectedExportHojas, setSelectedExportHojas] = useState<Set<string>>(new Set());
+    // Export pendiente de capturar los datos del asesor (hoja Trat. Asesorados).
+    const [asesorExportPending, setAsesorExportPending] = useState<{ type: "pdf" | "excel"; queryParams: Record<string, any> } | null>(null);
     const searchInputRef = useRef<HTMLInputElement | null>(null);
     const [showMoreTabsMenu, setShowMoreTabsMenu] = useState(false);
     const [showImportedTabsMenu, setShowImportedTabsMenu] = useState(false);
@@ -188,6 +193,25 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
     // Compute whether cuaderno has any asesorado treatments
     const hasAsesorados = useMemo(() => {
         return (cuaderno.tratamientos || []).some((t: any) => Boolean(t.asesorado));
+    }, [cuaderno.tratamientos]);
+
+    // Datos del asesor ya guardados (primer tratamiento asesorado que los tenga),
+    // para precargar el modal de asesor al exportar la hoja Trat. Asesorados.
+    const asesorInitial = useMemo(() => {
+        const asesorados = (cuaderno.tratamientos || []).filter((t: any) => Boolean(t.asesorado));
+        const pick = (campo: string) => {
+            const t = asesorados.find((x: any) => (x[campo] || "").toString().trim());
+            return t ? String(t[campo]).trim() : "";
+        };
+        const fechaIso = pick("fecha_recomendacion_asesor");
+        return {
+            nombre_asesor_trat: pick("nombre_asesor_trat"),
+            num_colegiado_asesor: pick("num_colegiado_asesor"),
+            fecha_recomendacion_asesor: fechaIso,
+            fecha_display: fechaIso ? isoToDisplayDDMM(fechaIso.split("T")[0]) : "",
+            firma_asesor: pick("firma_asesor"),
+            firma_cliente: pick("firma_cliente"),
+        };
     }, [cuaderno.tratamientos]);
     const focusIsBase = focusSheetId != null && BASE_SHEET_IDS.includes(focusSheetId as SheetType);
     const focusImportedIdx = focusSheetId != null ? (hojas.findIndex((h) => h.sheet_id === focusSheetId) ?? -1) : -1;
@@ -1566,14 +1590,9 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
         } catch (e) {
             console.error(`Error checking ${type} export sheets:`, e);
         }
-        // Fallback: exportar directamente
-        if (type === "pdf") {
-            window.open(api.getExportPDFUrl(cuaderno.id, baseParams), "_blank");
-        } else {
-            api.downloadExportExcel(cuaderno.id, baseParams).catch(() =>
-                window.open(api.getExportExcelUrl(cuaderno.id, baseParams), "_blank")
-            );
-        }
+        // Fallback: exportar directamente (sin picker, se incluyen todas las hojas
+        // → la de Trat. Asesorados también, así que pedimos los datos del asesor).
+        _finishExport(type, baseParams, true);
     };
 
     const exportPDF = (params?: { desde?: string; hasta?: string }) => _openSheetPicker("pdf", params);
@@ -1589,16 +1608,51 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
         }
     };
 
+    // Si se exporta la hoja "Trat. Asesorados" y hay tratamientos asesorados,
+    // primero pedimos los datos del asesor (nombre, nº colegiado, fecha, firmas)
+    // para que aparezcan en el documento; si no, exporta directamente.
+    const _finishExport = (
+        type: "pdf" | "excel",
+        queryParams: Record<string, any>,
+        asesorSheetIncluded: boolean
+    ) => {
+        if (hasAsesorados && asesorSheetIncluded) {
+            setAsesorExportPending({ type, queryParams });
+        } else {
+            _doExport(type, queryParams);
+        }
+    };
+
     const confirmExportHojas = () => {
         if (!exportHojasModal) return;
         const { type, params } = exportHojasModal;
         const freshOrder = buildExportParams({ desde: params.desde, hasta: params.hasta });
-        _doExport(type, {
-            ...params,
-            ...freshOrder,
-            incluir_hojas: selectedExportHojas.size > 0 ? Array.from(selectedExportHojas).join(",") : "",
-        });
+        const asesorIncluded = selectedExportHojas.has(TRAT_ASESOR_SHEET_ID);
+        _finishExport(
+            type,
+            {
+                ...params,
+                ...freshOrder,
+                incluir_hojas: selectedExportHojas.size > 0 ? Array.from(selectedExportHojas).join(",") : "",
+            },
+            asesorIncluded
+        );
         setExportHojasModal(null);
+    };
+
+    // Confirmación del modal de asesor: aplica los datos a los tratamientos
+    // asesorados y continúa con la exportación pendiente.
+    const confirmAsesorExport = async (data: AsesorExportData) => {
+        const pending = asesorExportPending;
+        setAsesorExportPending(null);
+        if (!pending) return;
+        try {
+            await api.aplicarAsesorTratamientos(cuaderno.id, data);
+            onRefresh();
+        } catch (e) {
+            console.error("Error aplicando datos del asesor:", e);
+        }
+        _doExport(pending.type, pending.queryParams);
     };
 
 
@@ -3563,6 +3617,13 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
             )}
 
             {/* Modal: Seleccionar hojas para exportar */}
+            <AsesorExportModal
+                isOpen={asesorExportPending !== null}
+                initial={asesorInitial}
+                onClose={() => setAsesorExportPending(null)}
+                onConfirm={confirmAsesorExport}
+            />
+
             {exportHojasModal && (() => {
                 const hojasBase = exportHojasModal.hojas.filter((h: any) => h.tipo === "base");
                 const hojasImp = exportHojasModal.hojas.filter((h: any) => h.tipo === "importada");

@@ -647,10 +647,11 @@ class PDFGenerator:
             return None
 
     def _bloque_firmas_final(self, pdf: ModernPDF, firma_asesor: str, firma_cliente: str,
-                             nombre_asesor: str = "", nombre_titular: str = ""):
+                             nombre_asesor: str = "", nombre_titular: str = "",
+                             num_colegiado: str = "", fecha_recomendacion: str = ""):
         """Bloque de firmas al pie del documento (asesor + titular)."""
         # Reservar espacio; si no cabe en la página actual, nueva página
-        if pdf.get_y() > pdf.h - 75:
+        if pdf.get_y() > pdf.h - 80:
             pdf.add_page()
         else:
             pdf.ln(10)
@@ -666,20 +667,26 @@ class PDFGenerator:
 
         self._firmas_asesor_cliente(pdf, firma_asesor, firma_cliente)
 
-        # Nombres bajo cada firma
-        if nombre_asesor or nombre_titular:
-            col_w = 85
-            y = pdf.get_y() + 1
-            pdf.set_font("Helvetica", "", 8)
-            pdf.set_text_color(*COLOR_TEXT_MUTED)
-            if nombre_asesor:
-                pdf.set_xy(pdf.l_margin, y)
-                pdf.cell(col_w, 4, _sanitize(f"Asesor: {nombre_asesor}"), align="C")
-            if nombre_titular:
-                pdf.set_xy(pdf.l_margin + col_w + 10, y)
-                pdf.cell(col_w, 4, _sanitize(f"Titular: {nombre_titular}"), align="C")
-            pdf.ln(8)
-            pdf.set_text_color(0, 0, 0)
+        # Datos bajo cada firma (asesor: nombre, nº inscripción y fecha)
+        col_w = 85
+        y = pdf.get_y() + 1
+        pdf.set_font("Helvetica", "", 8)
+        pdf.set_text_color(*COLOR_TEXT_MUTED)
+        asesor_lines = []
+        if nombre_asesor:
+            asesor_lines.append(f"Asesor: {nombre_asesor}")
+        if num_colegiado:
+            asesor_lines.append(f"Nº inscripcion/colegiado: {num_colegiado}")
+        if fecha_recomendacion:
+            asesor_lines.append(f"Fecha recomendacion: {fecha_recomendacion}")
+        for i, txt in enumerate(asesor_lines):
+            pdf.set_xy(pdf.l_margin, y + i * 4)
+            pdf.cell(col_w, 4, _sanitize(txt), align="C")
+        if nombre_titular:
+            pdf.set_xy(pdf.l_margin + col_w + 10, y)
+            pdf.cell(col_w, 4, _sanitize(f"Titular: {nombre_titular}"), align="C")
+        pdf.ln(4 + 4 * max(len(asesor_lines), 1))
+        pdf.set_text_color(0, 0, 0)
 
     def _firmas_asesor_cliente(self, pdf: ModernPDF, firma_asesor: str, firma_cliente: str):
         """Dibuja las dos firmas (asesor y cliente) lado a lado, con su etiqueta."""
@@ -1073,7 +1080,12 @@ class PDFGenerator:
                                   if getattr(t, "firma_cliente", "")), "")
             nombre_asesor = next((getattr(t, "nombre_asesor_trat", "") for t in tratamientos_asesorados
                                   if getattr(t, "nombre_asesor_trat", "")), "")
-            self._bloque_firmas_final(pdf, firma_asesor, firma_cliente, nombre_asesor, cuaderno.titular)
+            num_colegiado = next((getattr(t, "num_colegiado_asesor", "") for t in tratamientos_asesorados
+                                  if getattr(t, "num_colegiado_asesor", "")), "")
+            fecha_recom = next((getattr(t, "fecha_recomendacion_asesor", "") for t in tratamientos_asesorados
+                                if getattr(t, "fecha_recomendacion_asesor", "")), "")
+            self._bloque_firmas_final(pdf, firma_asesor, firma_cliente, nombre_asesor,
+                                      cuaderno.titular, num_colegiado, fecha_recom)
 
         # --- PIE FINAL ---
         self._pie_documento(pdf, cuaderno)

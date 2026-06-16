@@ -426,6 +426,24 @@ export const api = {
             body: JSON.stringify({ ids }),
         }),
 
+    /** Aplica los datos del asesor (nombre, nº colegiado, fecha, firmas) a TODOS
+     *  los tratamientos asesorados. Se usa al exportar la hoja Trat. Asesorados. */
+    aplicarAsesorTratamientos: (
+        cuadernoId: string,
+        data: {
+            nombre_asesor_trat?: string;
+            num_colegiado_asesor?: string;
+            fecha_recomendacion_asesor?: string;
+            firma_asesor?: string;
+            firma_cliente?: string;
+            solo_vacios?: boolean;
+        }
+    ) =>
+        request<{ success: boolean; actualizados: number }>(`/${cuadernoId}/tratamientos/asesor`, {
+            method: "POST",
+            body: JSON.stringify(data),
+        }),
+
     duplicarTratamiento: (cuadernoId: string, tratamientoId: string) =>
         request<{ tratamiento: any }>(`/${cuadernoId}/tratamientos/${tratamientoId}/duplicar`, {
             method: "POST",

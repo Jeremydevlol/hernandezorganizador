@@ -11,6 +11,9 @@ aiofiles>=23.0.0
 # PDF export
 fpdf2>=2.7.0
 
+# Imágenes (firmas en PDF/Excel) — requerido por fpdf2 y openpyxl
+Pillow>=10.0.0
+
 # AI dependencies
 openai>=1.0.0
 python-dotenv>=1.0.0
