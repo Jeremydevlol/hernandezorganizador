@@ -420,12 +420,17 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                     case "fecha_asc":
                         if (aFecha !== bFecha) return aFecha.localeCompare(bFecha, "es");
                         return (a.id || "").localeCompare(b.id || "");
-                    case "cultivo":
-                        // cultivo (A-Z) → parcela → fecha cronológica (antiguo primero)
+                    case "cultivo": {
+                        // cultivo (A-Z) → parcela (Nº orden) → fecha cronológica (antiguo primero)
                         if (aCultivo !== bCultivo) return aCultivo.localeCompare(bCultivo, "es");
+                        // Sub-orden por Nº de orden numérico (igual que el separador de parcela)
+                        const aOrd = minNumOrdenTratamiento(a);
+                        const bOrd = minNumOrdenTratamiento(b);
+                        if (aOrd !== bOrd) return aOrd - bOrd;
                         if (aParcela !== bParcela) return aParcela.localeCompare(bParcela, "es");
                         if (aFecha !== bFecha) return aFecha.localeCompare(bFecha, "es");
-                        return (a.num_orden || 0) - (b.num_orden || 0);
+                        return (a.id || "").localeCompare(b.id || "");
+                    }
                     case "parcela": {
                         const ao = minNumOrdenTratamiento(a);
                         const bo = minNumOrdenTratamiento(b);
@@ -2757,8 +2762,9 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                         (effectiveSheet === "cosecha" && selectedCosechas.has(row.id)) ||
                                         (effectiveSheet === "asesoramiento" && selectedAsesoramientos.has(row.id));
 
-                                    // Separador de parcela cuando tratamientos ordenados por parcela
-                                    const showParcelaSeparator = effectiveSheet === "tratamientos" && tratSortMode === "parcela";
+                                    // Separador de parcela cuando los tratamientos van ordenados
+                                    // por parcela (modos "parcela" y "cultivo → parcela → fecha")
+                                    const showParcelaSeparator = effectiveSheet === "tratamientos" && (tratSortMode === "parcela" || tratSortMode === "cultivo");
                                     const parcelaKey = (r: any) => {
                                         // Agrupar por Nº de orden real (desde parcela_ids), no por etiqueta textual.
                                         const ord = minNumOrdenTratamiento(r);
