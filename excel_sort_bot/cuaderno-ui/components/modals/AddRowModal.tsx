@@ -296,6 +296,30 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
         });
     }, [sheet, formData.parcela_ids, cuaderno.parcelas]);
 
+    // ¿Asesoramiento OBLIGATORIO? Solo patata/remolacha y cuando, POR CULTIVO,
+    // la superficie de las parcelas seleccionadas de ese cultivo supera 5 ha.
+    const asesoramientoObligatorio = useMemo(() => {
+        const porCultivo: Record<string, number> = {};
+        for (const p of parcelasSeleccionadasEspeciales as any[]) {
+            const cultivoUpper = (p.especie || p.cultivo || "").toUpperCase();
+            const key = CULTIVOS_ASESORAMIENTO.find((c) => cultivoUpper.includes(c)) || cultivoUpper;
+            const sup = Number(p.superficie_cultivada || p.superficie_ha || p.superficie_sigpac || 0);
+            porCultivo[key] = (porCultivo[key] || 0) + sup;
+        }
+        return Object.values(porCultivo).some((ha) => ha > 5);
+    }, [parcelasSeleccionadasEspeciales]);
+
+    // Cuando el asesoramiento pasa a ser obligatorio (patata/remolacha > 5 ha por
+    // cultivo), la respuesta por defecto cambia a "Sí". Al dejar de serlo, vuelve a "No".
+    useEffect(() => {
+        if (sheet !== "tratamientos" || editTratamientoId) return;
+        setFormData((prev) => {
+            const deseado = asesoramientoObligatorio ? "si" : "no";
+            if ((prev.requiere_asesoramiento || "no") === deseado) return prev;
+            return { ...prev, requiere_asesoramiento: deseado };
+        });
+    }, [asesoramientoObligatorio, sheet, editTratamientoId]);
+
     if (!isOpen) return null;
 
     const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
@@ -848,10 +872,14 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                 </div>
                             </div>
                             {Array.isArray(formData.parcela_ids) && formData.parcela_ids.length > 0 && (
-                                <div className="p-3 rounded-lg bg-amber-50 border border-amber-200">
-                                    {parcelasSeleccionadasEspeciales.length > 0 && (
+                                <div className={`p-3 rounded-lg border ${asesoramientoObligatorio ? "bg-red-50 border-red-300" : "bg-amber-50 border-amber-200"}`}>
+                                    {asesoramientoObligatorio ? (
+                                        <div className="text-xs text-red-700 font-medium mb-2">
+                                            ⚠️ Asesoramiento OBLIGATORIO: patata/remolacha supera 5 ha por cultivo.
+                                        </div>
+                                    ) : parcelasSeleccionadasEspeciales.length > 0 && (
                                         <div className="text-xs text-amber-700 mb-2">
-                                            Has seleccionado parcelas de patata/remolacha (asesoramiento obligatorio si superan 5 ha).
+                                            Has seleccionado parcelas de patata/remolacha (asesoramiento obligatorio si superan 5 ha por cultivo).
                                         </div>
                                     )}
                                     <label className="block text-xs font-medium text-gray-700 mb-1.5">
