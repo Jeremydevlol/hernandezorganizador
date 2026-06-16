@@ -3254,6 +3254,16 @@ def _trat_parcela_group_key(t: Tratamiento) -> str:
     return (t.num_orden_parcelas or "").lower()
 
 
+def _trat_parcela_label(t: Tratamiento) -> str:
+    """Etiqueta de la parcela para la fila separadora del export (ej. 'Ord. 17')."""
+    ref = (t.num_orden_parcelas or "").strip()
+    if ref:
+        return f"Ord. {ref}"
+    if t.parcela_nombres:
+        return ", ".join(t.parcela_nombres[:3])
+    return ""
+
+
 # IDs fijos para las hojas base del editor (usados en incluir_hojas)
 BASE_SHEET_IDS = {
     "info_general": "__info_general__",
@@ -3489,11 +3499,25 @@ async def exportar_excel_cuaderno(
                 cell.fill = row_fill
         ws.row_dimensions[row_num].height = ROW_HEIGHT
 
-    def _write_blank_separator_row(ws, row_num: int, num_cols: int):
+    _sep_fill = PatternFill(start_color="D7F2E3", end_color="D7F2E3", fill_type="solid")
+    _sep_font = Font(name="Calibri", bold=True, size=10, color="0F7A4E")
+
+    def _write_blank_separator_row(ws, row_num: int, num_cols: int, label: str = ""):
+        """Fila separadora de parcela. Si se pasa `label` (ej. 'Ord. 17') se
+        muestra con fondo verde, igual que en el editor."""
         for col in range(1, num_cols + 1):
             c = ws.cell(row=row_num, column=col)
             c.value = None
             c.border = thin_border
+            if label:
+                c.fill = _sep_fill
+        if label:
+            cell = ws.cell(row=row_num, column=1, value=f"📍 {label}")
+            cell.font = _sep_font
+            try:
+                ws.merge_cells(start_row=row_num, start_column=1, end_row=row_num, end_column=num_cols)
+            except Exception:
+                pass
 
     def _auto_width(ws, num_cols, data_start_row=2, max_width=55, min_width=12):
         for col in range(1, num_cols + 1):
@@ -3958,14 +3982,16 @@ async def exportar_excel_cuaderno(
         if hasta:
             tratamientos = [t for t in tratamientos if (t.fecha_aplicacion or "") <= hasta]
 
-    modo_parcela_export = (orden_tratamientos_modo or "").strip().lower() == "parcela"
+    # La separación por Ord. de parcela se aplica en los modos que agrupan por
+    # parcela: "parcela" y "cultivo → parcela → fecha" (igual que en el editor).
+    modo_parcela_export = (orden_tratamientos_modo or "").strip().lower() in ("parcela", "cultivo")
     trat_data_start = 7
     row = trat_data_start
     prev_parcela_key: Optional[str] = None
     for t in tratamientos:
         parcela_key = _trat_parcela_group_key(t)
-        if modo_parcela_export and prev_parcela_key is not None and parcela_key != prev_parcela_key:
-            _write_blank_separator_row(ws_trat, row, num_trat_cols)
+        if modo_parcela_export and parcela_key != prev_parcela_key:
+            _write_blank_separator_row(ws_trat, row, num_trat_cols, label=_trat_parcela_label(t))
             row += 1
         prev_parcela_key = parcela_key
 
@@ -4113,8 +4139,8 @@ async def exportar_excel_cuaderno(
         prev_parcela_key_ta: Optional[str] = None
         for t in trat_asesorados:
             parcela_key = _trat_parcela_group_key(t)
-            if modo_parcela_export and prev_parcela_key_ta is not None and parcela_key != prev_parcela_key_ta:
-                _write_blank_separator_row(ws_ta, row, num_ta_cols)
+            if modo_parcela_export and parcela_key != prev_parcela_key_ta:
+                _write_blank_separator_row(ws_ta, row, num_ta_cols, label=_trat_parcela_label(t))
                 row += 1
             prev_parcela_key_ta = parcela_key
 
