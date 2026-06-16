@@ -187,7 +187,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
 
     // Compute whether cuaderno has any asesorado treatments
     const hasAsesorados = useMemo(() => {
-        return (cuaderno.tratamientos || []).some((t: any) => t.asesorado === true);
+        return (cuaderno.tratamientos || []).some((t: any) => Boolean(t.asesorado));
     }, [cuaderno.tratamientos]);
     const focusIsBase = focusSheetId != null && BASE_SHEET_IDS.includes(focusSheetId as SheetType);
     const focusImportedIdx = focusSheetId != null ? (hojas.findIndex((h) => h.sheet_id === focusSheetId) ?? -1) : -1;
@@ -306,7 +306,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
             }
             case "trat_asesor": {
                 return (cuaderno.tratamientos || [])
-                    .filter((t) => (t as any).asesorado === true)
+                    .filter((t) => Boolean((t as any).asesorado))
                     .map(t => {
                         const prod = t.productos?.[0] || {};
                         const probProd = String((prod as any).problema_fitosanitario || (prod as any).plaga_enfermedad || "").trim();

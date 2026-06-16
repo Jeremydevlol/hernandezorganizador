@@ -488,7 +488,11 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                     setLoading(false);
                     return;
                 }
-                const asesorado = String(formData.asesorado || "") === "true";
+                // Es asesorado si se marcó el checkbox O si se respondió "Sí" a
+                // "¿Requiere asesoramiento?". En ambos casos el tratamiento (con su
+                // producto) va SOLO a la hoja Trat. Asesorados, sin duplicar.
+                const asesorado = String(formData.asesorado || "") === "true"
+                    || String(formData.requiere_asesoramiento || "no") === "si";
                 const payload = {
                     fecha_aplicacion: fechaAFormatoISO(formData.fecha_aplicacion || "") || new Date().toISOString().split("T")[0],
                     parcela_ids: parcelaIds,
@@ -512,7 +516,12 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                     await api.createTratamiento(cuaderno.id, payload);
                 }
 
-                const requiereAses = String(formData.requiere_asesoramiento || "no") === "si";
+                // Si el tratamiento es ASESORADO, ya queda registrado en su hoja
+                // (Trat. Asesorados) con su producto y firma: NO crear además un
+                // registro de asesoramiento (3.2) aparte (eso causaba el "duplicado
+                // sin producto"). El 3.2 obligatorio de patata/remolacha lo crea el
+                // backend automáticamente por superficie.
+                const requiereAses = !asesorado && String(formData.requiere_asesoramiento || "no") === "si";
                 if (requiereAses && parcelaIds.length > 0) {
                     try {
                         const cultivoAuto = [...new Set(
