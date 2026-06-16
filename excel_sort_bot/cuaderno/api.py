@@ -2052,37 +2052,68 @@ async def eliminar_tratamientos_multiples(cuaderno_id: str, data: EliminarMultip
 
 @router.post("/{cuaderno_id}/fertilizaciones")
 async def crear_fertilizacion(cuaderno_id: str, data: FertilizacionCreate):
-    """Añade un registro de fertilización."""
+    """
+    Añade un registro de fertilización, DESGLOSADO por cultivo: si las parcelas
+    seleccionadas son de varios cultivos, se crea una fila por cada cultivo
+    (con sus parcelas agrupadas), igual que el cuaderno oficial.
+    """
     storage = get_storage()
-    cuaderno = storage.cargar(cuaderno_id)
+    cuaderno = await _cargar_cuaderno_async(storage, cuaderno_id)
     if not cuaderno:
         raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
 
-    # Convertir parcela_ids a num_orden_parcelas
-    num_orden_parcelas = ""
-    if data.parcela_ids:
-        ordenes = []
-        for pid in data.parcela_ids:
-            p = cuaderno.obtener_parcela(pid)
-            if p and p.num_orden:
-                ordenes.append(str(p.num_orden))
-        num_orden_parcelas = ",".join(ordenes) if ordenes else ",".join(data.parcela_ids)
+    def _nueva(num_orden: str, cultivo: str, variedad: str) -> Fertilizacion:
+        return Fertilizacion(
+            fecha_inicio=data.fecha_inicio,
+            fecha_fin=data.fecha_fin,
+            num_orden_parcelas=num_orden,
+            cultivo_especie=cultivo,
+            cultivo_variedad=variedad,
+            tipo_abono=data.tipo_abono,
+            riqueza_npk=data.riqueza_npk,
+            dosis=data.dosis,
+            tipo_fertilizacion=data.tipo_fertilizacion,
+            observaciones=data.observaciones,
+        )
 
-    fertilizacion = Fertilizacion(
-        fecha_inicio=data.fecha_inicio,
-        fecha_fin=data.fecha_fin,
-        num_orden_parcelas=num_orden_parcelas,
-        cultivo_especie=data.cultivo_especie,
-        cultivo_variedad=data.cultivo_variedad,
-        tipo_abono=data.tipo_abono,
-        riqueza_npk=data.riqueza_npk,
-        dosis=data.dosis,
-        tipo_fertilizacion=data.tipo_fertilizacion,
-        observaciones=data.observaciones,
-    )
-    cuaderno.agregar_fertilizacion(fertilizacion)
+    creadas: List[Fertilizacion] = []
+
+    # Agrupar las parcelas por cultivo, conservando el orden de aparición.
+    grupos: Dict[str, List[Any]] = {}
+    orden_grupos: List[str] = []
+    for pid in (data.parcela_ids or []):
+        p = cuaderno.obtener_parcela(pid)
+        if not p:
+            continue
+        cultivo = (p.especie or p.cultivo or "").strip()
+        key = cultivo.upper() or "(SIN CULTIVO)"
+        if key not in grupos:
+            grupos[key] = []
+            orden_grupos.append(key)
+        grupos[key].append(p)
+
+    if grupos:
+        for key in orden_grupos:
+            parcelas = grupos[key]
+            ordenes = [str(p.num_orden) for p in parcelas if p.num_orden]
+            num_orden = ",".join(ordenes) if ordenes else ",".join(str(p.id) for p in parcelas)
+            cultivo = (parcelas[0].especie or parcelas[0].cultivo or data.cultivo_especie or "").strip()
+            variedades = sorted({(p.variedad or "").strip() for p in parcelas if (p.variedad or "").strip()})
+            f = _nueva(num_orden, cultivo, ", ".join(variedades) or data.cultivo_variedad)
+            cuaderno.agregar_fertilizacion(f)
+            creadas.append(f)
+    else:
+        # Sin parcelas seleccionadas: una sola fila con lo enviado.
+        f = _nueva("", data.cultivo_especie, data.cultivo_variedad)
+        cuaderno.agregar_fertilizacion(f)
+        creadas.append(f)
+
     _guardar_cuaderno(storage, cuaderno)
-    return {"fertilizacion": fertilizacion.to_dict()}
+    return {
+        "fertilizaciones": [f.to_dict() for f in creadas],
+        "fertilizacion": creadas[0].to_dict() if creadas else None,
+        "total": len(creadas),
+    }
 
 
 @router.delete("/{cuaderno_id}/fertilizaciones/{fertilizacion_id}")
