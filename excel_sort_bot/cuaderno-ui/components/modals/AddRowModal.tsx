@@ -425,7 +425,12 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                     const result: Array<{ producto_id: string; nombre_comercial: string; numero_registro: string; numero_lote: string; plaga_enfermedad: string; dosis: number; unidad_dosis: string }> = [];
                     for (const p of productosLista) {
                         const nombreProd = (p.nombre_comercial || "").trim();
-                        if (!nombreProd || (p.dosis ?? "") === "") continue;
+                        if (!nombreProd) continue;  // fila vacía → ignorar
+                        // Un producto con nombre PERO sin dosis se perdía en silencio
+                        // (el backend exige dosis > 0). Avisamos en vez de descartarlo.
+                        if ((p.dosis ?? "") === "" || (parseDecimalInput(p.dosis) ?? 0) <= 0) {
+                            throw new Error(`El producto "${nombreProd}" necesita una dosis mayor que 0 para guardarse.`);
+                        }
                         let pid = p.producto_id || "";
                         let ncom = p.nombre_comercial || "";
                         let nreg = p.numero_registro || "";
