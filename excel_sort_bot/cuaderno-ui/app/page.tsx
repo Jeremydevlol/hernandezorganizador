@@ -31,6 +31,9 @@ function newSessionId() {
 
 const CHAT_SESSIONS_STORAGE_KEY = "cuaderno_ui_chat_sessions_v1";
 const CHAT_ACTIVE_STORAGE_KEY = "cuaderno_ui_active_chat_id_v1";
+// Recordar dónde estaba el usuario (cuaderno + pestaña) al recargar / volver a entrar
+const LS_LAST_CUADERNO_KEY = "cuaderno_ui_last_cuaderno_v1";
+const LS_LAST_SHEET_KEY = "cuaderno_ui_last_sheet_v1";
 
 export default function Home() {
   const [cuadernos, setCuadernos] = useState<Cuaderno[]>([]);
@@ -111,9 +114,37 @@ export default function Home() {
     }
   }, []);
 
+  // Carga inicial + restaurar la última ubicación (cuaderno y pestaña).
+  const restoredRef = useRef(false);
   useEffect(() => {
-    loadCuadernos();
-  }, [loadCuadernos]);
+    (async () => {
+      const list = await loadCuadernos();
+      if (restoredRef.current) return;
+      restoredRef.current = true;
+      try {
+        const savedId = window.localStorage.getItem(LS_LAST_CUADERNO_KEY);
+        const savedSheet = window.localStorage.getItem(LS_LAST_SHEET_KEY);
+        if (savedId && list && list.some((c) => c.id === savedId)) {
+          if (savedSheet) setActiveSheet(savedSheet as SheetType);
+          await selectCuaderno(savedId);
+        }
+      } catch { /* ignore */ }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Guardar la ubicación actual para restaurarla al recargar / volver a entrar
+  useEffect(() => {
+    try {
+      if (activeCuaderno?.id) window.localStorage.setItem(LS_LAST_CUADERNO_KEY, activeCuaderno.id);
+    } catch { /* ignore */ }
+  }, [activeCuaderno?.id]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(LS_LAST_SHEET_KEY, activeSheet);
+    } catch { /* ignore */ }
+  }, [activeSheet]);
 
   // Tras inactividad (p. ej. Render free tier) el backend puede dormir: al volver a la pestaña reintentamos la lista.
   // Se usa un throttle de 5 minutos para no refrescar si el usuario solo cambia de pestaña un momento.
