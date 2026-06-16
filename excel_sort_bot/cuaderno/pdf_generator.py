@@ -781,8 +781,10 @@ class PDFGenerator:
                 key=lambda t: (id_to_idx.get(t.id, 99999), t.fecha_aplicacion or "")
             )
 
-        # Tratamientos asesorados (con recomendación de asesor) y registro 3.2
+        # Tratamientos asesorados (con recomendación de asesor) y registro 3.2.
+        # Los asesorados se sacan de 3.1 y van SOLO en su propia hoja.
         tratamientos_asesorados = [t for t in tratamientos_validos if getattr(t, "asesorado", False)]
+        tratamientos_31 = [t for t in tratamientos_validos if not getattr(t, "asesorado", False)]
         asesoramientos = list(getattr(cuaderno, "asesoramientos", None) or [])
         fertilizaciones = list(getattr(cuaderno, "fertilizaciones", None) or [])
         cosechas = list(getattr(cuaderno, "cosechas", None) or [])
@@ -884,8 +886,8 @@ class PDFGenerator:
             self._tabla_moderna(pdf, prod_data, (70, 42, 40, 40, 42),
                                 row_colors=prod_colors)
 
-        # --- TRATAMIENTOS (solo si hay datos y seleccionada) ---
-        if tratamientos_validos and _base_ok("tratamientos"):
+        # --- TRATAMIENTOS (solo si hay datos y seleccionada; sin asesorados) ---
+        if tratamientos_31 and _base_ok("tratamientos"):
             seccion_num += 1
             pdf.add_page()
             self._seccion_header(pdf, seccion_num, "Registro de Tratamientos Realizados")
@@ -898,12 +900,12 @@ class PDFGenerator:
                     filtro += f"hasta {date_hasta}"
                 self._nota_info(pdf, filtro.strip())
 
-            self._nota_info(pdf, f"{len(tratamientos_validos)} tratamiento(s) registrado(s)")
+            self._nota_info(pdf, f"{len(tratamientos_31)} tratamiento(s) registrado(s)")
 
             trat_data = [["Fecha", "Parcela(s)", "Producto", "N. Reg.",
                           "Dosis", "Plaga/Enferm.", "Operador"]]
             trat_colors = []
-            for t in tratamientos_validos:
+            for t in tratamientos_31:
                 parcelas_str = ", ".join(t.parcela_nombres[:2])
                 if len(t.parcela_nombres) > 2:
                     parcelas_str += f" (+{len(t.parcela_nombres)-2})"

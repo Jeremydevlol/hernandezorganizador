@@ -3121,6 +3121,7 @@ def _hojas_disponibles_para_exportar(cuaderno) -> dict:
     productos_validos = [p for p in cuaderno.productos if p.nombre_comercial and p.nombre_comercial.strip()]
     tratamientos_validos = [t for t in cuaderno.tratamientos if t.fecha_aplicacion or t.cultivo_especie or t.productos]
     tratamientos_asesorados = [t for t in tratamientos_validos if getattr(t, "asesorado", False)]
+    tratamientos_31 = [t for t in tratamientos_validos if not getattr(t, "asesorado", False)]
     asesoramientos = getattr(cuaderno, "asesoramientos", None) or []
     fertilizantes = getattr(cuaderno, "fertilizaciones", None) or []
     cosechas = getattr(cuaderno, "cosechas", None) or []
@@ -3132,8 +3133,8 @@ def _hojas_disponibles_para_exportar(cuaderno) -> dict:
         hojas_base.append({"sheet_id": BASE_SHEET_IDS["parcelas"], "nombre": "2.1. Datos Parcelas", "num_filas": len(parcelas_validas), "tipo": "base"})
     if productos_validos:
         hojas_base.append({"sheet_id": BASE_SHEET_IDS["productos"], "nombre": "Productos Fitosanitarios", "num_filas": len(productos_validos), "tipo": "base"})
-    if tratamientos_validos:
-        hojas_base.append({"sheet_id": BASE_SHEET_IDS["tratamientos"], "nombre": "3.1. Reg. Tratamientos", "num_filas": len(tratamientos_validos), "tipo": "base"})
+    if tratamientos_31:
+        hojas_base.append({"sheet_id": BASE_SHEET_IDS["tratamientos"], "nombre": "3.1. Reg. Tratamientos", "num_filas": len(tratamientos_31), "tipo": "base"})
     if tratamientos_asesorados:
         hojas_base.append({"sheet_id": BASE_SHEET_IDS["trat_asesor"], "nombre": "Trat. Asesorados (con firma)", "num_filas": len(tratamientos_asesorados), "tipo": "base"})
     if asesoramientos:
@@ -3712,6 +3713,8 @@ async def exportar_excel_cuaderno(
     )
 
     tratamientos = tratamientos_ordenados
+    # Los tratamientos asesorados NO van en 3.1: tienen su propia hoja.
+    tratamientos = [t for t in tratamientos if not getattr(t, "asesorado", False)]
     if desde or hasta:
         if desde:
             tratamientos = [t for t in tratamientos if (t.fecha_aplicacion or "") >= desde]
