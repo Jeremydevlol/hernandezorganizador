@@ -23,6 +23,9 @@ import {
     Database,
     AlertTriangle,
     Package,
+    ArrowDownAZ,
+    Clock,
+    ListOrdered,
 } from "lucide-react";
 import { Cuaderno, CuadernoSummary, SheetType, Carpeta } from "@/lib/types";
 import { api } from "@/lib/api";
@@ -48,6 +51,8 @@ interface SidebarProps {
 const LS_FOLDERS_KEY = "cuaderno_carpetas_v1";
 const LS_FOLDER_MAP_KEY = "cuaderno_carpeta_map_v1";
 const LS_COLLAPSED_KEY = "cuaderno_sidebar_collapsed_v2";
+const LS_CUADERNO_SORT_KEY = "cuaderno_sidebar_sort_v1";
+const LS_CUADERNO_ORDER_KEY = "cuaderno_sidebar_order_v1";
 
 function genId() {
     return "f-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -87,6 +92,29 @@ function loadCollapsed(): Set<string> {
 
 function saveCollapsed(set: Set<string>) {
     try { localStorage.setItem(LS_COLLAPSED_KEY, JSON.stringify([...set])); } catch { /* ignore */ }
+}
+
+type CuadernoSort = "reciente" | "alfabetico" | "manual";
+
+function loadCuadernoSort(): CuadernoSort {
+    try {
+        const raw = localStorage.getItem(LS_CUADERNO_SORT_KEY);
+        if (raw === "reciente" || raw === "alfabetico" || raw === "manual") return raw;
+    } catch { /* ignore */ }
+    return "reciente";
+}
+function saveCuadernoSort(s: CuadernoSort) {
+    try { localStorage.setItem(LS_CUADERNO_SORT_KEY, s); } catch { /* ignore */ }
+}
+function loadCuadernoOrder(): string[] {
+    try {
+        const raw = localStorage.getItem(LS_CUADERNO_ORDER_KEY);
+        if (raw) return JSON.parse(raw);
+    } catch { /* ignore */ }
+    return [];
+}
+function saveCuadernoOrder(ids: string[]) {
+    try { localStorage.setItem(LS_CUADERNO_ORDER_KEY, JSON.stringify(ids)); } catch { /* ignore */ }
 }
 
 const SHEET_ITEMS: { key: SheetType; label: string; icon: React.ReactNode }[] = [
@@ -176,6 +204,49 @@ export default function Sidebar({
     // Drag & drop
     const [dragCuadernoId, setDragCuadernoId] = useState<string | null>(null);
     const [dropTargetFolderId, setDropTargetFolderId] = useState<string | null>(null);
+    // Reordenar lista de cuadernos: por orden y arrastrando
+    const [cuadernoSort, setCuadernoSortState] = useState<CuadernoSort>(() => loadCuadernoSort());
+    const [manualOrder, setManualOrder] = useState<string[]>(() => loadCuadernoOrder());
+    const [dropBeforeId, setDropBeforeId] = useState<string | null>(null);
+
+    const setCuadernoSort = useCallback((s: CuadernoSort) => {
+        setCuadernoSortState(s);
+        saveCuadernoSort(s);
+    }, []);
+
+    /** Ordena una lista de cuadernos según el modo activo. */
+    const sortCuadernos = useCallback((list: (CuadernoSummary | Cuaderno)[]) => {
+        const arr = [...list];
+        if (cuadernoSort === "alfabetico") {
+            arr.sort((a, b) =>
+                (a.nombre_explotacion || "").localeCompare(b.nombre_explotacion || "", "es", { sensitivity: "base" })
+            );
+        } else if (cuadernoSort === "manual" && manualOrder.length > 0) {
+            const order: Record<string, number> = {};
+            manualOrder.forEach((id: string, i: number) => { order[id] = i; });
+            const BIG = 1e9;
+            arr.sort((a, b) => {
+                const ia = a.id in order ? order[a.id] : BIG;
+                const ib = b.id in order ? order[b.id] : BIG;
+                return ia - ib;
+            });
+        }
+        // "reciente" → respeta el orden de llegada (API: updated_at desc)
+        return arr;
+    }, [cuadernoSort, manualOrder]);
+
+    /** Reordena (arrastrando) colocando `dragId` justo antes de `beforeId`
+     *  (o al final si beforeId es null). Activa el modo "manual". */
+    const reorderCuaderno = useCallback((dragId: string, beforeId: string | null, baseList: (CuadernoSummary | Cuaderno)[]) => {
+        const baseIds = sortCuadernos(baseList).map((c: CuadernoSummary | Cuaderno) => c.id);
+        const without = baseIds.filter((id: string) => id !== dragId);
+        let insertAt = beforeId ? without.indexOf(beforeId) : without.length;
+        if (insertAt < 0) insertAt = without.length;
+        without.splice(insertAt, 0, dragId);
+        setManualOrder(without);
+        saveCuadernoOrder(without);
+        setCuadernoSort("manual");
+    }, [sortCuadernos, setCuadernoSort]);
 
     // Deleting
     const [deletingCuadernoId, setDeletingCuadernoId] = useState<string | null>(null);
@@ -348,14 +419,35 @@ export default function Sidebar({
     };
 
     // ---- Render a cuaderno item ----
-    const renderCuaderno = (c: CuadernoSummary | Cuaderno) => (
+    const renderCuaderno = (c: CuadernoSummary | Cuaderno, siblings?: (CuadernoSummary | Cuaderno)[]) => (
         <div
             key={c.id}
             draggable
             onDragStart={(e) => handleDragStart(e, c.id)}
-            onDragEnd={handleDragEnd}
+            onDragEnd={() => { handleDragEnd(); setDropBeforeId(null); }}
+            onDragOver={(e) => {
+                // Reordenar dentro de la misma lista: marcar inserción antes de este item
+                if (dragCuadernoId && dragCuadernoId !== c.id) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    e.dataTransfer.dropEffect = "move";
+                    setDropBeforeId(c.id);
+                }
+            }}
+            onDrop={(e) => {
+                if (dragCuadernoId && dragCuadernoId !== c.id) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    reorderCuaderno(dragCuadernoId, c.id, siblings || rootCuadernos);
+                    setDropBeforeId(null);
+                    setDragCuadernoId(null);
+                    setDropTargetFolderId(null);
+                }
+            }}
             className={`group relative w-full px-2.5 py-2 rounded-md text-sm transition-colors ${
                 dragCuadernoId === c.id ? "opacity-40" : ""
+            } ${
+                dropBeforeId === c.id ? "border-t-2 border-emerald-400" : ""
             } ${
                 activeCuaderno?.id === c.id
                     ? "bg-emerald-500/10 ring-1 ring-emerald-500/20"
@@ -532,7 +624,7 @@ export default function Sidebar({
                                 </button>
                             </div>
                         )}
-                        {cuads.map(renderCuaderno)}
+                        {sortCuadernos(cuads).map((c) => renderCuaderno(c, cuads))}
                     </div>
                 )}
             </div>
@@ -569,22 +661,8 @@ export default function Sidebar({
                         </button>
                     </div>
                 )}
-                {onOpenGlobalStock && (
-                    <div className="px-2 py-1.5 border-b border-gray-200">
-                        <button
-                            onClick={onOpenGlobalStock}
-                            className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-                                globalStockOpen
-                                    ? "bg-emerald-500/10 text-emerald-500"
-                                    : "text-gray-600 hover:bg-gray-100 hover:text-gray-800"
-                            }`}
-                        >
-                            <Package size={15} className={globalStockOpen ? "text-emerald-400" : "text-gray-400"} />
-                            <span className="flex-1 text-left">Stock Global</span>
-                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-500 font-medium">Global</span>
-                        </button>
-                    </div>
-                )}
+                {/* Stock Global retirado del sidebar: el stock vive en la pestaña
+                    "Stock" de cada cuaderno (hoja de stock de productos). */}
 
                 {/* Explorer */}
                 <div className="flex-1 overflow-y-auto py-2">
@@ -593,6 +671,25 @@ export default function Sidebar({
                             Explorador
                         </span>
                         <div className="flex items-center gap-0.5">
+                            <button
+                                onClick={() => setCuadernoSort(
+                                    cuadernoSort === "reciente" ? "alfabetico"
+                                    : cuadernoSort === "alfabetico" ? "manual"
+                                    : "reciente"
+                                )}
+                                className="w-7 h-7 flex items-center justify-center rounded-md text-gray-500 hover:text-emerald-400 hover:bg-gray-100 transition-colors"
+                                title={
+                                    cuadernoSort === "reciente" ? "Orden: recientes (clic para A-Z)"
+                                    : cuadernoSort === "alfabetico" ? "Orden: alfabético A-Z (clic para manual)"
+                                    : "Orden: manual — arrastra para reordenar (clic para recientes)"
+                                }
+                            >
+                                {cuadernoSort === "alfabetico"
+                                    ? <ArrowDownAZ size={14} className="text-emerald-500" />
+                                    : cuadernoSort === "manual"
+                                        ? <ListOrdered size={14} className="text-emerald-500" />
+                                        : <Clock size={14} />}
+                            </button>
                             <button
                                 onClick={() => setShowUploadModal(true)}
                                 className="w-7 h-7 flex items-center justify-center rounded-md text-gray-500 hover:text-emerald-400 hover:bg-gray-100 transition-colors"
@@ -677,7 +774,7 @@ export default function Sidebar({
                                         {/* Cuadernos not in any folder (root level) */}
                                         {rootCuadernos.length > 0 && (
                                             <div className="ml-2 pl-2 border-l border-gray-200/80 space-y-0.5">
-                                                {rootCuadernos.map(renderCuaderno)}
+                                                {sortCuadernos(rootCuadernos).map((c) => renderCuaderno(c, rootCuadernos))}
                                             </div>
                                         )}
                                     </>
