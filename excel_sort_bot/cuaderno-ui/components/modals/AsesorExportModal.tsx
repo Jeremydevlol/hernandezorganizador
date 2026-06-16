@@ -88,12 +88,12 @@ export default function AsesorExportModal({ isOpen, initial, onClose, onConfirm 
                             />
                         </div>
                         <div>
-                            <label className="mb-1 block text-xs font-medium text-gray-600">Nº colegiado</label>
+                            <label className="mb-1 block text-xs font-medium text-gray-600">Nº inscripción ROPO</label>
                             <input
                                 type="text"
                                 value={colegiado}
                                 onChange={(e) => setColegiado(e.target.value)}
-                                placeholder="Ej: CAM-12345"
+                                placeholder="Ej: ROPO-12345"
                                 className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 transition-colors focus:border-blue-500 focus:outline-none"
                             />
                         </div>

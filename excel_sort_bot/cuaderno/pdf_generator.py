@@ -676,7 +676,7 @@ class PDFGenerator:
         if nombre_asesor:
             asesor_lines.append(f"Asesor: {nombre_asesor}")
         if num_colegiado:
-            asesor_lines.append(f"Nº inscripcion/colegiado: {num_colegiado}")
+            asesor_lines.append(f"Nº inscripcion ROPO: {num_colegiado}")
         if fecha_recomendacion:
             asesor_lines.append(f"Fecha recomendacion: {fecha_recomendacion}")
         for i, txt in enumerate(asesor_lines):
@@ -937,28 +937,41 @@ class PDFGenerator:
             self._tabla_moderna(pdf, trat_data, (28, 40, 50, 30, 30, 38, 28), font_size=7,
                                 row_colors=trat_colors)
 
-        # --- TRATAMIENTOS ASESORADOS (con firma del asesor/cliente) ---
+        # --- TRATAMIENTOS ASESORADOS (mismo formato/columnas que 3.1) ---
         if tratamientos_asesorados and _base_ok("trat_asesor"):
             seccion_num += 1
             pdf.add_page()
             self._seccion_header(pdf, seccion_num, "Tratamientos Asesorados")
             self._nota_info(pdf, f"{len(tratamientos_asesorados)} tratamiento(s) con asesoramiento")
+            # Misma tabla y filas (1 por producto) que la hoja normal 3.1.
+            ta_data = [["Fecha", "Parcela(s)", "Producto", "N. Reg.",
+                        "Dosis", "Plaga/Enferm.", "Operador"]]
+            ta_colors = []
             for t in tratamientos_asesorados:
-                prod = t.productos[0] if t.productos else None
-                parcelas_str = ", ".join(t.parcela_nombres[:3]) or (f"Ord. {t.num_orden_parcelas}" if t.num_orden_parcelas else "-")
-                self._tabla_info_moderna(pdf, [
-                    ("Fecha aplicacion", t.fecha_aplicacion or "-"),
-                    ("Parcela(s)", parcelas_str),
-                    ("Cultivo", t.cultivo_especie or "-"),
-                    ("Producto", (prod.nombre_comercial if prod else "") or "-"),
-                    ("N. Registro", (prod.numero_registro if prod else "") or "-"),
-                    ("Dosis", (f"{prod.dosis} {prod.unidad_dosis}" if prod and prod.dosis else "-")),
-                    ("Problematica", t.problema_fitosanitario or t.plaga_enfermedad or "-"),
-                    ("Asesor", getattr(t, "nombre_asesor_trat", "") or "-"),
-                    ("N. Colegiado/Habilitacion", getattr(t, "num_colegiado_asesor", "") or "-"),
-                    ("Fecha recomendacion", getattr(t, "fecha_recomendacion_asesor", "") or "-"),
-                ])
-                pdf.ln(6)
+                parcelas_str = ", ".join(t.parcela_nombres[:2])
+                if len(t.parcela_nombres) > 2:
+                    parcelas_str += f" (+{len(t.parcela_nombres)-2})"
+                if not parcelas_str and t.num_orden_parcelas:
+                    parcelas_str = f"Ord. {t.num_orden_parcelas}"
+                operador = t.operador or t.aplicador or ""
+                t_color = (getattr(t, "color_fila", None) or "").strip() or None
+                for prod in (t.productos or []):
+                    if not (prod.nombre_comercial and prod.nombre_comercial.strip()):
+                        continue
+                    ta_data.append([
+                        t.fecha_aplicacion or "-",
+                        parcelas_str or "-",
+                        prod.nombre_comercial or "-",
+                        prod.numero_registro or "-",
+                        f"{prod.dosis} {prod.unidad_dosis}" if prod.dosis else "-",
+                        t.plaga_enfermedad or t.problema_fitosanitario or "-",
+                        operador or "-",
+                    ])
+                    ta_colors.append(t_color)
+            if len(ta_data) > 1:
+                self._tabla_moderna(pdf, ta_data, (28, 40, 50, 30, 30, 38, 28), font_size=7,
+                                    row_colors=ta_colors)
+            # Datos del asesor + firmas van en el bloque de firmas al final.
 
         # --- 3.2 ASESORAMIENTO FITOSANITARIO ---
         if asesoramientos and _base_ok("asesoramiento"):

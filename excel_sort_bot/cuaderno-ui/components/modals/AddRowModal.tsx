@@ -1387,13 +1387,13 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                                 />
                                             </div>
                                             <div>
-                                                <label className="block text-xs font-medium text-gray-600 mb-1">Nº colegiado</label>
+                                                <label className="block text-xs font-medium text-gray-600 mb-1">Nº inscripción ROPO</label>
                                                 <input
                                                     type="text"
                                                     name="num_colegiado_asesor"
                                                     value={formData.num_colegiado_asesor || ""}
                                                     onChange={handleChange}
-                                                    placeholder="Ej: CAM-12345"
+                                                    placeholder="Ej: ROPO-12345"
                                                     className="w-full px-3 py-2 rounded-lg bg-white border border-gray-300 text-gray-900 text-sm focus:outline-none focus:border-blue-500 transition-colors"
                                                 />
                                             </div>

@@ -481,7 +481,7 @@ export const SHEET_CONFIG: Record<SheetType, {
             { key: "numero_registro", label: "Nº Registro", width: 90, editable: true },
             { key: "dosis", label: "Dosis", width: 100, type: "text", editable: true },
             { key: "nombre_asesor_trat", label: "Asesor", width: 140 },
-            { key: "num_colegiado_asesor", label: "Nº Colegiado", width: 110 },
+            { key: "num_colegiado_asesor", label: "Nº inscripción ROPO", width: 150 },
             { key: "fecha_recomendacion_asesor", label: "Fecha Recomen.", width: 110, type: "date" },
             { key: "eficacia", label: "Eficacia", width: 70, editable: true },
         ],

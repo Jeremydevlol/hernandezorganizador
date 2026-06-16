@@ -3555,7 +3555,7 @@ async def exportar_excel_cuaderno(
             vc.font = val_font
 
         _par(r, 1, "Asesor:", nombre_asesor)
-        _par(r + 1, 1, "Nº inscripción/colegiado:", num_colegiado)
+        _par(r + 1, 1, "Nº inscripción ROPO:", num_colegiado)
         _par(r + 2, 1, "Fecha recomendación:", fecha_recom)
         _par(r, col_der, "Titular:", nombre_titular)
 
@@ -4079,40 +4079,72 @@ async def exportar_excel_cuaderno(
     # ================================================================
     # 6b. TRATAMIENTOS ASESORADOS (con firma)
     # ================================================================
-    trat_asesorados = [t for t in cuaderno.tratamientos if getattr(t, "asesorado", False)]
+    # Mismos tratamientos asesorados pero en el ORDEN aplicado en el editor.
+    trat_asesorados = [t for t in tratamientos_ordenados if getattr(t, "asesorado", False)]
+    if desde or hasta:
+        if desde:
+            trat_asesorados = [t for t in trat_asesorados if (t.fecha_aplicacion or "") >= desde]
+        if hasta:
+            trat_asesorados = [t for t in trat_asesorados if (t.fecha_aplicacion or "") <= hasta]
     if trat_asesorados and BASE_SHEET_IDS["trat_asesor"] in ids_incluir_set:
         ws_ta = wb.create_sheet("Trat. Asesorados")
         ws_ta.sheet_properties.tabColor = "8E24AA"
-        ta_headers = ["Fecha", "Parcela(s)", "Cultivo", "Producto", "Nº Registro",
-                      "Dosis", "Problemática", "Asesor", "Nº Colegiado", "Fecha recom.", "Firmado"]
-        ta_types = ["date", "str", "str", "str", "str", "str", "str", "str", "str", "date", "str"]
-        ta_widths = [13, 22, 16, 22, 14, 14, 22, 22, 16, 14, 10]
-        ta_rows = []
-        for t in trat_asesorados:
-            prod = t.productos[0] if t.productos else None
-            parcelas_str = ", ".join(t.parcela_nombres[:3]) or (t.num_orden_parcelas or "")
-            firmado = "Sí" if (getattr(t, "firma_asesor", "") or getattr(t, "firma_cliente", "")) else "No"
-            ta_rows.append([
-                t.fecha_aplicacion, parcelas_str, t.cultivo_especie,
-                (prod.nombre_comercial if prod else ""), (prod.numero_registro if prod else ""),
-                (f"{prod.dosis} {prod.unidad_dosis}" if prod and prod.dosis else ""),
-                t.problema_fitosanitario or t.plaga_enfermedad,
-                getattr(t, "nombre_asesor_trat", ""), getattr(t, "num_colegiado_asesor", ""),
-                getattr(t, "fecha_recomendacion_asesor", ""), firmado,
-            ])
-        ta_data_start = _build_oficial_sheet(
+        # Mismas columnas y estructura que 3.1 Registro Tratamientos + asesor.
+        ta_headers = trat_col_headers + ["Asesor", "Nº inscripción\nROPO", "Fecha\nrecom."]
+        ta_types = trat_col_types + ["str", "str", "date"]
+        ta_widths = trat_col_widths + [22, 18, 14]
+        num_ta_cols = len(ta_headers)
+        _build_oficial_sheet(
             ws_ta, sheet_title="Trat. Asesorados",
             section_title="TRATAMIENTOS ASESORADOS",
-            section_subtitle="Tratamientos con recomendación de asesor",
-            group_headers=[], col_headers=ta_headers, col_types=ta_types,
-            col_widths=ta_widths, data_rows=ta_rows, row_colors=[None] * len(ta_rows),
+            section_subtitle="3.1 REGISTRO DE TRATAMIENTOS CON ASESORAMIENTO",
+            group_headers=[
+                ("IDENTIFICACIÓN PARCELA", 1, 2),
+                ("TRATAMIENTO APLICADO", 3, 11),
+                ("ASESORAMIENTO", 12, num_ta_cols),
+            ],
+            col_headers=ta_headers, col_types=ta_types,
+            col_widths=ta_widths, data_rows=[],
         )
+        # Filas con desglose por producto y separación por Ord. de parcela,
+        # exactamente igual que la hoja 3.1.
+        ta_data_start = 7
+        row = ta_data_start
+        prev_parcela_key_ta: Optional[str] = None
+        for t in trat_asesorados:
+            parcela_key = _trat_parcela_group_key(t)
+            if modo_parcela_export and prev_parcela_key_ta is not None and parcela_key != prev_parcela_key_ta:
+                _write_blank_separator_row(ws_ta, row, num_ta_cols)
+                row += 1
+            prev_parcela_key_ta = parcela_key
+
+            parcela_ref = t.num_orden_parcelas or ", ".join(t.parcela_nombres) or ""
+            productos = t.productos if t.productos else [ProductoAplicado()]
+            color_hex = (getattr(t, "color_fila", None) or "").strip() or None
+            for pi, prod in enumerate(productos):
+                _write_data_row(ws_ta, row, [
+                    parcela_ref if pi == 0 else "",
+                    t.cultivo_especie if pi == 0 else "",
+                    t.superficie_tratada if pi == 0 else None,
+                    t.fecha_aplicacion if pi == 0 else "",
+                    (t.problema_fitosanitario or t.plaga_enfermedad) if pi == 0 else "",
+                    (t.aplicador or t.operador) if pi == 0 else "",
+                    t.equipo if pi == 0 else "",
+                    prod.nombre_comercial,
+                    prod.numero_registro,
+                    (f"{prod.dosis} {prod.unidad_dosis}".strip() if prod.dosis else None),
+                    t.eficacia if pi == 0 else "",
+                    getattr(t, "nombre_asesor_trat", "") if pi == 0 else "",
+                    getattr(t, "num_colegiado_asesor", "") if pi == 0 else "",
+                    getattr(t, "fecha_recomendacion_asesor", "") if pi == 0 else "",
+                ], ta_types, row_fill_hex=color_hex, use_zebra=True)
+                row += 1
         # Bloque de firmas al pie de la hoja: asesor, nº inscripción, fecha y las
         # firmas digitales (asesor + titular) incrustadas como imagen.
         _bloque_firmas_excel(
             ws_ta,
-            start_row=ta_data_start + len(ta_rows) + 2,
-            num_cols=len(ta_headers),
+            start_row=row + 2,
+            num_cols=num_ta_cols,
             nombre_asesor=next((getattr(t, "nombre_asesor_trat", "") for t in trat_asesorados
                                 if getattr(t, "nombre_asesor_trat", "")), ""),
             num_colegiado=next((getattr(t, "num_colegiado_asesor", "") for t in trat_asesorados
