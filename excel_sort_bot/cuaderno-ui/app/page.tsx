@@ -119,18 +119,23 @@ export default function Home() {
   // para no pisar la pestaña/cuaderno guardados con los valores por defecto.
   const [restored, setRestored] = useState(false);
   useEffect(() => {
-    (async () => {
-      const list = await loadCuadernos();
-      try {
-        const savedId = window.localStorage.getItem(LS_LAST_CUADERNO_KEY);
-        const savedSheet = window.localStorage.getItem(LS_LAST_SHEET_KEY);
-        if (savedId && list && list.some((c) => c.id === savedId)) {
-          if (savedSheet) setActiveSheet(savedSheet as SheetType);
-          await selectCuaderno(savedId);
-        }
-      } catch { /* ignore */ }
-      setRestored(true);
-    })();
+    let savedId: string | null = null;
+    let savedSheet: string | null = null;
+    try {
+      savedId = window.localStorage.getItem(LS_LAST_CUADERNO_KEY);
+      savedSheet = window.localStorage.getItem(LS_LAST_SHEET_KEY);
+    } catch { /* ignore */ }
+
+    // La pestaña se restaura YA (instantáneo, no necesita backend).
+    if (savedSheet) setActiveSheet(savedSheet as SheetType);
+
+    // Cuaderno y lista EN PARALELO (antes era secuencial → ~el doble de espera).
+    // Si el cuaderno fue borrado, selectCuaderno falla y se ignora (queda en home).
+    const pCuaderno = savedId
+      ? selectCuaderno(savedId).catch(() => { /* cuaderno inexistente */ })
+      : Promise.resolve();
+    const pList = loadCuadernos();
+    Promise.allSettled([pCuaderno, pList]).then(() => setRestored(true));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
