@@ -768,6 +768,14 @@ class CuadernoExplotacion:
                     hora_inicio=tratamiento.hora_inicio,
                     hora_fin=tratamiento.hora_fin,
                     estado=tratamiento.estado,
+                    # Asesoramiento + firmas: imprescindible copiarlos a cada línea
+                    # desglosada (si no, se pierden y no salen al exportar).
+                    asesorado=tratamiento.asesorado,
+                    nombre_asesor_trat=tratamiento.nombre_asesor_trat,
+                    num_colegiado_asesor=tratamiento.num_colegiado_asesor,
+                    fecha_recomendacion_asesor=tratamiento.fecha_recomendacion_asesor,
+                    firma_asesor=tratamiento.firma_asesor,
+                    firma_cliente=tratamiento.firma_cliente,
                 )
                 self._enriquecer_productos(t)
                 self.tratamientos.append(t)

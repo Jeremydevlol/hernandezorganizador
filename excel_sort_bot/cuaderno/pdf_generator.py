@@ -646,6 +646,41 @@ class PDFGenerator:
         except Exception:
             return None
 
+    def _bloque_firmas_final(self, pdf: ModernPDF, firma_asesor: str, firma_cliente: str,
+                             nombre_asesor: str = "", nombre_titular: str = ""):
+        """Bloque de firmas al pie del documento (asesor + titular)."""
+        # Reservar espacio; si no cabe en la página actual, nueva página
+        if pdf.get_y() > pdf.h - 75:
+            pdf.add_page()
+        else:
+            pdf.ln(10)
+        # Título del bloque
+        pdf.set_font("Helvetica", "B", 11)
+        pdf.set_text_color(*COLOR_PRIMARY)
+        pdf.cell(0, 7, "Firmas", new_x="LMARGIN", new_y="NEXT")
+        pdf.set_draw_color(*COLOR_PRIMARY)
+        pdf.set_line_width(0.4)
+        pdf.line(pdf.l_margin, pdf.get_y(), pdf.w - pdf.r_margin, pdf.get_y())
+        pdf.ln(6)
+        pdf.set_text_color(0, 0, 0)
+
+        self._firmas_asesor_cliente(pdf, firma_asesor, firma_cliente)
+
+        # Nombres bajo cada firma
+        if nombre_asesor or nombre_titular:
+            col_w = 85
+            y = pdf.get_y() + 1
+            pdf.set_font("Helvetica", "", 8)
+            pdf.set_text_color(*COLOR_TEXT_MUTED)
+            if nombre_asesor:
+                pdf.set_xy(pdf.l_margin, y)
+                pdf.cell(col_w, 4, _sanitize(f"Asesor: {nombre_asesor}"), align="C")
+            if nombre_titular:
+                pdf.set_xy(pdf.l_margin + col_w + 10, y)
+                pdf.cell(col_w, 4, _sanitize(f"Titular: {nombre_titular}"), align="C")
+            pdf.ln(8)
+            pdf.set_text_color(0, 0, 0)
+
     def _firmas_asesor_cliente(self, pdf: ModernPDF, firma_asesor: str, firma_cliente: str):
         """Dibuja las dos firmas (asesor y cliente) lado a lado, con su etiqueta."""
         col_w = 85
@@ -914,8 +949,6 @@ class PDFGenerator:
                     ("N. Colegiado/Habilitacion", getattr(t, "num_colegiado_asesor", "") or "-"),
                     ("Fecha recomendacion", getattr(t, "fecha_recomendacion_asesor", "") or "-"),
                 ])
-                pdf.ln(3)
-                self._firmas_asesor_cliente(pdf, getattr(t, "firma_asesor", ""), getattr(t, "firma_cliente", ""))
                 pdf.ln(6)
 
         # --- 3.2 ASESORAMIENTO FITOSANITARIO ---
@@ -1026,6 +1059,19 @@ class PDFGenerator:
                     cw = (pdf.w - 36) / num_cols
                     self._tabla_moderna(pdf, tabla_data,
                                          tuple([cw] * num_cols), font_size=6)
+
+        # --- BLOQUE DE FIRMAS (al final del documento) ---
+        # Campo de firma del asesor y del titular al pie de todo el cuaderno.
+        # Usa la firma digital capturada en un tratamiento asesorado si existe;
+        # si no, deja la línea para firmar a mano.
+        if tratamientos_asesorados:
+            firma_asesor = next((getattr(t, "firma_asesor", "") for t in tratamientos_asesorados
+                                 if getattr(t, "firma_asesor", "")), "")
+            firma_cliente = next((getattr(t, "firma_cliente", "") for t in tratamientos_asesorados
+                                  if getattr(t, "firma_cliente", "")), "")
+            nombre_asesor = next((getattr(t, "nombre_asesor_trat", "") for t in tratamientos_asesorados
+                                  if getattr(t, "nombre_asesor_trat", "")), "")
+            self._bloque_firmas_final(pdf, firma_asesor, firma_cliente, nombre_asesor, cuaderno.titular)
 
         # --- PIE FINAL ---
         self._pie_documento(pdf, cuaderno)
