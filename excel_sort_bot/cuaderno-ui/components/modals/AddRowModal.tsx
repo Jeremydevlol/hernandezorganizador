@@ -41,9 +41,11 @@ interface AddRowModalProps {
     onSuccess: () => void;
     editTratamientoId?: string;
     initialParcelaIds?: string[];
+    /** Mostrar la sección "Tratamiento asesorado" (solo en contexto de la hoja Trat. Asesorados). */
+    mostrarAsesorado?: boolean;
 }
 
-export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSuccess, editTratamientoId, initialParcelaIds = [] }: AddRowModalProps) {
+export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSuccess, editTratamientoId, initialParcelaIds = [], mostrarAsesorado = false }: AddRowModalProps) {
     const [loading, setLoading] = useState(false);
     const [formData, setFormData] = useState<Record<string, any>>({});
     const [productInputValue, setProductInputValue] = useState("");
@@ -138,7 +140,14 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                     eficacia: tratamiento.eficacia || "BUENA",
                     observaciones: tratamiento.observaciones || "",
                     productos_lista: productos_lista.length > 0 ? productos_lista : undefined,
+                    // Cargar datos de asesoramiento para no perderlos al editar
+                    asesorado: tratamiento.asesorado ? "true" : "false",
+                    nombre_asesor_trat: tratamiento.nombre_asesor_trat || "",
+                    num_colegiado_asesor: tratamiento.num_colegiado_asesor || "",
+                    fecha_recomendacion_asesor: fechaAFormatoDDMM((tratamiento.fecha_recomendacion_asesor || "").split("T")[0]),
                 });
+                setFirmaAsesor(tratamiento.firma_asesor || "");
+                setFirmaCliente(tratamiento.firma_cliente || "");
             }).catch(() => setFormData({}));
         } else if (isOpen && !editTratamientoId) {
             const base: Record<string, any> = {
@@ -153,6 +162,8 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                 equipo: "1",
                 eficacia: "BUENA",
                 requiere_asesoramiento: "no",
+                // En la hoja de Trat. Asesorados el tratamiento es asesorado por defecto.
+                asesorado: mostrarAsesorado ? "true" : "false",
             };
             if (sheet === "fertilizantes") {
                 const now = new Date();
@@ -182,7 +193,7 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
             setFertProdInput("");
             setFertProductDropdownOpen(false);
         }
-    }, [isOpen, sheet, cuaderno.id, editTratamientoId, initialParcelaIds]);
+    }, [isOpen, sheet, cuaderno.id, editTratamientoId, initialParcelaIds, mostrarAsesorado]);
 
     useEffect(() => {
         if (isOpen && sheet === "tratamientos" && editTratamientoId) {
@@ -827,11 +838,13 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                     )}
                                 </div>
                             </div>
-                            {parcelasSeleccionadasEspeciales.length > 0 && (
+                            {Array.isArray(formData.parcela_ids) && formData.parcela_ids.length > 0 && (
                                 <div className="p-3 rounded-lg bg-amber-50 border border-amber-200">
-                                    <div className="text-xs text-amber-700 mb-2">
-                                        Has seleccionado parcelas de patata/remolacha.
-                                    </div>
+                                    {parcelasSeleccionadasEspeciales.length > 0 && (
+                                        <div className="text-xs text-amber-700 mb-2">
+                                            Has seleccionado parcelas de patata/remolacha (asesoramiento obligatorio si superan 5 ha).
+                                        </div>
+                                    )}
                                     <label className="block text-xs font-medium text-gray-700 mb-1.5">
                                         ¿Requiere asesoramiento?
                                     </label>
@@ -1304,7 +1317,9 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                 </select>
                             </div>
 
-                            {/* ── Sección asesoramiento ── */}
+                            {/* ── Sección asesoramiento (solo en la hoja de Trat. Asesorados
+                                   o al editar un tratamiento que ya es asesorado) ── */}
+                            {(mostrarAsesorado || String(formData.asesorado) === "true") && (
                             <div className="border border-blue-200 rounded-xl bg-blue-50/50 p-4 space-y-3">
                                 <label className="flex items-center gap-2 cursor-pointer select-none">
                                     <input
@@ -1419,6 +1434,7 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                     </div>
                                 )}
                             </div>
+                            )}
                         </>
                     )}
 

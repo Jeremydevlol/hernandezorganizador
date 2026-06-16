@@ -3233,6 +3233,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                 sheet={openTreatFromSelection || openTreatFromTratSelection || openTreatFromAsesorSelection ? "tratamientos" : openFertFromSelection ? "fertilizantes" : effectiveSheet}
                 cuaderno={cuaderno}
                 editTratamientoId={editTratamientoId ?? undefined}
+                mostrarAsesorado={effectiveSheet === "trat_asesor" || openTreatFromAsesorSelection}
                 initialParcelaIds={
                     openTreatFromTratSelection
                         ? parcelasFromSelectedTratamientos
