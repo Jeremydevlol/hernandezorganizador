@@ -850,12 +850,31 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
             if (ids.size === 0) return;
             const sheet_id = sheet === "cosecha" ? "cosecha" : sheet;
             const val = hex === "#ffffff" ? "" : hex;
-            for (const id of ids) {
-                await api.patchCell(cuaderno.id, { sheet_id, row: id, column: "color_fila", value: val });
+            const idList = Array.from(ids);
+            // Optimista: pinta las filas YA (la celda color_fila se aplica a la fila
+            // al instante vía pendingEdits) sin esperar al servidor ni recargar todo.
+            setPendingEdits((prev) => {
+                const next = new Map(prev);
+                for (const id of idList) next.set(`${sheet}|${id}|color_fila`, val);
+                return next;
+            });
+            try {
+                // Una sola petición batch en vez de N peticiones en bucle.
+                await api.patchCellsBatch(cuaderno.id, idList.map((id) => ({
+                    sheet_id, row: id, column: "color_fila", value: val,
+                })));
+                scheduleRefresh();
+            } catch (e) {
+                console.error("Error aplicando color de fila:", e);
+                setPendingEdits((prev) => {
+                    const next = new Map(prev);
+                    for (const id of idList) next.delete(`${sheet}|${id}|color_fila`);
+                    return next;
+                });
+                alert("No se pudo aplicar el color. Inténtalo de nuevo.");
             }
-            onRefresh();
         },
-        [cuaderno.id, onRefresh]
+        [cuaderno.id, scheduleRefresh]
     );
 
     const sheetHasRowSelect = SHEETS_WITH_ROW_SELECT.includes(effectiveSheet);
