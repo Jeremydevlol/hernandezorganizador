@@ -200,7 +200,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
     const asesorInitial = useMemo(() => {
         const asesorados = (cuaderno.tratamientos || []).filter((t: any) => Boolean(t.asesorado));
         const pick = (campo: string) => {
-            const t = asesorados.find((x: any) => (x[campo] || "").toString().trim());
+            const t = asesorados.find((x: any) => (x[campo] || "").toString().trim()) as any;
             return t ? String(t[campo]).trim() : "";
         };
         const fechaIso = pick("fecha_recomendacion_asesor");
