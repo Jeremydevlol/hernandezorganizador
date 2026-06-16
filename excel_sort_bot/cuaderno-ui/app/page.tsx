@@ -115,12 +115,12 @@ export default function Home() {
   }, []);
 
   // Carga inicial + restaurar la última ubicación (cuaderno y pestaña).
-  const restoredRef = useRef(false);
+  // `restored` se pone a true al terminar; hasta entonces NO se guarda nada,
+  // para no pisar la pestaña/cuaderno guardados con los valores por defecto.
+  const [restored, setRestored] = useState(false);
   useEffect(() => {
     (async () => {
       const list = await loadCuadernos();
-      if (restoredRef.current) return;
-      restoredRef.current = true;
       try {
         const savedId = window.localStorage.getItem(LS_LAST_CUADERNO_KEY);
         const savedSheet = window.localStorage.getItem(LS_LAST_SHEET_KEY);
@@ -129,22 +129,26 @@ export default function Home() {
           await selectCuaderno(savedId);
         }
       } catch { /* ignore */ }
+      setRestored(true);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Guardar la ubicación actual para restaurarla al recargar / volver a entrar
+  // Guardar la ubicación actual SOLO tras restaurar (si no, el guardado inicial
+  // con los valores por defecto pisaría lo guardado antes de poder leerlo).
   useEffect(() => {
+    if (!restored) return;
     try {
       if (activeCuaderno?.id) window.localStorage.setItem(LS_LAST_CUADERNO_KEY, activeCuaderno.id);
     } catch { /* ignore */ }
-  }, [activeCuaderno?.id]);
+  }, [activeCuaderno?.id, restored]);
 
   useEffect(() => {
+    if (!restored) return;
     try {
       window.localStorage.setItem(LS_LAST_SHEET_KEY, activeSheet);
     } catch { /* ignore */ }
-  }, [activeSheet]);
+  }, [activeSheet, restored]);
 
   // Tras inactividad (p. ej. Render free tier) el backend puede dormir: al volver a la pestaña reintentamos la lista.
   // Se usa un throttle de 5 minutos para no refrescar si el usuario solo cambia de pestaña un momento.
