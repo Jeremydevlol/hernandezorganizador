@@ -1946,12 +1946,11 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
     }
 
     function renderTabs() {
-        // Tabs principales siempre visibles
-        const primaryTabs: SheetType[] = ["parcelas", "productos", "tratamientos", "fertilizantes", "cosecha", "asesoramiento", "stock"];
+        // Tabs principales siempre visibles (cosecha retirada; Trat. Asesorados a la vista)
+        const primaryTabs: SheetType[] = ["parcelas", "productos", "tratamientos", "fertilizantes", "asesoramiento", "trat_asesor", "stock"];
         // Tabs en el dropdown "Más"
         const moreTabs: SheetType[] = ["historico", "catalogo"];
         if (hasEspeciales) moreTabs.push("tratamientos_especiales");
-        if (hasEspeciales || hasAsesorados) moreTabs.push("trat_asesor");
 
         const moreActive = moreTabs.includes(effectiveSheet) && effectiveImportedIndex === null;
         const importedActive = effectiveImportedIndex !== null;
