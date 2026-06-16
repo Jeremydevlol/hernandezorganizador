@@ -5,6 +5,8 @@ Diseño premium con jerarquía visual clara, métricas destacadas y tablas elega
 """
 import unicodedata
 import re
+import base64
+from io import BytesIO
 from pathlib import Path
 from datetime import datetime
 from typing import List, Optional, Any, Dict, Tuple
@@ -632,6 +634,53 @@ class PDFGenerator:
         pdf.cell(0, 5, _sanitize(texto), new_x="LMARGIN", new_y="NEXT")
         pdf.ln(3)
 
+    def _firma_to_stream(self, data: str):
+        """Convierte una firma base64 (PNG, con o sin prefijo data:) a BytesIO."""
+        if not data or not str(data).strip():
+            return None
+        s = str(data).strip()
+        if "," in s and s.lower().startswith("data:"):
+            s = s.split(",", 1)[1]
+        try:
+            return BytesIO(base64.b64decode(s))
+        except Exception:
+            return None
+
+    def _firmas_asesor_cliente(self, pdf: ModernPDF, firma_asesor: str, firma_cliente: str):
+        """Dibuja las dos firmas (asesor y cliente) lado a lado, con su etiqueta."""
+        col_w = 85
+        img_h = 24
+        y0 = pdf.get_y()
+        x_asesor = pdf.l_margin
+        x_cliente = pdf.l_margin + col_w + 10
+
+        pdf.set_font("Helvetica", "B", 8)
+        pdf.set_text_color(*COLOR_TEXT_MUTED)
+        pdf.set_xy(x_asesor, y0)
+        pdf.cell(col_w, 5, "Firma del asesor", new_x="LMARGIN", new_y="NEXT")
+        pdf.set_xy(x_cliente, y0)
+        pdf.cell(col_w, 5, "Firma del cliente", new_x="LMARGIN", new_y="NEXT")
+
+        y_img = y0 + 6
+        for x, firma in ((x_asesor, firma_asesor), (x_cliente, firma_cliente)):
+            stream = self._firma_to_stream(firma)
+            if stream is not None:
+                try:
+                    pdf.image(stream, x=x, y=y_img, w=col_w, h=img_h)
+                except Exception:
+                    pdf.set_xy(x, y_img + 8)
+                    pdf.set_font("Helvetica", "", 8)
+                    pdf.cell(col_w, 5, "(firma no disponible)", align="C")
+            else:
+                # Línea para firma manuscrita si no hay firma digital
+                pdf.line(x, y_img + img_h - 2, x + col_w, y_img + img_h - 2)
+                pdf.set_xy(x, y_img + img_h)
+                pdf.set_font("Helvetica", "", 7)
+                pdf.set_text_color(*COLOR_TEXT_MUTED)
+                pdf.cell(col_w, 4, "Sin firmar", align="C")
+        pdf.set_y(y_img + img_h + 4)
+        pdf.set_text_color(0, 0, 0)
+
     # ============================================
     # GENERADOR: CUADERNO COMPLETO
     # ============================================
@@ -696,6 +745,12 @@ class PDFGenerator:
                 tratamientos_validos,
                 key=lambda t: (id_to_idx.get(t.id, 99999), t.fecha_aplicacion or "")
             )
+
+        # Tratamientos asesorados (con recomendación de asesor) y registro 3.2
+        tratamientos_asesorados = [t for t in tratamientos_validos if getattr(t, "asesorado", False)]
+        asesoramientos = list(getattr(cuaderno, "asesoramientos", None) or [])
+        fertilizaciones = list(getattr(cuaderno, "fertilizaciones", None) or [])
+        cosechas = list(getattr(cuaderno, "cosechas", None) or [])
 
         # Filtrar hojas importadas: solo las que tienen datos reales
         hojas_validas = []
@@ -837,6 +892,92 @@ class PDFGenerator:
                     trat_colors.append(t_color)
             self._tabla_moderna(pdf, trat_data, (28, 40, 50, 30, 30, 38, 28), font_size=7,
                                 row_colors=trat_colors)
+
+        # --- TRATAMIENTOS ASESORADOS (con firma del asesor/cliente) ---
+        if tratamientos_asesorados and _base_ok("trat_asesor"):
+            seccion_num += 1
+            pdf.add_page()
+            self._seccion_header(pdf, seccion_num, "Tratamientos Asesorados")
+            self._nota_info(pdf, f"{len(tratamientos_asesorados)} tratamiento(s) con asesoramiento")
+            for t in tratamientos_asesorados:
+                prod = t.productos[0] if t.productos else None
+                parcelas_str = ", ".join(t.parcela_nombres[:3]) or (f"Ord. {t.num_orden_parcelas}" if t.num_orden_parcelas else "-")
+                self._tabla_info_moderna(pdf, [
+                    ("Fecha aplicacion", t.fecha_aplicacion or "-"),
+                    ("Parcela(s)", parcelas_str),
+                    ("Cultivo", t.cultivo_especie or "-"),
+                    ("Producto", (prod.nombre_comercial if prod else "") or "-"),
+                    ("N. Registro", (prod.numero_registro if prod else "") or "-"),
+                    ("Dosis", (f"{prod.dosis} {prod.unidad_dosis}" if prod and prod.dosis else "-")),
+                    ("Problematica", t.problema_fitosanitario or t.plaga_enfermedad or "-"),
+                    ("Asesor", getattr(t, "nombre_asesor_trat", "") or "-"),
+                    ("N. Colegiado/Habilitacion", getattr(t, "num_colegiado_asesor", "") or "-"),
+                    ("Fecha recomendacion", getattr(t, "fecha_recomendacion_asesor", "") or "-"),
+                ])
+                pdf.ln(3)
+                self._firmas_asesor_cliente(pdf, getattr(t, "firma_asesor", ""), getattr(t, "firma_cliente", ""))
+                pdf.ln(6)
+
+        # --- 3.2 ASESORAMIENTO FITOSANITARIO ---
+        if asesoramientos and _base_ok("asesoramiento"):
+            seccion_num += 1
+            pdf.add_page()
+            self._seccion_header(pdf, seccion_num, "Asesoramiento Fitosanitario (3.2)")
+            self._nota_info(pdf, f"{len(asesoramientos)} registro(s) de asesoramiento")
+            ases_data = [["Fecha", "Parcela(s)", "Cultivo", "Asesor", "N. Habilit.", "Tipo", "Recomendacion"]]
+            ases_colors = []
+            for a in asesoramientos:
+                ases_data.append([
+                    a.fecha or "-",
+                    a.num_orden_parcelas or "-",
+                    a.cultivo_especie or "-",
+                    a.nombre_asesor or "-",
+                    a.num_habilitacion or "-",
+                    a.tipo_asesoramiento or "-",
+                    (a.recomendacion or a.observaciones or "-")[:60],
+                ])
+                ases_colors.append((getattr(a, "color_fila", None) or "").strip() or None)
+            self._tabla_moderna(pdf, ases_data, (24, 30, 32, 40, 26, 30, 52), font_size=7, row_colors=ases_colors)
+
+        # --- REGISTRO DE FERTILIZACIONES ---
+        if fertilizaciones and _base_ok("fertilizantes"):
+            seccion_num += 1
+            pdf.add_page()
+            self._seccion_header(pdf, seccion_num, "Registro de Fertilizaciones")
+            self._nota_info(pdf, f"{len(fertilizaciones)} fertilizacion(es) registrada(s)")
+            fert_data = [["F. Inicio", "F. Fin", "Parcela(s)", "Cultivo", "Tipo Abono", "Riqueza NPK", "Dosis"]]
+            fert_colors = []
+            for f in fertilizaciones:
+                fert_data.append([
+                    f.fecha_inicio or "-",
+                    f.fecha_fin or "-",
+                    f.num_orden_parcelas or "-",
+                    f.cultivo_especie or "-",
+                    f.tipo_abono or "-",
+                    f.riqueza_npk or "-",
+                    str(f.dosis or "-"),
+                ])
+                fert_colors.append((getattr(f, "color_fila", None) or "").strip() or None)
+            self._tabla_moderna(pdf, fert_data, (24, 24, 32, 34, 40, 32, 28), font_size=7, row_colors=fert_colors)
+
+        # --- REGISTRO DE COSECHAS ---
+        if cosechas and _base_ok("cosecha"):
+            seccion_num += 1
+            pdf.add_page()
+            self._seccion_header(pdf, seccion_num, "Registro de Cosechas")
+            self._nota_info(pdf, f"{len(cosechas)} cosecha(s) registrada(s)")
+            cos_data = [["Fecha", "Producto", "Cantidad (Kg)", "Parcela(s)", "Albaran", "Lote", "Cliente"]]
+            for c in cosechas:
+                cos_data.append([
+                    c.fecha or "-",
+                    c.producto or "-",
+                    f"{c.cantidad_kg:.0f}" if c.cantidad_kg else "-",
+                    c.num_orden_parcelas or "-",
+                    c.num_albaran or "-",
+                    c.num_lote or "-",
+                    c.cliente_nombre or "-",
+                ])
+            self._tabla_moderna(pdf, cos_data, (24, 40, 28, 30, 28, 28, 36), font_size=7)
 
         # --- HOJAS IMPORTADAS (solo las que tienen datos reales) ---
         if hojas_validas:

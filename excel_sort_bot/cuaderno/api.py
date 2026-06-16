@@ -3108,6 +3108,8 @@ BASE_SHEET_IDS = {
     "parcelas": "__parcelas__",
     "productos": "__productos__",
     "tratamientos": "__tratamientos__",
+    "trat_asesor": "__trat_asesor__",
+    "asesoramiento": "__asesoramiento__",
     "fertilizantes": "__fertilizantes__",
     "cosecha": "__cosecha__",
 }
@@ -3118,6 +3120,8 @@ def _hojas_disponibles_para_exportar(cuaderno) -> dict:
     parcelas_validas = [p for p in cuaderno.parcelas if p.activa]
     productos_validos = [p for p in cuaderno.productos if p.nombre_comercial and p.nombre_comercial.strip()]
     tratamientos_validos = [t for t in cuaderno.tratamientos if t.fecha_aplicacion or t.cultivo_especie or t.productos]
+    tratamientos_asesorados = [t for t in tratamientos_validos if getattr(t, "asesorado", False)]
+    asesoramientos = getattr(cuaderno, "asesoramientos", None) or []
     fertilizantes = getattr(cuaderno, "fertilizaciones", None) or []
     cosechas = getattr(cuaderno, "cosechas", None) or []
 
@@ -3130,6 +3134,10 @@ def _hojas_disponibles_para_exportar(cuaderno) -> dict:
         hojas_base.append({"sheet_id": BASE_SHEET_IDS["productos"], "nombre": "Productos Fitosanitarios", "num_filas": len(productos_validos), "tipo": "base"})
     if tratamientos_validos:
         hojas_base.append({"sheet_id": BASE_SHEET_IDS["tratamientos"], "nombre": "3.1. Reg. Tratamientos", "num_filas": len(tratamientos_validos), "tipo": "base"})
+    if tratamientos_asesorados:
+        hojas_base.append({"sheet_id": BASE_SHEET_IDS["trat_asesor"], "nombre": "Trat. Asesorados (con firma)", "num_filas": len(tratamientos_asesorados), "tipo": "base"})
+    if asesoramientos:
+        hojas_base.append({"sheet_id": BASE_SHEET_IDS["asesoramiento"], "nombre": "3.2. Asesoramiento Fitosanitario", "num_filas": len(asesoramientos), "tipo": "base"})
     if fertilizantes:
         hojas_base.append({"sheet_id": BASE_SHEET_IDS["fertilizantes"], "nombre": "Reg. Fertilizantes", "num_filas": len(fertilizantes), "tipo": "base"})
     if cosechas:
@@ -3826,6 +3834,65 @@ async def exportar_excel_cuaderno(
             data_rows=cos_data_rows,
             row_colors=cos_row_colors,
             total_values={2: "TOTAL kg:", 3: total_kg},
+        )
+
+    # ================================================================
+    # 6b. TRATAMIENTOS ASESORADOS (con firma)
+    # ================================================================
+    trat_asesorados = [t for t in cuaderno.tratamientos if getattr(t, "asesorado", False)]
+    if trat_asesorados and BASE_SHEET_IDS["trat_asesor"] in ids_incluir_set:
+        ws_ta = wb.create_sheet("Trat. Asesorados")
+        ws_ta.sheet_properties.tabColor = "8E24AA"
+        ta_headers = ["Fecha", "Parcela(s)", "Cultivo", "Producto", "Nº Registro",
+                      "Dosis", "Problemática", "Asesor", "Nº Colegiado", "Fecha recom.", "Firmado"]
+        ta_types = ["date", "str", "str", "str", "str", "str", "str", "str", "str", "date", "str"]
+        ta_widths = [13, 22, 16, 22, 14, 14, 22, 22, 16, 14, 10]
+        ta_rows = []
+        for t in trat_asesorados:
+            prod = t.productos[0] if t.productos else None
+            parcelas_str = ", ".join(t.parcela_nombres[:3]) or (t.num_orden_parcelas or "")
+            firmado = "Sí" if (getattr(t, "firma_asesor", "") or getattr(t, "firma_cliente", "")) else "No"
+            ta_rows.append([
+                t.fecha_aplicacion, parcelas_str, t.cultivo_especie,
+                (prod.nombre_comercial if prod else ""), (prod.numero_registro if prod else ""),
+                (f"{prod.dosis} {prod.unidad_dosis}" if prod and prod.dosis else ""),
+                t.problema_fitosanitario or t.plaga_enfermedad,
+                getattr(t, "nombre_asesor_trat", ""), getattr(t, "num_colegiado_asesor", ""),
+                getattr(t, "fecha_recomendacion_asesor", ""), firmado,
+            ])
+        _build_oficial_sheet(
+            ws_ta, sheet_title="Trat. Asesorados",
+            section_title="TRATAMIENTOS ASESORADOS",
+            section_subtitle="Tratamientos con recomendación de asesor (la firma se incluye en el PDF)",
+            group_headers=[], col_headers=ta_headers, col_types=ta_types,
+            col_widths=ta_widths, data_rows=ta_rows, row_colors=[None] * len(ta_rows),
+        )
+
+    # ================================================================
+    # 6c. ASESORAMIENTO FITOSANITARIO (3.2)
+    # ================================================================
+    asesoramientos = getattr(cuaderno, "asesoramientos", None) or []
+    if asesoramientos and BASE_SHEET_IDS["asesoramiento"] in ids_incluir_set:
+        ws_as = wb.create_sheet("3.2. Asesoramiento")
+        ws_as.sheet_properties.tabColor = "3949AB"
+        as_headers = ["Fecha", "Parcelas", "Cultivo", "Asesor", "Nº Habilitación",
+                      "Tipo", "Recomendación", "Observaciones"]
+        as_types = ["date", "str", "str", "str", "str", "str", "str", "str"]
+        as_widths = [13, 16, 18, 24, 18, 18, 36, 30]
+        as_rows = []
+        as_colors = []
+        for a in asesoramientos:
+            as_rows.append([
+                a.fecha, a.num_orden_parcelas, a.cultivo_especie, a.nombre_asesor,
+                a.num_habilitacion, a.tipo_asesoramiento, a.recomendacion, a.observaciones,
+            ])
+            as_colors.append((getattr(a, "color_fila", None) or "").strip() or None)
+        _build_oficial_sheet(
+            ws_as, sheet_title="3.2. Asesoramiento",
+            section_title="ASESORAMIENTO FITOSANITARIO (3.2)",
+            section_subtitle="Registro de asesoramiento fitosanitario",
+            group_headers=[], col_headers=as_headers, col_types=as_types,
+            col_widths=as_widths, data_rows=as_rows, row_colors=as_colors,
         )
 
     # ================================================================
