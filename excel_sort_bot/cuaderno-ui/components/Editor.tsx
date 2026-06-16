@@ -944,7 +944,9 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
             return;
         }
 
-        const dataToUse = effectiveSheet === "parcelas" ? (displayData as any[]) : (data as any[]);
+        // Usar SIEMPRE displayData (lo que realmente se ve/selecciona); antes
+        // tratamientos usaba `data` sin ordenar → editaba filas equivocadas.
+        const dataToUse = displayData as any[];
         setBulkApplying(true);
         setSaving(true);
         try {
@@ -960,15 +962,25 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                 };
             }).filter((u) => u.rowId && u.colKey && u.editable);
 
-            // Una sola petición batch (1 carga + 1 guardado + 1 undo) en vez de
-            // N peticiones individuales → rápido y "Deshacer" revierte todo de golpe.
-            if (updates.length > 0) {
-                await api.patchCellsBatch(cuaderno.id, updates.map((u) => ({
-                    sheet_id: effectiveSheet,
-                    row: u.rowId,
-                    column: u.colKey,
-                    value: bulkEditValue,
-                })));
+            // La dosis es "número + unidad" dentro del producto: hay que separarla.
+            const dosisParsed = parseTratamientoDosisInput(bulkEditValue);
+            const inputTraeUnidad = /l\/ha|kg\/ha|ml\/h|g\/ha|cc/i.test(bulkEditValue);
+
+            const batch: { sheet_id: string; row: any; column: string; value: any }[] = [];
+            for (const u of updates) {
+                if (effectiveSheet === "tratamientos" && u.colKey === "dosis") {
+                    batch.push({ sheet_id: effectiveSheet, row: u.rowId, column: "dosis", value: dosisParsed.num });
+                    if (inputTraeUnidad) {
+                        batch.push({ sheet_id: effectiveSheet, row: u.rowId, column: "unidad_dosis", value: dosisParsed.unit });
+                    }
+                } else {
+                    batch.push({ sheet_id: effectiveSheet, row: u.rowId, column: u.colKey, value: bulkEditValue });
+                }
+            }
+
+            // Una sola petición batch (1 carga + 1 guardado + 1 undo).
+            if (batch.length > 0) {
+                await api.patchCellsBatch(cuaderno.id, batch);
             }
             setLastSavedAt(Date.now());
             onRefresh();
@@ -977,7 +989,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
             setBulkEditValue("");
         } catch (e) {
             console.error("Error en edición masiva:", e);
-            alert("No se pudo aplicar la edición masiva.");
+            alert(`No se pudo aplicar la edición masiva.\n\n${(e as any)?.message || e}`);
         } finally {
             setBulkApplying(false);
             setSaving(false);
@@ -987,7 +999,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
     const applyReplaceInSelection = useCallback(async () => {
         if (selectedCells.size === 0 || !buscarValue.trim()) return;
         if (!BULK_EDIT_SHEETS.includes(effectiveSheet)) return;
-        const dataToUse = effectiveSheet === "parcelas" ? (displayData as any[]) : (data as any[]);
+        const dataToUse = displayData as any[];
         setBulkApplying(true);
         setSaving(true);
         try {
@@ -1004,12 +1016,20 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                 updates.push({ rowId: row.id, colKey, newValue: newVal });
             }
             if (updates.length > 0) {
-                await api.patchCellsBatch(cuaderno.id, updates.map((u) => ({
-                    sheet_id: effectiveSheet,
-                    row: u.rowId,
-                    column: u.colKey,
-                    value: u.newValue,
-                })));
+                const batch: { sheet_id: string; row: any; column: string; value: any }[] = [];
+                for (const u of updates) {
+                    if (effectiveSheet === "tratamientos" && u.colKey === "dosis") {
+                        // La dosis es número+unidad: separar para no guardar texto corrupto.
+                        const { num, unit } = parseTratamientoDosisInput(u.newValue);
+                        batch.push({ sheet_id: effectiveSheet, row: u.rowId, column: "dosis", value: num });
+                        if (/l\/ha|kg\/ha|ml\/h|g\/ha|cc/i.test(u.newValue)) {
+                            batch.push({ sheet_id: effectiveSheet, row: u.rowId, column: "unidad_dosis", value: unit });
+                        }
+                    } else {
+                        batch.push({ sheet_id: effectiveSheet, row: u.rowId, column: u.colKey, value: u.newValue });
+                    }
+                }
+                await api.patchCellsBatch(cuaderno.id, batch);
                 setLastSavedAt(Date.now());
                 onRefresh();
                 setSelectedCells(new Set());
@@ -1019,7 +1039,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
             }
         } catch (e) {
             console.error("Error en buscar/reemplazar:", e);
-            alert("No se pudo aplicar.");
+            alert(`No se pudo aplicar.\n\n${(e as any)?.message || e}`);
         } finally {
             setBulkApplying(false);
             setSaving(false);
@@ -1029,7 +1049,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
     /** Pegar texto y asignar cada valor a su celda correspondiente (orden: fila por fila, columna por columna). */
     const applyPasteToSelection = useCallback(async () => {
         if (selectedCells.size === 0 || !pasteValues.trim() || !BULK_EDIT_SHEETS.includes(effectiveSheet)) return;
-        const dataToUse = effectiveSheet === "parcelas" ? (displayData as any[]) : (data as any[]);
+        const dataToUse = displayData as any[];
         const colOrder = config.columns.map((c) => c.key);
 
         // Ordenar celdas: por fila, luego por orden de columna
@@ -1075,7 +1095,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
             setPasteValues("");
         } catch (e) {
             console.error("Error al aplicar pegada:", e);
-            alert("No se pudo aplicar.");
+            alert(`No se pudo aplicar.\n\n${(e as any)?.message || e}`);
         } finally {
             setBulkApplying(false);
             setSaving(false);
@@ -1133,7 +1153,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
     // Seleccionar columna completa
     const handleSelectColumn = useCallback((colIdx: number) => {
         const newSet = new Set<string>();
-        const dataToUse = effectiveSheet === "parcelas" ? displayData : data;
+        const dataToUse = displayData;
         for (let r = 0; r < dataToUse.length; r++) {
             newSet.add(`${r}:${config.columns[colIdx]?.key || colIdx}`);
         }
@@ -1227,7 +1247,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
     // Construir CellSelection para el chat
     const buildCellSelection = useCallback((): CellSelection | null => {
         if (selectedCells.size === 0) return null;
-        const dataToUse = effectiveSheet === "parcelas" ? displayData : data;
+        const dataToUse = displayData;
         const configCols = config.columns;
         const sheetName = effectiveImportedIndex !== null
             ? (hojas[effectiveImportedIndex]?.nombre || "Hoja importada")
@@ -1561,7 +1581,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                 onRefresh();
             } catch (e) {
                 console.error("Error guardando celda:", e);
-                alert("No se pudo guardar la dosis. Revisa la conexión e inténtalo de nuevo.");
+                alert(`No se pudo guardar la dosis.\n\n${(e as any)?.message || e}`);
             } finally {
                 setSaving(false);
             }
