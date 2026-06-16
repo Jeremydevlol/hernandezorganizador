@@ -35,6 +35,10 @@ const CHAT_ACTIVE_STORAGE_KEY = "cuaderno_ui_active_chat_id_v1";
 const LS_LAST_CUADERNO_KEY = "cuaderno_ui_last_cuaderno_v1";
 const LS_LAST_SHEET_KEY = "cuaderno_ui_last_sheet_v1";
 
+// Chat oculto de la interfaz (el código del chat se mantiene; poner a true para
+// volver a mostrarlo en cabecera, panel derecho, botón flotante y móvil).
+const CHAT_ENABLED = false;
+
 export default function Home() {
   const [cuadernos, setCuadernos] = useState<Cuaderno[]>([]);
   const [activeCuaderno, setActiveCuaderno] = useState<Cuaderno | null>(null);
@@ -329,6 +333,7 @@ export default function Home() {
             <rect x="2" y="3" width="6" height="18" rx="0.5" fill="currentColor" fillOpacity="0.5" />
           </svg>
         </button>
+        {CHAT_ENABLED && (
         <button
           type="button"
           onClick={() => setChatOpen((v) => !v)}
@@ -340,6 +345,7 @@ export default function Home() {
             <rect x="16" y="3" width="6" height="18" rx="0.5" fill="currentColor" fillOpacity="0.5" />
           </svg>
         </button>
+        )}
         {activeCuaderno && (
           <button
             onClick={() => setAlertasOpen(v => !v)}
@@ -425,7 +431,7 @@ export default function Home() {
                 focusSheetId={focusSheetId}
                 onFocusModeExit={() => setFocusSheetId(null)}
                 editorActionsRef={editorActionsRef}
-                onSendSelectionToChat={handleSendSelectionToChat}
+                onSendSelectionToChat={CHAT_ENABLED ? handleSendSelectionToChat : undefined}
               />
               {loadingCuaderno && (
                 <div className="absolute inset-0 z-30 bg-white/65 backdrop-blur-[1px] flex items-center justify-center">
@@ -442,7 +448,7 @@ export default function Home() {
         </main>
 
         {/* Chat Panel + resizer (ocultable) — desktop */}
-        {chatOpen && (
+        {CHAT_ENABLED && chatOpen && (
           <div className="desktop-only h-full" style={{ width: rightWidth }}>
             <div
               onMouseDown={() => setDragging("right")}
@@ -556,10 +562,10 @@ export default function Home() {
                   focusSheetId={focusSheetId}
                   onFocusModeExit={() => setFocusSheetId(null)}
                   editorActionsRef={editorActionsRef}
-                  onSendSelectionToChat={(sel) => {
+                  onSendSelectionToChat={CHAT_ENABLED ? (sel) => {
                     handleSendSelectionToChat(sel);
                     setMobilePanel("chat");
-                  }}
+                  } : undefined}
                 />
                 {loadingCuaderno && (
                   <div className="absolute inset-0 z-30 bg-white/65 backdrop-blur-[1px] flex items-center justify-center">
@@ -577,7 +583,7 @@ export default function Home() {
         )}
 
         {/* Chat — mobile full screen */}
-        {mobilePanel === "chat" && (
+        {CHAT_ENABLED && mobilePanel === "chat" && (
           <div className="mobile-only mobile-panel chat-mobile flex-col w-full">
             <ChatPanel
               cuaderno={activeCuaderno}
@@ -611,7 +617,7 @@ export default function Home() {
       </div>
 
       {/* Desktop: Botón flotante para abrir chat si está cerrado */}
-      {!chatOpen && (
+      {CHAT_ENABLED && !chatOpen && (
         <button
           onClick={() => setChatOpen(true)}
           className="desktop-only fixed right-4 bottom-4 w-12 h-12 rounded-full bg-green-600 hover:bg-green-500 text-white items-center justify-center shadow-lg transition-all"
@@ -646,6 +652,7 @@ export default function Home() {
           </svg>
           Editor
         </button>
+        {CHAT_ENABLED && (
         <button
           onClick={() => setMobilePanel("chat")}
           className={mobilePanel === "chat" ? "active" : ""}
@@ -655,6 +662,7 @@ export default function Home() {
           </svg>
           Chat
         </button>
+        )}
       </nav>
     </div>
   );

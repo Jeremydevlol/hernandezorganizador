@@ -817,14 +817,15 @@ export default function ImportedSheet({ hoja, onSave, onPatchCell, onDelete, onR
                                 </button>
                             </>
                         )}
+                        {onSendSelectionToChat && (
                         <button
                             onClick={handleSendToChat}
-                            disabled={!onSendSelectionToChat}
                             className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                             <Send size={13} />
                             Enviar al Chat
                         </button>
+                        )}
                         <button
                             onClick={clearCellSelection}
                             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 hover:text-gray-800 text-xs transition-colors"
