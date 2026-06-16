@@ -3035,6 +3035,7 @@ async def exportar_pdf_cuaderno(
     incluir_hojas: Optional[str] = Query(None, description="IDs de hojas a incluir separados por coma (ej: 'uuid1,uuid2')"),
     orden_parcelas: Optional[str] = Query(None, description="IDs de parcelas en el orden deseado (separados por coma)"),
     orden_tratamientos: Optional[str] = Query(None, description="IDs de tratamientos en el orden deseado (separados por coma)"),
+    orden_fertilizaciones: Optional[str] = Query(None, description="IDs de fertilizaciones en el orden deseado (separados por coma)"),
     orden_parcelas_modo: Optional[str] = Query(None, description="Modo de orden: num_orden, cultivo, alfabetico, etc."),
     check_hojas_editadas: Optional[bool] = Query(False, description="Solo verificar si hay hojas editadas sin exportar"),
 ):
@@ -3090,6 +3091,9 @@ async def exportar_pdf_cuaderno(
         k: (BASE_SHEET_IDS[k] in ids_incluir_set)
         for k in BASE_SHEET_IDS
     }
+
+    # Reordenar fertilizaciones según el orden del editor (la hoja se exporta igual que se ve).
+    _aplicar_orden_fertilizaciones(cuaderno, orden_fertilizaciones)
 
     try:
         generator = PDFGenerator()
@@ -3203,6 +3207,20 @@ BASE_SHEET_IDS = {
 }
 
 
+def _aplicar_orden_fertilizaciones(cuaderno, orden_ids: Optional[str]) -> None:
+    """Reordena cuaderno.fertilizaciones según una lista de ids (del editor).
+    Las que no estén en la lista se dejan al final en su orden original."""
+    if not orden_ids:
+        return
+    ids = [s.strip() for s in str(orden_ids).split(",") if s.strip()]
+    if not ids:
+        return
+    idx = {fid: i for i, fid in enumerate(ids)}
+    fers = list(getattr(cuaderno, "fertilizaciones", None) or [])
+    fers.sort(key=lambda f: idx.get(getattr(f, "id", ""), 10**9))
+    cuaderno.fertilizaciones = fers
+
+
 def _hojas_disponibles_para_exportar(cuaderno) -> dict:
     """Devuelve las hojas base del editor y las importadas editadas disponibles."""
     parcelas_validas = [p for p in cuaderno.parcelas if p.activa]
@@ -3259,6 +3277,7 @@ async def exportar_excel_cuaderno(
     incluir_hojas: Optional[str] = Query(None, description="IDs de hojas a incluir separados por coma; '' = ninguna"),
     orden_parcelas: Optional[str] = Query(None, description="IDs de parcelas en el orden deseado (separados por coma)"),
     orden_tratamientos: Optional[str] = Query(None, description="IDs de tratamientos en el orden deseado (separados por coma)"),
+    orden_fertilizaciones: Optional[str] = Query(None, description="IDs de fertilizaciones en el orden deseado (separados por coma)"),
     check_hojas_editadas: Optional[bool] = Query(False, description="Solo verificar hojas disponibles sin exportar"),
     orden_parcelas_modo: Optional[str] = Query(None, description="Modo de orden: num_orden, cultivo, alfabetico, etc."),
     orden_tratamientos_modo: Optional[str] = Query(
@@ -3272,9 +3291,12 @@ async def exportar_excel_cuaderno(
     """
     storage = get_storage()
     cuaderno = storage.cargar(cuaderno_id)
-    
+
     if not cuaderno:
         raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
+
+    # Reordenar fertilizaciones según el orden del editor (igual que se ve).
+    _aplicar_orden_fertilizaciones(cuaderno, orden_fertilizaciones)
 
     disponibles = _hojas_disponibles_para_exportar(cuaderno)
 

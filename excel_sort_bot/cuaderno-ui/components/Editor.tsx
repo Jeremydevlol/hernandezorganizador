@@ -687,6 +687,33 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
         return tratamientos;
     }, [cuaderno.tratamientos, tratSortMode, minNumOrdenTratamiento]);
 
+    // Fertilizaciones en el orden actual del editor (para exportar igual que se ve)
+    const sortedFertForExport = useMemo(() => {
+        const parseMesAnio = (s: any): number => {
+            const m = String(s || "").trim().match(/^(\d{1,2})\s*\/\s*(\d{4})$/);
+            if (!m) return 0;
+            return Number(m[2]) * 100 + Number(m[1]);
+        };
+        const ferts = [...((cuaderno as any).fertilizaciones || [])] as any[];
+        ferts.sort((a: any, b: any) => {
+            const aFecha = parseMesAnio(a.fecha_inicio || a.fecha_fin);
+            const bFecha = parseMesAnio(b.fecha_inicio || b.fecha_fin);
+            const aCultivo = String(a.cultivo_especie || "").toLowerCase();
+            const bCultivo = String(b.cultivo_especie || "").toLowerCase();
+            const aDosis = Number(a.dosis || 0);
+            const bDosis = Number(b.dosis || 0);
+            switch (fertSortMode) {
+                case "fecha_asc": return aFecha !== bFecha ? aFecha - bFecha : (a.id || "").localeCompare(b.id || "");
+                case "cultivo": return aCultivo !== bCultivo ? aCultivo.localeCompare(bCultivo, "es") : bFecha - aFecha;
+                case "dosis_desc": return bDosis !== aDosis ? bDosis - aDosis : bFecha - aFecha;
+                case "dosis_asc": return aDosis !== bDosis ? aDosis - bDosis : bFecha - aFecha;
+                case "fecha_desc":
+                default: return aFecha !== bFecha ? bFecha - aFecha : (a.id || "").localeCompare(b.id || "");
+            }
+        });
+        return ferts;
+    }, [cuaderno, fertSortMode]);
+
     const parcelasFromSelectedTratamientos = useMemo(() => {
         if (selectedTratamientos.size === 0) return [];
         const tratamientos = (cuaderno.tratamientos || []) as any[];
@@ -1493,8 +1520,9 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
             orden_parcelas: sortedParcelasForExport.map((p: any) => p.id).join(","),
             orden_tratamientos: sortedTratamientosForExport.map((t: any) => t.id).join(","),
             orden_tratamientos_modo: tratSortMode,
+            orden_fertilizaciones: sortedFertForExport.map((f: any) => f.id).join(","),
         };
-    }, [parcelSortMode, tratSortMode, sortedParcelasForExport, sortedTratamientosForExport]);
+    }, [parcelSortMode, tratSortMode, sortedParcelasForExport, sortedTratamientosForExport, sortedFertForExport]);
 
     const _openSheetPicker = async (type: "pdf" | "excel", params?: { desde?: string; hasta?: string }) => {
         const baseParams = buildExportParams(params);
