@@ -960,13 +960,15 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                 };
             }).filter((u) => u.rowId && u.colKey && u.editable);
 
-            for (const u of updates) {
-                await api.patchCell(cuaderno.id, {
+            // Una sola petición batch (1 carga + 1 guardado + 1 undo) en vez de
+            // N peticiones individuales → rápido y "Deshacer" revierte todo de golpe.
+            if (updates.length > 0) {
+                await api.patchCellsBatch(cuaderno.id, updates.map((u) => ({
                     sheet_id: effectiveSheet,
                     row: u.rowId,
                     column: u.colKey,
                     value: bulkEditValue,
-                });
+                })));
             }
             setLastSavedAt(Date.now());
             onRefresh();
@@ -1001,15 +1003,13 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                 const newVal = currentVal.split(buscarValue).join(reemplazarValue);
                 updates.push({ rowId: row.id, colKey, newValue: newVal });
             }
-            for (const u of updates) {
-                await api.patchCell(cuaderno.id, {
+            if (updates.length > 0) {
+                await api.patchCellsBatch(cuaderno.id, updates.map((u) => ({
                     sheet_id: effectiveSheet,
                     row: u.rowId,
                     column: u.colKey,
                     value: u.newValue,
-                });
-            }
-            if (updates.length > 0) {
+                })));
                 setLastSavedAt(Date.now());
                 onRefresh();
                 setSelectedCells(new Set());
@@ -1057,18 +1057,16 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
         setBulkApplying(true);
         setSaving(true);
         try {
+            const batch = [];
             for (let i = 0; i < sorted.length; i++) {
                 const { colKey, editable } = sorted[i];
                 if (!editable) continue;
-                const rowIndex = sorted[i].rowIndex;
-                const row = dataToUse[rowIndex];
+                const row = dataToUse[sorted[i].rowIndex];
                 if (!row?.id) continue;
-                await api.patchCell(cuaderno.id, {
-                    sheet_id: effectiveSheet,
-                    row: row.id,
-                    column: colKey,
-                    value: values[i],
-                });
+                batch.push({ sheet_id: effectiveSheet, row: row.id, column: colKey, value: values[i] });
+            }
+            if (batch.length > 0) {
+                await api.patchCellsBatch(cuaderno.id, batch);
             }
             setLastSavedAt(Date.now());
             onRefresh();

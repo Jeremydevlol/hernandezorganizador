@@ -252,6 +252,17 @@ export const api = {
             body: JSON.stringify(data),
         }),
 
+    /** Aplica MUCHOS cambios de celda en una sola petición (1 carga + 1 guardado
+     *  en backend). Imprescindible para edición masiva: rápido y un solo undo. */
+    patchCellsBatch: (
+        cuadernoId: string,
+        updates: { sheet_id: string; row: number | string; column: number | string; value: any }[]
+    ) =>
+        request<{ success: boolean; updated: number; timestamp: string }>(`/${cuadernoId}/cells/batch`, {
+            method: "PATCH",
+            body: JSON.stringify({ updates }),
+        }),
+
     deleteHoja: (cuadernoId: string, sheetId: string) =>
         request<{ success: boolean }>(`/${cuadernoId}/hojas/${sheetId}`, {
             method: "DELETE",

@@ -728,7 +728,9 @@ class CellPatch(BaseModel):
 
 class CellPatchBatch(BaseModel):
     """Edición atómica de varias celdas en una sola petición."""
-    updates: List[CellPatch] = Field(default_factory=list, max_length=2000)
+    # Tope alto para que una columna entera de un cuaderno grande quepa en UN
+    # solo batch (→ 1 guardado y 1 nivel de deshacer para toda la edición).
+    updates: List[CellPatch] = Field(default_factory=list, max_length=20000)
 
 
 # ============================================
