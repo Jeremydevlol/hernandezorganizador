@@ -204,9 +204,12 @@ export default function Sidebar({
     // Drag & drop
     const [dragCuadernoId, setDragCuadernoId] = useState<string | null>(null);
     const [dropTargetFolderId, setDropTargetFolderId] = useState<string | null>(null);
-    // Reordenar lista de cuadernos: por orden y arrastrando
-    const [cuadernoSort, setCuadernoSortState] = useState<CuadernoSort>(() => loadCuadernoSort());
-    const [manualOrder, setManualOrder] = useState<string[]>(() => loadCuadernoOrder());
+    // Reordenar lista de cuadernos: por orden y arrastrando.
+    // Se inicializan con el valor por defecto y se cargan de localStorage en un
+    // useEffect (cliente) — igual que folders/collapsed — para que persista bien
+    // con SSR (el inicializador useState(() => localStorage...) no es fiable).
+    const [cuadernoSort, setCuadernoSortState] = useState<CuadernoSort>("reciente");
+    const [manualOrder, setManualOrder] = useState<string[]>([]);
     const [dropBeforeId, setDropBeforeId] = useState<string | null>(null);
 
     const setCuadernoSort = useCallback((s: CuadernoSort) => {
@@ -255,6 +258,8 @@ export default function Sidebar({
         setFolders(loadFolders());
         setFolderMap(loadFolderMap());
         setCollapsed(loadCollapsed());
+        setCuadernoSortState(loadCuadernoSort());
+        setManualOrder(loadCuadernoOrder());
     }, []);
 
     const updateFolders = useCallback((next: Carpeta[]) => {

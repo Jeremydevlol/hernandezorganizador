@@ -399,7 +399,9 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
 
     // ---- Data filtrada por cultivo y orden ----
     const displayData = useMemo(() => {
-        if (effectiveSheet === "tratamientos") {
+        // El mismo orden/separadores de tratamientos se aplica también a las hojas
+        // de Trat. Asesorados y Trat. Especiales (son vistas de tratamientos).
+        if (effectiveSheet === "tratamientos" || effectiveSheet === "trat_asesor" || effectiveSheet === "tratamientos_especiales") {
             const tratamientos = (data as any[]).filter((t: any) => {
                 if (!tratCultivoFilter) return true;
                 const cultivo = (t.cultivo_especie || "").trim().toLowerCase();
@@ -2198,9 +2200,10 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                 <div className="w-px h-5 bg-gray-200" />
                             </div>
                         )}
-                        {effectiveSheet === "tratamientos" && uniqueCultivosTrat.length > 0 && (
+                        {(effectiveSheet === "tratamientos" || effectiveSheet === "trat_asesor" || effectiveSheet === "tratamientos_especiales") && (
                             <div className="flex items-center gap-1.5">
                                 <Filter size={14} className="text-gray-500 hidden sm:block" />
+                                {uniqueCultivosTrat.length > 0 && (
                                 <select
                                     value={tratCultivoFilter}
                                     onChange={(e) => { setTratCultivoFilter(e.target.value); setSelectedTratamientos(new Set()); }}
@@ -2211,6 +2214,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                         <option key={c} value={c}>{c}</option>
                                     ))}
                                 </select>
+                                )}
                                 <select
                                     value={tratSortMode}
                                     onChange={(e) => setTratSortMode(e.target.value as TratSortMode)}
@@ -2810,7 +2814,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
 
                                     // Separador de parcela cuando los tratamientos van ordenados
                                     // por parcela (modos "parcela" y "cultivo → parcela → fecha")
-                                    const showParcelaSeparator = effectiveSheet === "tratamientos" && (tratSortMode === "parcela" || tratSortMode === "cultivo");
+                                    const showParcelaSeparator = (effectiveSheet === "tratamientos" || effectiveSheet === "trat_asesor" || effectiveSheet === "tratamientos_especiales") && (tratSortMode === "parcela" || tratSortMode === "cultivo");
                                     const parcelaKey = (r: any) => {
                                         // Agrupar por Nº de orden real (desde parcela_ids), no por etiqueta textual.
                                         const ord = minNumOrdenTratamiento(r);
