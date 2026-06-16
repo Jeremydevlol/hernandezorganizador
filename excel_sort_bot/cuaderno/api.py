@@ -783,6 +783,61 @@ async def crear_cuaderno(data: CuadernoCreate):
     }
 
 
+def _desglosar_fertilizaciones_por_cultivo(cuaderno) -> bool:
+    """
+    Divide las fertilizaciones que abarcan parcelas de varios cultivos en una
+    fila por cultivo (con sus parcelas agrupadas). Idempotente: una fertilización
+    de un solo cultivo no se toca. Repara datos antiguos guardados combinados.
+    """
+    fers = getattr(cuaderno, "fertilizaciones", None) or []
+    if not fers:
+        return False
+    por_orden: Dict[str, Any] = {}
+    for p in cuaderno.parcelas:
+        if p.num_orden:
+            por_orden[str(p.num_orden)] = p
+
+    nuevas: List[Fertilizacion] = []
+    cambiado = False
+    for f in fers:
+        ordenes = [o.strip() for o in str(f.num_orden_parcelas or "").replace(";", ",").split(",") if o.strip()]
+        grupos: Dict[str, List[Any]] = {}
+        orden_grupos: List[str] = []
+        for o in ordenes:
+            p = por_orden.get(o)
+            if not p:
+                continue
+            cultivo = (p.especie or p.cultivo or "").strip().upper() or "(SIN CULTIVO)"
+            if cultivo not in grupos:
+                grupos[cultivo] = []
+                orden_grupos.append(cultivo)
+            grupos[cultivo].append((o, p))
+
+        if len(grupos) <= 1:
+            nuevas.append(f)  # un solo cultivo (o sin parcelas resolubles) → intacta
+            continue
+
+        cambiado = True
+        for key in orden_grupos:
+            items = grupos[key]
+            ords = ",".join(o for o, _ in items)
+            cult = (items[0][1].especie or items[0][1].cultivo or "").strip()
+            variedades = sorted({(p.variedad or "").strip() for _, p in items if (p.variedad or "").strip()})
+            nuevas.append(Fertilizacion(
+                fecha_inicio=f.fecha_inicio, fecha_fin=f.fecha_fin,
+                num_orden_parcelas=ords, cultivo_especie=cult,
+                cultivo_variedad=", ".join(variedades),
+                tipo_abono=f.tipo_abono, riqueza_npk=f.riqueza_npk,
+                dosis=f.dosis, tipo_fertilizacion=f.tipo_fertilizacion,
+                observaciones=f.observaciones,
+                color_fila=getattr(f, "color_fila", "") or "",
+            ))
+
+    if cambiado:
+        cuaderno.fertilizaciones = nuevas
+    return cambiado
+
+
 def _reparar_y_normalizar(cuaderno, storage) -> bool:
     """
     Ejecuta TODAS las reparaciones y normalizaciones sobre un objeto cuaderno ya cargado.
@@ -801,6 +856,8 @@ def _reparar_y_normalizar(cuaderno, storage) -> bool:
         print(f"[repair_bg] Error reparando {cuaderno.id}: {e}")
     # --- Normalizaciones de la API ---
     if _normalizar_parcelas_cultivo_variante(cuaderno):
+        changed = True
+    if _desglosar_fertilizaciones_por_cultivo(cuaderno):
         changed = True
     if _desglosar_asesoramientos_multi_parcela(cuaderno):
         changed = True
