@@ -86,14 +86,14 @@ const SHEET_ICONS: Record<SheetType, React.ReactNode> = {
     stock: <Package size={14} />,
 };
 
-const BASE_EDITABLE_SHEETS: SheetType[] = ["parcelas", "productos", "tratamientos", "asesoramiento"];
-const BULK_EDIT_SHEETS: SheetType[] = ["parcelas", "productos", "tratamientos", "fertilizantes", "cosecha"];
+const BASE_EDITABLE_SHEETS: SheetType[] = ["parcelas", "productos", "tratamientos", "trat_asesor", "asesoramiento"];
+const BULK_EDIT_SHEETS: SheetType[] = ["parcelas", "productos", "tratamientos", "trat_asesor", "fertilizantes", "cosecha"];
 
 const BASE_SHEET_IDS: SheetType[] = ["parcelas", "productos", "tratamientos", "fertilizantes", "cosecha", "asesoramiento", "historico", "catalogo", "tratamientos_especiales", "trat_asesor", "stock"];
 /** sheet_id que el backend usa para la hoja "Trat. Asesorados" en la exportación. */
 const TRAT_ASESOR_SHEET_ID = "__trat_asesor__";
 /** Hojas base con casilla de selección y color de fila */
-const SHEETS_WITH_ROW_SELECT: SheetType[] = ["parcelas", "productos", "tratamientos", "fertilizantes", "cosecha", "asesoramiento"];
+const SHEETS_WITH_ROW_SELECT: SheetType[] = ["parcelas", "productos", "tratamientos", "trat_asesor", "fertilizantes", "cosecha", "asesoramiento"];
 const ROW_COLOR_SWATCHES = ["#ffffff", "#fef3c7", "#fde68a", "#bbf7d0", "#bfdbfe", "#e9d5ff", "#fbcfe8", "#fecaca"] as const;
 type ParcelSortMode = "num_orden" | "cultivo_superficie" | "cultivo" | "alfabetico" | "superficie_desc" | "superficie_asc" | "termino_municipal" | "todo_az";
 type TratSortMode = "fecha_desc" | "fecha_asc" | "cultivo" | "parcela" | "producto";
@@ -1040,7 +1040,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
 
             const batch: { sheet_id: string; row: any; column: string; value: any }[] = [];
             for (const u of updates) {
-                if (effectiveSheet === "tratamientos" && u.colKey === "dosis") {
+                if ((effectiveSheet === "tratamientos" || effectiveSheet === "trat_asesor") && u.colKey === "dosis") {
                     batch.push({ sheet_id: effectiveSheet, row: u.rowId, column: "dosis", value: dosisParsed.num });
                     if (inputTraeUnidad) {
                         batch.push({ sheet_id: effectiveSheet, row: u.rowId, column: "unidad_dosis", value: dosisParsed.unit });
@@ -1090,7 +1090,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
             if (updates.length > 0) {
                 const batch: { sheet_id: string; row: any; column: string; value: any }[] = [];
                 for (const u of updates) {
-                    if (effectiveSheet === "tratamientos" && u.colKey === "dosis") {
+                    if ((effectiveSheet === "tratamientos" || effectiveSheet === "trat_asesor") && u.colKey === "dosis") {
                         // La dosis es número+unidad: separar para no guardar texto corrupto.
                         const { num, unit } = parseTratamientoDosisInput(u.newValue);
                         batch.push({ sheet_id: effectiveSheet, row: u.rowId, column: "dosis", value: num });
@@ -1659,7 +1659,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
     const handleSaveCell = async (rowId: string, colKey: string, newValue: string) => {
         if (!BASE_EDITABLE_SHEETS.includes(effectiveSheet)) return;
         setEditingCell(null);
-        if (effectiveSheet === "tratamientos" && colKey === "dosis") {
+        if ((effectiveSheet === "tratamientos" || effectiveSheet === "trat_asesor") && colKey === "dosis") {
             const { num, unit } = parseTratamientoDosisInput(newValue);
             const t = (cuaderno.tratamientos || []).find((x: { id?: string }) => x.id === rowId);
             const oldProd = t?.productos?.[0] as { dosis?: number; unidad_dosis?: string } | undefined;
@@ -3081,7 +3081,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                             })}
                                             <td className="px-3 py-2 border-b border-gray-200">
                                                 <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                                    {effectiveSheet === "tratamientos" && row.id && (
+                                                    {(effectiveSheet === "tratamientos" || effectiveSheet === "trat_asesor") && row.id && (
                                                         <>
                                                             <button
                                                                 type="button"
@@ -3334,7 +3334,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
             <AddRowModal
                 isOpen={showAddModal || !!editTratamientoId}
                 onClose={() => { setShowAddModal(false); setEditTratamientoId(null); setOpenTreatFromSelection(false); setOpenTreatFromTratSelection(false); setOpenTreatFromAsesorSelection(false); setOpenFertFromSelection(false); }}
-                sheet={openTreatFromSelection || openTreatFromTratSelection || openTreatFromAsesorSelection ? "tratamientos" : openFertFromSelection ? "fertilizantes" : effectiveSheet}
+                sheet={openTreatFromSelection || openTreatFromTratSelection || openTreatFromAsesorSelection ? "tratamientos" : openFertFromSelection ? "fertilizantes" : effectiveSheet === "trat_asesor" ? "tratamientos" : effectiveSheet}
                 cuaderno={cuaderno}
                 editTratamientoId={editTratamientoId ?? undefined}
                 mostrarAsesorado={effectiveSheet === "trat_asesor" || openTreatFromAsesorSelection}

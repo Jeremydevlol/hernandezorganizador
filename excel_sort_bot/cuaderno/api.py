@@ -1063,6 +1063,10 @@ async def actualizar_celda(cuaderno_id: str, data: CellPatch):
     if not cuaderno:
         raise HTTPException(status_code=404, detail="Cuaderno no encontrado")
     sheet_id = data.sheet_id
+    # La hoja "Trat. Asesorados" comparte entidades con "tratamientos" (los
+    # asesorados están en cuaderno.tratamientos): se edita igual que la 3.1.
+    if sheet_id == "trat_asesor":
+        sheet_id = "tratamientos"
     if sheet_id in ("parcelas", "productos", "tratamientos", "fertilizantes", "cosecha", "asesoramiento"):
         raw_row = data.row
         entity_id = str(raw_row)
@@ -1146,6 +1150,8 @@ async def actualizar_celdas_batch(cuaderno_id: str, data: CellPatchBatch):
 
     for patch in data.updates:
         sheet_id = patch.sheet_id
+        if sheet_id == "trat_asesor":
+            sheet_id = "tratamientos"
         if sheet_id in ("parcelas", "productos", "tratamientos", "fertilizantes", "cosecha", "asesoramiento"):
             raw_row = patch.row
             entity_id = str(raw_row)
