@@ -150,6 +150,8 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
     const [openTreatFromSelection, setOpenTreatFromSelection] = useState(false);
     const [openTreatFromTratSelection, setOpenTreatFromTratSelection] = useState(false);
     const [openTreatFromAsesorSelection, setOpenTreatFromAsesorSelection] = useState(false);
+    // Añadir tratamiento ASESORADO a partir de las parcelas seleccionadas.
+    const [openTreatAsesoradoFromSelection, setOpenTreatAsesoradoFromSelection] = useState(false);
     const [openFertFromSelection, setOpenFertFromSelection] = useState(false);
     const [repairingTratamientos, setRepairingTratamientos] = useState(false);
     // ---- Selección de celdas para Chat ----
@@ -2346,6 +2348,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                         setOpenTreatFromSelection(false);
                                         setOpenTreatFromTratSelection(false);
                                         setOpenTreatFromAsesorSelection(false);
+                                        setOpenTreatAsesoradoFromSelection(false);
                                         setOpenFertFromSelection(false);
                                         setShowAddModal(true);
                                     }}
@@ -2538,14 +2541,21 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                 </div>
                                 <div className="w-px h-5 bg-gray-200 hidden sm:block" />
                                 <button
-                                    onClick={() => { setOpenTreatFromSelection(true); setOpenFertFromSelection(false); setShowAddModal(true); }}
+                                    onClick={() => { setOpenTreatFromSelection(true); setOpenTreatAsesoradoFromSelection(false); setOpenFertFromSelection(false); setShowAddModal(true); }}
                                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium transition-colors"
                                 >
                                     <Plus size={13} />
                                     Añadir tratamiento
                                 </button>
                                 <button
-                                    onClick={() => { setOpenFertFromSelection(true); setOpenTreatFromSelection(false); setShowAddModal(true); }}
+                                    onClick={() => { setOpenTreatAsesoradoFromSelection(true); setOpenTreatFromSelection(false); setOpenFertFromSelection(false); setShowAddModal(true); }}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-xs font-medium transition-colors"
+                                >
+                                    <Plus size={13} />
+                                    Añadir trat. asesorado
+                                </button>
+                                <button
+                                    onClick={() => { setOpenFertFromSelection(true); setOpenTreatFromSelection(false); setOpenTreatAsesoradoFromSelection(false); setShowAddModal(true); }}
                                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-medium transition-colors"
                                 >
                                     <Plus size={13} />
@@ -3333,17 +3343,17 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
             />
             <AddRowModal
                 isOpen={showAddModal || !!editTratamientoId}
-                onClose={() => { setShowAddModal(false); setEditTratamientoId(null); setOpenTreatFromSelection(false); setOpenTreatFromTratSelection(false); setOpenTreatFromAsesorSelection(false); setOpenFertFromSelection(false); }}
-                sheet={openTreatFromSelection || openTreatFromTratSelection || openTreatFromAsesorSelection ? "tratamientos" : openFertFromSelection ? "fertilizantes" : effectiveSheet === "trat_asesor" ? "tratamientos" : effectiveSheet}
+                onClose={() => { setShowAddModal(false); setEditTratamientoId(null); setOpenTreatFromSelection(false); setOpenTreatFromTratSelection(false); setOpenTreatFromAsesorSelection(false); setOpenTreatAsesoradoFromSelection(false); setOpenFertFromSelection(false); }}
+                sheet={openTreatFromSelection || openTreatFromTratSelection || openTreatFromAsesorSelection || openTreatAsesoradoFromSelection ? "tratamientos" : openFertFromSelection ? "fertilizantes" : effectiveSheet === "trat_asesor" ? "tratamientos" : effectiveSheet}
                 cuaderno={cuaderno}
                 editTratamientoId={editTratamientoId ?? undefined}
-                mostrarAsesorado={effectiveSheet === "trat_asesor" || openTreatFromAsesorSelection}
+                mostrarAsesorado={effectiveSheet === "trat_asesor" || openTreatFromAsesorSelection || openTreatAsesoradoFromSelection}
                 initialParcelaIds={
                     openTreatFromTratSelection
                         ? parcelasFromSelectedTratamientos
                         : openTreatFromAsesorSelection
                             ? parcelasFromSelectedAsesoramientos
-                            : ((openTreatFromSelection || openFertFromSelection) ? Array.from(selectedParcelas) : [])
+                            : ((openTreatFromSelection || openTreatAsesoradoFromSelection || openFertFromSelection) ? Array.from(selectedParcelas) : [])
                 }
                 onSuccess={() => {
                     setShowAddModal(false);
@@ -3351,6 +3361,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                     setOpenTreatFromSelection(false);
                     setOpenTreatFromTratSelection(false);
                     setOpenTreatFromAsesorSelection(false);
+                    setOpenTreatAsesoradoFromSelection(false);
                     setOpenFertFromSelection(false);
                     setSelectedParcelas(new Set());
                     setSelectedTratamientos(new Set());
