@@ -19,10 +19,10 @@ function getBackendUrl(): string {
     process.env.VERCEL === '1' ||
     !!process.env.VERCEL_ENV ||
     !!process.env.NEXT_PUBLIC_VERCEL_URL;
-  if (onVercel) return 'https://hernandezback.onrender.com';
+  if (onVercel) return 'https://cuaderno-backend-08ul.onrender.com';
   // next build + next start local (NODE_ENV=production) sin env Vercel: no usar 127.0.0.1 salvo que quieras solo backend local (BACKEND_URL).
   if (process.env.NODE_ENV === 'production') {
-    return 'https://hernandezback.onrender.com';
+    return 'https://cuaderno-backend-08ul.onrender.com';
   }
   return 'http://127.0.0.1:8000';
 }
