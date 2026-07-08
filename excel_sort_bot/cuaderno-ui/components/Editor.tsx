@@ -86,6 +86,62 @@ const SHEET_ICONS: Record<SheetType, React.ReactNode> = {
     stock: <Package size={14} />,
 };
 
+/**
+ * Comparador ÚNICO de tratamientos: lo usan la tabla en pantalla Y el orden
+ * que se envía al exportar, para que el PDF/Excel salga EXACTAMENTE igual que
+ * la app. Desempata por producto (no por id aleatorio) para que las líneas de
+ * un mismo tratamiento salgan con los productos en el mismo orden en todas
+ * las parcelas.
+ */
+function makeTratComparator(mode: string, minOrd: (t: any) => number) {
+    return (a: any, b: any): number => {
+        const aFecha = fechaFlexibleAISO(String(a.fecha_aplicacion || ""));
+        const bFecha = fechaFlexibleAISO(String(b.fecha_aplicacion || ""));
+        const aCultivo = String(a.cultivo_especie || "").toLowerCase();
+        const bCultivo = String(b.cultivo_especie || "").toLowerCase();
+        const aParcela = String(a.parcela_nombres || a.num_orden_parcelas || "").toLowerCase();
+        const bParcela = String(b.parcela_nombres || b.num_orden_parcelas || "").toLowerCase();
+        const aProd = String((a.productos?.[0] as any)?.nombre_comercial || "").toLowerCase();
+        const bProd = String((b.productos?.[0] as any)?.nombre_comercial || "").toLowerCase();
+        const tie = () => {
+            if (aProd !== bProd) return aProd.localeCompare(bProd, "es");
+            return (a.id || "").localeCompare(b.id || "");
+        };
+        switch (mode) {
+            case "fecha_asc":
+                if (aFecha !== bFecha) return aFecha.localeCompare(bFecha, "es");
+                return tie();
+            case "cultivo": {
+                // cultivo (A-Z) → parcela (Nº orden) → fecha cronológica (antiguo primero)
+                if (aCultivo !== bCultivo) return aCultivo.localeCompare(bCultivo, "es");
+                const aOrd = minOrd(a);
+                const bOrd = minOrd(b);
+                if (aOrd !== bOrd) return aOrd - bOrd;
+                if (aParcela !== bParcela) return aParcela.localeCompare(bParcela, "es");
+                if (aFecha !== bFecha) return aFecha.localeCompare(bFecha, "es");
+                return tie();
+            }
+            case "parcela": {
+                const ao = minOrd(a);
+                const bo = minOrd(b);
+                if (ao !== bo) return ao - bo;
+                if (aCultivo !== bCultivo) return aCultivo.localeCompare(bCultivo, "es", { sensitivity: "base" });
+                if (aParcela !== bParcela) return aParcela.localeCompare(bParcela, "es");
+                if (aFecha !== bFecha) return aFecha.localeCompare(bFecha, "es");
+                return tie();
+            }
+            case "producto":
+                if (aProd !== bProd) return aProd.localeCompare(bProd, "es");
+                if (aFecha !== bFecha) return aFecha.localeCompare(bFecha, "es");
+                return tie();
+            case "fecha_desc":
+            default:
+                if (bFecha !== aFecha) return bFecha.localeCompare(aFecha, "es");
+                return tie();
+        }
+    };
+}
+
 const BASE_EDITABLE_SHEETS: SheetType[] = ["parcelas", "productos", "tratamientos", "trat_asesor", "asesoramiento"];
 const BULK_EDIT_SHEETS: SheetType[] = ["parcelas", "productos", "tratamientos", "trat_asesor", "fertilizantes", "cosecha"];
 
@@ -119,7 +175,9 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
     const [saving, setSaving] = useState(false);
     // Ediciones optimistas: la celda muestra el valor nuevo al instante y el
     // refresh completo del cuaderno se difiere (evita recargar MB por celda).
-    const [pendingEdits, setPendingEdits] = useState<Map<string, any>>(new Map());
+    // Ediciones optimistas: v = valor mostrado; created = cuándo se hizo;
+    // savedAt = cuándo confirmó el servidor el PATCH (null = aún en vuelo).
+    const [pendingEdits, setPendingEdits] = useState<Map<string, { v: any; created: number; savedAt: number | null }>>(new Map());
     const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const [searchOpen, setSearchOpen] = useState(false);
     const [searchQuery, setSearchQuery] = useState("");
@@ -433,51 +491,8 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                 const cultivo = (t.cultivo_especie || "").trim().toLowerCase();
                 return cultivo === (tratCultivoFilter || "").trim().toLowerCase();
             });
-            const sorted = [...tratamientos].sort((a: any, b: any) => {
-                // Fecha normalizada a ISO (YYYY-MM-DD) para que el orden cronológico
-                // sea correcto aunque la fecha venga en DD/MM/YYYY (datos importados).
-                const aFecha = fechaFlexibleAISO(String(a.fecha_aplicacion || ""));
-                const bFecha = fechaFlexibleAISO(String(b.fecha_aplicacion || ""));
-                const aCultivo = String(a.cultivo_especie || "").toLowerCase();
-                const bCultivo = String(b.cultivo_especie || "").toLowerCase();
-                const aParcela = String(a.parcela_nombres || a.num_orden_parcelas || "").toLowerCase();
-                const bParcela = String(b.parcela_nombres || b.num_orden_parcelas || "").toLowerCase();
-                const aProd = String((a.productos?.[0] as any)?.nombre_comercial || "").toLowerCase();
-                const bProd = String((b.productos?.[0] as any)?.nombre_comercial || "").toLowerCase();
-                switch (tratSortMode) {
-                    case "fecha_asc":
-                        if (aFecha !== bFecha) return aFecha.localeCompare(bFecha, "es");
-                        return (a.id || "").localeCompare(b.id || "");
-                    case "cultivo": {
-                        // cultivo (A-Z) → parcela (Nº orden) → fecha cronológica (antiguo primero)
-                        if (aCultivo !== bCultivo) return aCultivo.localeCompare(bCultivo, "es");
-                        // Sub-orden por Nº de orden numérico (igual que el separador de parcela)
-                        const aOrd = minNumOrdenTratamiento(a);
-                        const bOrd = minNumOrdenTratamiento(b);
-                        if (aOrd !== bOrd) return aOrd - bOrd;
-                        if (aParcela !== bParcela) return aParcela.localeCompare(bParcela, "es");
-                        if (aFecha !== bFecha) return aFecha.localeCompare(bFecha, "es");
-                        return (a.id || "").localeCompare(b.id || "");
-                    }
-                    case "parcela": {
-                        const ao = minNumOrdenTratamiento(a);
-                        const bo = minNumOrdenTratamiento(b);
-                        if (ao !== bo) return ao - bo;
-                        if (aCultivo !== bCultivo) return aCultivo.localeCompare(bCultivo, "es", { sensitivity: "base" });
-                        if (aParcela !== bParcela) return aParcela.localeCompare(bParcela, "es");
-                        // fecha cronológica (antiguo primero) dentro de la misma parcela
-                        if (aFecha !== bFecha) return aFecha.localeCompare(bFecha, "es");
-                        return (a.id || "").localeCompare(b.id || "");
-                    }
-                    case "producto":
-                        if (aProd !== bProd) return aProd.localeCompare(bProd, "es");
-                        return aFecha.localeCompare(bFecha, "es");
-                    case "fecha_desc":
-                    default:
-                        if (bFecha !== aFecha) return bFecha.localeCompare(aFecha, "es");
-                        return (a.id || "").localeCompare(b.id || "");
-                }
-            });
+            // Comparador compartido con el export: la app y el PDF/Excel salen igual.
+            const sorted = [...tratamientos].sort(makeTratComparator(tratSortMode, minNumOrdenTratamiento));
             return sorted;
         }
         if (effectiveSheet === "fertilizantes") {
@@ -592,11 +607,32 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
     }, [data, effectiveSheet, cultivoFilters, parcelaTratamientoFilter, parcelaIdsConTratamiento, parcelSortMode, tratCultivoFilter, tratSortMode, fertSortMode, minNumOrdenTratamiento, colSort]);
 
     // ---- Ediciones optimistas sobre displayData ----
-    // Cuando llega el cuaderno fresco (refresh), las ediciones pendientes ya
-    // están incluidas en los datos → se descartan.
+    // Al llegar datos frescos NO se borran todas las ediciones pendientes a
+    // ciegas: un refresh disparado por una edición anterior puede llegar ANTES
+    // de que el PATCH de la última edición termine, y borrarla haría que la
+    // celda "vuelva al dato inicial". Solo se descarta una edición cuando:
+    //  a) el dato del servidor ya refleja su valor, o
+    //  b) su PATCH confirmó hace >2.5s (el refresh posterior ya la trae), o
+    //  c) es muy vieja (>30s, red de seguridad para no dejar valores colgados).
     useEffect(() => {
-        setPendingEdits(new Map());
-    }, [cuaderno]);
+        setPendingEdits((prev) => {
+            if (prev.size === 0) return prev;
+            const now = Date.now();
+            const next = new Map(prev);
+            for (const [key, e] of prev) {
+                const [sheet, rowId, colKey] = key.split("|");
+                let drop = false;
+                if (sheet === effectiveSheet) {
+                    const row = (data as any[]).find((r: any) => r?.id != null && String(r.id) === rowId);
+                    if (row && String(row[colKey] ?? "") === String(e.v ?? "")) drop = true;
+                }
+                if (!drop && e.savedAt !== null && now - e.savedAt > 2500) drop = true;
+                if (!drop && now - e.created > 30000) drop = true;
+                if (drop) next.delete(key);
+            }
+            return next.size === prev.size ? prev : next;
+        });
+    }, [data, effectiveSheet]);
 
     useEffect(() => () => {
         if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
@@ -616,11 +652,11 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
         return (displayData as any[]).map((row: any) => {
             if (!row?.id) return row;
             let out = row;
-            for (const [key, val] of pendingEdits) {
+            for (const [key, edit] of pendingEdits) {
                 const [sheet, rowId, colKey] = key.split("|");
                 if (sheet === effectiveSheet && rowId === String(row.id)) {
                     if (out === row) out = { ...row };
-                    out[colKey] = val;
+                    out[colKey] = edit.v;
                 }
             }
             return out;
@@ -676,42 +712,9 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
     }, [cuaderno.parcelas, parcelSortMode]);
 
     const sortedTratamientosForExport = useMemo(() => {
+        // MISMO comparador que la tabla en pantalla → el export sale igual que la app.
         const tratamientos = [...(cuaderno.tratamientos || [])] as any[];
-        tratamientos.sort((a: any, b: any) => {
-            const aFecha = String(a.fecha_aplicacion || "").toLowerCase();
-            const bFecha = String(b.fecha_aplicacion || "").toLowerCase();
-            const aCultivo = String(a.cultivo_especie || "").toLowerCase();
-            const bCultivo = String(b.cultivo_especie || "").toLowerCase();
-            const aParcela = String(a.parcela_nombres || a.num_orden_parcelas || "").toLowerCase();
-            const bParcela = String(b.parcela_nombres || b.num_orden_parcelas || "").toLowerCase();
-            const aProd = String((a.productos?.[0] as any)?.nombre_comercial || "").toLowerCase();
-            const bProd = String((b.productos?.[0] as any)?.nombre_comercial || "").toLowerCase();
-            switch (tratSortMode) {
-                case "fecha_asc":
-                    if (aFecha !== bFecha) return aFecha.localeCompare(bFecha, "es");
-                    return (a.id || "").localeCompare(b.id || "");
-                case "cultivo":
-                    if (aCultivo !== bCultivo) return aCultivo.localeCompare(bCultivo, "es");
-                    if (aFecha !== bFecha) return aFecha.localeCompare(bFecha, "es");
-                    return (a.num_orden || 0) - (b.num_orden || 0);
-                case "parcela": {
-                    const ao = minNumOrdenTratamiento(a);
-                    const bo = minNumOrdenTratamiento(b);
-                    if (ao !== bo) return ao - bo;
-                    if (aCultivo !== bCultivo) return aCultivo.localeCompare(bCultivo, "es", { sensitivity: "base" });
-                    if (aParcela !== bParcela) return aParcela.localeCompare(bParcela, "es");
-                    if (aFecha !== bFecha) return bFecha.localeCompare(aFecha, "es");
-                    return (a.id || "").localeCompare(b.id || "");
-                }
-                case "producto":
-                    if (aProd !== bProd) return aProd.localeCompare(bProd, "es");
-                    return bFecha.localeCompare(aFecha, "es");
-                case "fecha_desc":
-                default:
-                    if (bFecha !== aFecha) return bFecha.localeCompare(aFecha, "es");
-                    return (a.id || "").localeCompare(b.id || "");
-            }
-        });
+        tratamientos.sort(makeTratComparator(tratSortMode, minNumOrdenTratamiento));
         return tratamientos;
     }, [cuaderno.tratamientos, tratSortMode, minNumOrdenTratamiento]);
 
@@ -881,7 +884,8 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
             // al instante vía pendingEdits) sin esperar al servidor ni recargar todo.
             setPendingEdits((prev) => {
                 const next = new Map(prev);
-                for (const id of idList) next.set(`${sheet}|${id}|color_fila`, val);
+                const created = Date.now();
+                for (const id of idList) next.set(`${sheet}|${id}|color_fila`, { v: val, created, savedAt: null });
                 return next;
             });
             try {
@@ -889,6 +893,16 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                 await api.patchCellsBatch(cuaderno.id, idList.map((id) => ({
                     sheet_id, row: id, column: "color_fila", value: val,
                 })));
+                // Marcar confirmado por el servidor (el refresh posterior ya lo traerá).
+                setPendingEdits((prev) => {
+                    const next = new Map(prev);
+                    const savedAt = Date.now();
+                    for (const id of idList) {
+                        const e = next.get(`${sheet}|${id}|color_fila`);
+                        if (e) next.set(`${sheet}|${id}|color_fila`, { ...e, savedAt });
+                    }
+                    return next;
+                });
                 scheduleRefresh();
             } catch (e) {
                 console.error("Error aplicando color de fila:", e);
@@ -1710,13 +1724,21 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
         const editKey = `${effectiveSheet}|${rowId}|${colKey}`;
         setPendingEdits(prev => {
             const next = new Map(prev);
-            next.set(editKey, valueToSend);
+            next.set(editKey, { v: valueToSend, created: Date.now(), savedAt: null });
             return next;
         });
         setSaving(true);
         try {
             await api.patchCell(cuaderno.id, payload);
             setLastSavedAt(Date.now());
+            // Confirmado por el servidor: el próximo refresh ya trae este valor.
+            setPendingEdits(prev => {
+                const e = prev.get(editKey);
+                if (!e) return prev;
+                const next = new Map(prev);
+                next.set(editKey, { ...e, savedAt: Date.now() });
+                return next;
+            });
             scheduleRefresh();
         } catch (e) {
             console.error("Error guardando celda:", e);

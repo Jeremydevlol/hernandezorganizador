@@ -804,8 +804,11 @@ class CuadernoExplotacion:
             except (ValueError, IndexError):
                 orden = 9999
             fecha = t.fecha_aplicacion or ""
-            # id: orden estable entre filas con mismo cultivo/fecha/parcela
-            return (cultivo, orden, fecha, t.id or "")
+            # Desempate por PRODUCTO (no por id aleatorio): así las líneas
+            # desglosadas de un mismo tratamiento salen con los productos en el
+            # MISMO orden en todas las parcelas.
+            producto = (t.productos[0].nombre_comercial if t.productos else "") or ""
+            return (cultivo, orden, fecha, producto.strip().lower(), t.id or "")
         self.tratamientos.sort(key=sort_key)
 
     def copiar_tratamiento_a_parcelas(self, tratamiento_id: str, parcela_ids: List[str]) -> List[Tratamiento]:
