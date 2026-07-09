@@ -193,7 +193,13 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
             setFertProdInput("");
             setFertProductDropdownOpen(false);
         }
-    }, [isOpen, sheet, cuaderno.id, editTratamientoId, initialParcelaIds, mostrarAsesorado]);
+        // OJO: initialParcelaIds llega como array NUEVO en cada render del Editor
+        // (p.ej. tras un refresh del cuaderno). Si estuviera en las deps por
+        // referencia, este efecto re-inicializaría el formulario con el modal
+        // ABIERTO y desmarcaría las parcelas que el usuario acaba de marcar.
+        // Por eso la dependencia es su CONTENIDO (join), no la referencia.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [isOpen, sheet, cuaderno.id, editTratamientoId, (initialParcelaIds || []).join(","), mostrarAsesorado]);
 
     useEffect(() => {
         if (isOpen && sheet === "tratamientos" && editTratamientoId) {

@@ -374,6 +374,7 @@ export const SHEET_CONFIG: Record<SheetType, {
         title: "3.1 Registro Tratamientos",
         columns: [
             { key: "num_orden_parcelas", label: "Nº Parcela", width: 80 },
+            { key: "parcela_nombres", label: "Nombre", width: 150 },
             { key: "cultivo_especie", label: "Cultivo", width: 110, editable: true },
             { key: "superficie_tratada", label: "Sup. (ha)", width: 80, type: "number", editable: true },
             { key: "fecha_aplicacion", label: "Fecha", width: 100, type: "date", editable: true },
@@ -473,6 +474,7 @@ export const SHEET_CONFIG: Record<SheetType, {
         title: "Trat. Asesorados",
         columns: [
             { key: "num_orden_parcelas", label: "Nº Parcela", width: 80 },
+            { key: "parcela_nombres", label: "Nombre", width: 150 },
             { key: "cultivo_especie", label: "Cultivo", width: 110, editable: true },
             { key: "superficie_tratada", label: "Sup. (ha)", width: 80, type: "number", editable: true },
             { key: "fecha_aplicacion", label: "Fecha", width: 100, type: "date", editable: true },

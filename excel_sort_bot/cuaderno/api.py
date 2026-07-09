@@ -3254,10 +3254,19 @@ def _parse_date_for_excel(val: Any) -> Any:
 
 
 def _trat_parcela_group_key(t: Tratamiento) -> str:
-    """Misma lógica que el editor (parcela_nombres o num_orden_parcelas), en minúsculas."""
+    """
+    Clave de agrupación por parcela para los separadores del export.
+    IGUAL que el editor: primero por Nº de orden (num_orden_parcelas) — dos
+    parcelas DISTINTAS pueden compartir nombre/código SIGPAC, y agrupar por
+    nombre las fusionaba en un solo bloque. Solo si no hay Nº de orden se cae
+    al nombre.
+    """
+    ref = (t.num_orden_parcelas or "").strip()
+    if ref:
+        return f"ord:{ref.lower()}"
     if t.parcela_nombres:
         return ",".join(t.parcela_nombres).lower()
-    return (t.num_orden_parcelas or "").lower()
+    return ""
 
 
 def _trat_parcela_label(t: Tratamiento) -> str:
@@ -3947,19 +3956,20 @@ async def exportar_excel_cuaderno(
 
     trat_col_headers = [
         "Nº Parcela",           # 1
-        "Cultivo",              # 2
-        "Sup. Tratada\n(ha)",   # 3
-        "Fecha\nAplicación",    # 4
-        "Problemática",         # 5
-        "Aplicador",            # 6
-        "Equipo",               # 7
-        "Producto",             # 8
-        "Nº Registro",          # 9
-        "Dosis",                # 10
-        "Eficacia",             # 11
+        "Nombre",               # 2 (nombre/código SIGPAC de la parcela, como en 2.1)
+        "Cultivo",              # 3
+        "Sup. Tratada\n(ha)",   # 4
+        "Fecha\nAplicación",    # 5
+        "Problemática",         # 6
+        "Aplicador",            # 7
+        "Equipo",               # 8
+        "Producto",             # 9
+        "Nº Registro",          # 10
+        "Dosis",                # 11
+        "Eficacia",             # 12
     ]
-    trat_col_types  = ["str", "str", "num", "date", "str", "str", "str", "str", "str", "str", "str"]
-    trat_col_widths = [14, 18, 14, 14, 20, 14, 14, 24, 14, 12, 12]
+    trat_col_types  = ["str", "str", "str", "num", "date", "str", "str", "str", "str", "str", "str", "str"]
+    trat_col_widths = [14, 24, 18, 14, 14, 20, 14, 14, 24, 14, 12, 12]
 
     num_trat_cols = len(trat_col_headers)
 
@@ -3970,8 +3980,8 @@ async def exportar_excel_cuaderno(
         section_title="3. TRATAMIENTOS FITOSANITARIOS",
         section_subtitle="3.1 REGISTRO DE TRATAMIENTOS FITOSANITARIOS",
         group_headers=[
-            ("IDENTIFICACIÓN PARCELA", 1, 2),
-            ("TRATAMIENTO APLICADO", 3, 11),
+            ("IDENTIFICACIÓN PARCELA", 1, 3),
+            ("TRATAMIENTO APLICADO", 4, 12),
         ],
         col_headers=trat_col_headers,
         col_types=trat_col_types,
@@ -4002,11 +4012,13 @@ async def exportar_excel_cuaderno(
         prev_parcela_key = parcela_key
 
         parcela_ref = t.num_orden_parcelas or ", ".join(t.parcela_nombres) or ""
+        parcela_nombre = ", ".join(t.parcela_nombres) if t.parcela_nombres else ""
         productos = t.productos if t.productos else [ProductoAplicado()]
         color_hex = (getattr(t, "color_fila", None) or "").strip() or None
         for pi, prod in enumerate(productos):
             _write_data_row(ws_trat, row, [
                 parcela_ref if pi == 0 else "",
+                parcela_nombre if pi == 0 else "",
                 t.cultivo_especie if pi == 0 else "",
                 t.superficie_tratada if pi == 0 else None,
                 t.fecha_aplicacion if pi == 0 else "",
@@ -4131,9 +4143,9 @@ async def exportar_excel_cuaderno(
             section_title="TRATAMIENTOS ASESORADOS",
             section_subtitle="3.1 REGISTRO DE TRATAMIENTOS CON ASESORAMIENTO",
             group_headers=[
-                ("IDENTIFICACIÓN PARCELA", 1, 2),
-                ("TRATAMIENTO APLICADO", 3, 11),
-                ("ASESORAMIENTO", 12, num_ta_cols),
+                ("IDENTIFICACIÓN PARCELA", 1, 3),
+                ("TRATAMIENTO APLICADO", 4, 12),
+                ("ASESORAMIENTO", 13, num_ta_cols),
             ],
             col_headers=ta_headers, col_types=ta_types,
             col_widths=ta_widths, data_rows=[],
@@ -4151,11 +4163,13 @@ async def exportar_excel_cuaderno(
             prev_parcela_key_ta = parcela_key
 
             parcela_ref = t.num_orden_parcelas or ", ".join(t.parcela_nombres) or ""
+            parcela_nombre = ", ".join(t.parcela_nombres) if t.parcela_nombres else ""
             productos = t.productos if t.productos else [ProductoAplicado()]
             color_hex = (getattr(t, "color_fila", None) or "").strip() or None
             for pi, prod in enumerate(productos):
                 _write_data_row(ws_ta, row, [
                     parcela_ref if pi == 0 else "",
+                    parcela_nombre if pi == 0 else "",
                     t.cultivo_especie if pi == 0 else "",
                     t.superficie_tratada if pi == 0 else None,
                     t.fecha_aplicacion if pi == 0 else "",

@@ -788,6 +788,16 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
         return Array.from(ids);
     }, [selectedAsesoramientos, cuaderno]);
 
+    // Parcelas iniciales del modal Añadir: MEMOIZADO para que la referencia no
+    // cambie en cada render (si cambiara, el efecto de inicialización del modal
+    // se re-ejecutaría con el modal abierto y desmarcaría las parcelas elegidas).
+    const addModalInitialParcelaIds = useMemo(() => {
+        if (openTreatFromTratSelection) return parcelasFromSelectedTratamientos;
+        if (openTreatFromAsesorSelection) return parcelasFromSelectedAsesoramientos;
+        if (openTreatFromSelection || openTreatAsesoradoFromSelection || openFertFromSelection) return Array.from(selectedParcelas);
+        return [] as string[];
+    }, [openTreatFromTratSelection, openTreatFromAsesorSelection, openTreatFromSelection, openTreatAsesoradoFromSelection, openFertFromSelection, parcelasFromSelectedTratamientos, parcelasFromSelectedAsesoramientos, selectedParcelas]);
+
     // ---- Sumatorio de hectáreas ----
     const hectareasSummary = useMemo(() => {
         if (effectiveSheet !== "parcelas") return null;
@@ -3370,13 +3380,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                 cuaderno={cuaderno}
                 editTratamientoId={editTratamientoId ?? undefined}
                 mostrarAsesorado={effectiveSheet === "trat_asesor" || openTreatFromAsesorSelection || openTreatAsesoradoFromSelection}
-                initialParcelaIds={
-                    openTreatFromTratSelection
-                        ? parcelasFromSelectedTratamientos
-                        : openTreatFromAsesorSelection
-                            ? parcelasFromSelectedAsesoramientos
-                            : ((openTreatFromSelection || openTreatAsesoradoFromSelection || openFertFromSelection) ? Array.from(selectedParcelas) : [])
-                }
+                initialParcelaIds={addModalInitialParcelaIds}
                 onSuccess={() => {
                     setShowAddModal(false);
                     setEditTratamientoId(null);
