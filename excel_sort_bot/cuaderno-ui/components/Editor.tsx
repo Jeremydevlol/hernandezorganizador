@@ -758,7 +758,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
     }, [selectedTratamientos, cuaderno.tratamientos]);
 
     const tratamientosSummary = useMemo(() => {
-        if (effectiveSheet !== "tratamientos") return null;
+        if (effectiveSheet !== "tratamientos" && effectiveSheet !== "trat_asesor") return null;
         const tratamientos = displayData as any[];
         const parseHa = (t: any) => parseFloat(t.superficie_tratada) || 0;
         const totalHa = tratamientos.reduce((sum: number, t: any) => sum + parseHa(t), 0);
@@ -871,7 +871,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
         const allIds = (displayData as any[]).map((r: any) => r.id).filter(Boolean);
         if (effectiveSheet === "parcelas") {
             setSelectedParcelas((prev) => (prev.size === allIds.length ? new Set() : new Set(allIds)));
-        } else if (effectiveSheet === "tratamientos") {
+        } else if (effectiveSheet === "tratamientos" || effectiveSheet === "trat_asesor") {
             setSelectedTratamientos((prev) => (prev.size === allIds.length ? new Set() : new Set(allIds)));
         } else if (effectiveSheet === "productos") {
             setSelectedProductos((prev) => (prev.size === allIds.length ? new Set() : new Set(allIds)));
@@ -936,6 +936,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
             case "productos":
                 return selectedProductos.size;
             case "tratamientos":
+            case "trat_asesor":
                 return selectedTratamientos.size;
             case "fertilizantes":
                 return selectedFertilizaciones.size;
@@ -2612,8 +2613,8 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                     </div>
                 )}
 
-                {/* Barra selección tratamientos */}
-                {effectiveSheet === "tratamientos" && tratamientosSummary && (
+                {/* Barra selección tratamientos (3.1 y Trat. Asesorados) */}
+                {(effectiveSheet === "tratamientos" || effectiveSheet === "trat_asesor") && tratamientosSummary && (
                     <div className="px-4 py-2.5 border-b border-gray-200 bg-gradient-to-r from-blue-500/5 to-transparent flex items-center justify-between shrink-0">
                         <div className="flex items-center gap-4">
                             <div className="flex items-center gap-2">
@@ -2646,7 +2647,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                         <button
                                             key={hex}
                                             type="button"
-                                            onClick={() => applyRowColorToSelection("tratamientos", selectedTratamientos, hex)}
+                                            onClick={() => applyRowColorToSelection(effectiveSheet, selectedTratamientos, hex)}
                                             className={`w-5 h-5 rounded border-2 transition-all ${hex === "#ffffff" ? "border-gray-300" : "border-transparent"} hover:scale-110 hover:ring-2 hover:ring-gray-400`}
                                             style={{ backgroundColor: hex }}
                                             title={hex === "#ffffff" ? "Blanco (sin color)" : `Color ${hex}`}
@@ -2921,7 +2922,8 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                     const isRowSheetSelected =
                                         (effectiveSheet === "parcelas" && selectedParcelas.has(row.id)) ||
                                         (effectiveSheet === "productos" && selectedProductos.has(row.id)) ||
-                                        (effectiveSheet === "tratamientos" && selectedTratamientos.has(row.id)) ||
+                                        // trat_asesor son tratamientos: comparten set de selección
+                                        ((effectiveSheet === "tratamientos" || effectiveSheet === "trat_asesor") && selectedTratamientos.has(row.id)) ||
                                         (effectiveSheet === "fertilizantes" && selectedFertilizaciones.has(row.id)) ||
                                         (effectiveSheet === "cosecha" && selectedCosechas.has(row.id)) ||
                                         (effectiveSheet === "asesoramiento" && selectedAsesoramientos.has(row.id));
@@ -2972,7 +2974,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                                         onClick={() => {
                                                             if (effectiveSheet === "parcelas") toggleParcelaSelection(row.id);
                                                             else if (effectiveSheet === "productos") toggleProductoSelection(row.id);
-                                                            else if (effectiveSheet === "tratamientos") toggleTratamientoSelection(row.id);
+                                                            else if (effectiveSheet === "tratamientos" || effectiveSheet === "trat_asesor") toggleTratamientoSelection(row.id);
                                                             else if (effectiveSheet === "fertilizantes") toggleFertilizacionSelection(row.id);
                                                             else if (effectiveSheet === "cosecha") toggleCosechaSelection(row.id);
                                                             else if (effectiveSheet === "asesoramiento") toggleAsesoramientoSelection(row.id);
