@@ -3,6 +3,7 @@ CUADERNO DE EXPLOTACIÓN - GENERADOR DE PDF MODERNO (fpdf2)
 Genera documentos PDF profesionales, modernos y legibles para inspecciones.
 Diseño premium con jerarquía visual clara, métricas destacadas y tablas elegantes.
 """
+import os
 import unicodedata
 import re
 import base64
@@ -21,6 +22,40 @@ except ImportError:
     FontFace = None
 
 from .models import CuadernoExplotacion, Tratamiento, Parcela, HojaExcel
+from . import registro_tratamientos as regtrat
+
+
+# ============================================
+# FUENTE CON TILDES Y EÑES
+# ============================================
+# Las fuentes base de PDF (Helvetica) no tienen "ñ" ni tildes: sin una fuente
+# TrueType el texto se exporta sin acentos (PEÑARANDA → PENARANDA). Se usa la
+# primera fuente disponible del sistema; Calibri primero, como el Excel.
+_FUENTES_CANDIDATAS = [
+    {"": r"C:\Windows\Fonts\calibri.ttf", "B": r"C:\Windows\Fonts\calibrib.ttf",
+     "I": r"C:\Windows\Fonts\calibrii.ttf", "BI": r"C:\Windows\Fonts\calibriz.ttf"},
+    {"": "/Applications/Microsoft Excel.app/Contents/Resources/DFonts/Calibri.ttf",
+     "B": "/Applications/Microsoft Excel.app/Contents/Resources/DFonts/Calibrib.ttf",
+     "I": "/Applications/Microsoft Excel.app/Contents/Resources/DFonts/Calibrii.ttf",
+     "BI": "/Applications/Microsoft Excel.app/Contents/Resources/DFonts/Calibriz.ttf"},
+    {"": r"C:\Windows\Fonts\arial.ttf", "B": r"C:\Windows\Fonts\arialbd.ttf",
+     "I": r"C:\Windows\Fonts\ariali.ttf", "BI": r"C:\Windows\Fonts\arialbi.ttf"},
+    {"": "/System/Library/Fonts/Supplemental/Arial.ttf", "B": "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+     "I": "/System/Library/Fonts/Supplemental/Arial Italic.ttf", "BI": "/System/Library/Fonts/Supplemental/Arial Bold Italic.ttf"},
+    {"": "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "B": "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+     "I": "/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf", "BI": "/usr/share/fonts/truetype/dejavu/DejaVuSans-BoldOblique.ttf"},
+]
+
+
+def _buscar_fuente_unicode() -> Dict[str, str]:
+    for cand in _FUENTES_CANDIDATAS:
+        estilos = {k: v for k, v in cand.items() if os.path.isfile(v)}
+        if "" in estilos and "B" in estilos:
+            return estilos
+    return {}
+
+
+FUENTE_UNICODE: Dict[str, str] = _buscar_fuente_unicode()
 
 
 # ============================================
@@ -64,10 +99,15 @@ COLOR_WARNING = (255, 193, 7)         # Amarillo aviso
 # ============================================
 
 def _sanitize(text: Any) -> str:
-    """Sanitiza texto para fpdf2: convierte caracteres especiales a ASCII seguro."""
+    """Sanitiza texto para fpdf2. Con fuente TrueType conserva tildes y eñes;
+    sin ella convierte a ASCII seguro."""
     if text is None:
         return ""
     s = str(text)
+    if FUENTE_UNICODE:
+        # Quitar solo lo que la fuente no puede dibujar (emojis, controles)
+        s = "".join(ch for ch in s if ord(ch) <= 0xFFFF and unicodedata.category(ch) not in ("Cc", "Cs", "So") or ch == "\n")
+        return s.strip()
     s = unicodedata.normalize("NFD", s)
     s = "".join(c for c in s if unicodedata.category(c) != "Mn")
     replacements = {
@@ -132,9 +172,31 @@ class ModernPDF(_BasePDF):
         self._doc_year = ""
         self._doc_titular = ""
         self._is_cover = True  # No dibujar header/footer en portada
+        self._plain = False    # Páginas con el diseño de la plantilla Excel (sin cabecera)
+        self._paginas_planas = set()
+        self._estilos_uni = set()
+        for estilo, ruta in FUENTE_UNICODE.items():
+            try:
+                self.add_font("Cuaderno", estilo, ruta)
+                self._estilos_uni.add(estilo)
+            except Exception:
+                pass
+
+    def set_font(self, family=None, style="", size=0):
+        """Usa la fuente TrueType (con tildes) en lugar de Helvetica/Arial."""
+        if self._estilos_uni and (family or "").lower() in ("helvetica", "arial", "cuaderno", ""):
+            st = (style if isinstance(style, str) else getattr(style, "style", "") or "").upper()
+            subrayado = "U" if "U" in st else ""
+            base = "".join(ch for ch in "BI" if ch in st)
+            if base not in self._estilos_uni:
+                base = "B" if "B" in base and "B" in self._estilos_uni else ""
+            return super().set_font("Cuaderno", base + subrayado, size)
+        return super().set_font(family, style, size)
 
     def header(self):
-        if self._is_cover:
+        if self._plain:
+            self._paginas_planas.add(self.page_no())
+        if self._is_cover or self._plain:
             return
         # Barra superior con color primario + accent
         self.set_fill_color(*COLOR_PRIMARY)
@@ -146,10 +208,10 @@ class ModernPDF(_BasePDF):
         self.set_y(6)
         self.set_font("Helvetica", "B", 8)
         self.set_text_color(*COLOR_PRIMARY)
-        self.cell(140, 5, _sanitize("CUADERNO DE EXPLOTACION"), align="L")
+        self.cell(140, 5, _sanitize("CUADERNO DE EXPLOTACIÓN"), align="L")
         self.set_font("Helvetica", "", 8)
         self.set_text_color(*COLOR_TEXT_MUTED)
-        year_text = _sanitize(f"Ano {self._doc_year}") if self._doc_year else ""
+        year_text = _sanitize(f"Año {self._doc_year}") if self._doc_year else ""
         self.cell(0, 5, year_text, align="R", new_x="LMARGIN", new_y="NEXT")
         self.ln(2)
 
@@ -161,6 +223,12 @@ class ModernPDF(_BasePDF):
 
     def footer(self):
         if self._is_cover:
+            return
+        if self.page_no() in self._paginas_planas:
+            self.set_y(-8)
+            self.set_font("Helvetica", "", 7)
+            self.set_text_color(*COLOR_TEXT_MUTED)
+            self.cell(0, 4, f"- {self.page_no()} -", align="C")
             return
         self.set_y(-18)
         # Línea separadora
@@ -182,7 +250,7 @@ class ModernPDF(_BasePDF):
 
         self.set_font("Helvetica", "", 7)
         self.set_text_color(*COLOR_TEXT_LIGHT)
-        self.cell(col_w, 4, _sanitize("Hernandez Bueno"), align="R")
+        self.cell(col_w, 4, _sanitize("Hernández Bueno"), align="R")
 
 
 # ============================================
@@ -242,7 +310,7 @@ class PDFGenerator:
         pdf.set_y(10)
         pdf.set_font("Helvetica", "B", 24)
         pdf.set_text_color(*COLOR_WHITE)
-        pdf.cell(0, 12, _sanitize("CUADERNO DE EXPLOTACION"), align="C",
+        pdf.cell(0, 12, _sanitize("CUADERNO DE EXPLOTACIÓN"), align="C",
                  new_x="LMARGIN", new_y="NEXT")
         pdf.set_font("Helvetica", "", 11)
         pdf.set_text_color(200, 220, 240)
@@ -727,6 +795,159 @@ class PDFGenerator:
     # GENERADOR: CUADERNO COMPLETO
     # ============================================
 
+    # ============================================
+    # HOJAS 3.1 Y TRAT. ASESORADOS (diseño de PLANTILLA_EXPORTACION.xlsx)
+    # ============================================
+
+    def _hoja_registro(self, pdf: ModernPDF, cuaderno: CuadernoExplotacion, clave: str,
+                       filas: List["regtrat.FilaRegistro"], validacion=None):
+        """Dibuja la hoja igual que el Excel: título en bandas grises, 12
+        columnas, separadores de parcela y, en asesorados, los cuadros de
+        validación. La cabecera de la tabla se repite en cada página."""
+        titulo, subtitulo = regtrat.TITULOS[clave]
+        margen = 10.0
+        prev_margins = (pdf.l_margin, pdf.t_margin, pdf.r_margin)
+        prev_auto, prev_bmargin = pdf.auto_page_break, pdf.b_margin
+        pdf._plain = True
+        pdf.set_margins(margen, margen, margen)
+        pdf.set_auto_page_break(False)
+        pdf.add_page()
+
+        x0 = margen
+        tw = pdf.w - 2 * margen
+        anchos_xl = regtrat.ANCHOS_EXCEL
+        k = tw / sum(anchos_xl)            # mm por unidad de ancho de Excel
+        esc = k / 1.93                     # escala respecto al Excel al 100 %
+        anchos = [a * k for a in anchos_xl]
+        xs = [x0]
+        for w in anchos:
+            xs.append(xs[-1] + w)
+        fs = lambda puntos: puntos * esc               # tamaño de letra
+        alto = lambda puntos: puntos * 0.3528 * esc    # alto de fila (pt Excel → mm)
+        limite = pdf.h - margen - 6
+        gris_borde = (176, 176, 176)
+        gris_banda = (191, 191, 191)
+
+        def texto_ajustado(txt: str, w: float, size: float, estilo: str = "") -> Tuple[str, float]:
+            txt = _sanitize(txt)
+            pdf.set_font("Helvetica", estilo, size)
+            disponible = max(w - 1.6, 1)
+            tam = size
+            while pdf.get_string_width(txt) > disponible and tam > size * 0.75:
+                tam -= 0.25
+                pdf.set_font("Helvetica", estilo, tam)
+            if pdf.get_string_width(txt) > disponible:
+                elip = "…" if FUENTE_UNICODE else "..."
+                while txt and pdf.get_string_width(txt + elip) > disponible:
+                    txt = txt[:-1]
+                txt = txt + elip
+            return txt, tam
+
+        def celda(x, y, w, h, txt="", size=7.0, estilo="", align="L", fill=None, borde=True):
+            if fill:
+                pdf.set_fill_color(*fill)
+                pdf.rect(x, y, w, h, "F")
+            if borde:
+                pdf.set_draw_color(*gris_borde)
+                pdf.set_line_width(0.15)
+                pdf.rect(x, y, w, h)
+            if txt not in (None, ""):
+                lineas = str(txt).split("\n")
+                pdf.set_text_color(0, 0, 0)
+                lh = size * 0.3528 * 1.15
+                y_txt = y + (h - lh * len(lineas)) / 2
+                for linea in lineas:
+                    t, tam = texto_ajustado(linea, w, size, estilo)
+                    pdf.set_font("Helvetica", estilo, tam)
+                    pdf.set_xy(x + 0.8, y_txt)
+                    pdf.cell(w - 1.6, lh, t, align=align)
+                    y_txt += lh
+
+        def cabecera_tabla(y):
+            h5 = alto(21.95)
+            for etiqueta, c_ini, c_fin in regtrat.GRUPOS:
+                celda(xs[c_ini - 1], y, xs[c_fin] - xs[c_ini - 1], h5, etiqueta, fs(10), "B", "C")
+            y += h5
+            h6 = alto(48)
+            for i, cab in enumerate(regtrat.COLUMNAS):
+                celda(xs[i], y, anchos[i], h6, cab, fs(9), "B", "C")
+            return y + h6
+
+        # Fila 1: titular + año
+        y = margen
+        h1 = alto(21.95)
+        titular = f"Explotación/Titular de la explotación: {cuaderno.nombre_explotacion or cuaderno.titular or ''}"
+        celda(xs[0], y, xs[10] - xs[0], h1, titular, fs(10), "B", "L", borde=False)
+        celda(xs[10], y, anchos[10], h1, "AÑO", fs(12), "B", "R", borde=False)
+        celda(xs[11], y, anchos[11], h1, str(cuaderno.año or ""), fs(12), "B", "L", borde=False)
+        y += h1 + alto(15)
+        # Filas 3-4: bandas grises
+        celda(x0, y, tw, alto(24), titulo, fs(13), "B", "C", fill=gris_banda)
+        y += alto(24)
+        celda(x0, y, tw, alto(21.95), subtitulo, fs(11), "B", "C", fill=gris_banda)
+        y += alto(21.95)
+        y = cabecera_tabla(y)
+
+        h_dato, h_sep = alto(18), alto(15)
+        for fila in filas:
+            h = h_sep if fila.separador else h_dato
+            if y + h > limite:
+                pdf.add_page()
+                y = cabecera_tabla(margen)
+            if fila.separador:
+                celda(x0, y, tw, h)
+            else:
+                for i, val in enumerate(fila.valores):
+                    align = "L"
+                    if i == regtrat.COL_SUPERFICIE:
+                        align = "R"
+                        val = (f"{val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                               if isinstance(val, (int, float)) else (val or ""))
+                    elif i == regtrat.COL_FECHA:
+                        val = val.strftime("%d/%m/%Y") if hasattr(val, "strftime") else (val or "")
+                    celda(xs[i], y, anchos[i], h, "" if val is None else val, fs(10), "", align)
+            y += h
+
+        if validacion is not None:
+            self._cuadros_validacion_pdf(pdf, validacion, y + 3 * h_sep, xs, esc, limite, margen)
+
+        pdf._plain = False
+        pdf.set_margins(*prev_margins)
+        pdf.set_auto_page_break(prev_auto, margin=prev_bmargin)
+
+    def _cuadros_validacion_pdf(self, pdf: ModernPDF, datos, y: float, xs: List[float],
+                                esc: float, limite: float, margen: float):
+        """Dos cuadros "VALIDACIÓN INTERMEDIA", en la misma posición que en el Excel."""
+        emu_mm = 1 / 36000.0
+        bw = 3048000 * emu_mm * esc
+        bh = 1390650 * emu_mm * esc
+        if y + bh > limite:
+            pdf.add_page()
+            y = margen
+        posiciones = (xs[1] + 1085850 * emu_mm * esc, xs[6] + 209550 * emu_mm * esc)
+        lineas = regtrat.lineas_validacion(datos)
+        lh = bh / (len(lineas) + 0.4)
+        size = 11 * esc
+        for bx in posiciones:
+            pdf.set_draw_color(0, 0, 0)
+            pdf.set_line_width(0.25)
+            pdf.set_fill_color(255, 255, 255)
+            pdf.rect(bx, y, bw, bh, "DF")
+            pdf.set_text_color(0, 0, 0)
+            ty = y + lh * 0.2
+            for i, linea in enumerate(lineas):
+                if linea:
+                    pdf.set_font("Helvetica", "BU" if i == 0 else "", size)
+                    pdf.set_xy(bx + 1.5, ty)
+                    pdf.cell(bw - 3, lh, _sanitize(linea), align="C" if i == 0 else "L")
+                ty += lh
+            stream = self._firma_to_stream(datos.firma_asesor)
+            if stream is not None:
+                try:
+                    pdf.image(stream, x=bx + 2, y=y + lh * 2.2, h=lh * 2, keep_aspect_ratio=True, w=bw * 0.6)
+                except Exception:
+                    pass
+
     def generar_cuaderno_completo(self, cuaderno: CuadernoExplotacion,
                                    output_path: str,
                                    date_desde: Optional[str] = None,
@@ -735,7 +956,8 @@ class PDFGenerator:
                                    orden_parcelas: Optional[List[str]] = None,
                                    orden_tratamientos: Optional[List[str]] = None,
                                    orden_parcelas_modo: Optional[str] = None,
-                                   incluir_base: Optional[dict] = None) -> str:
+                                   incluir_base: Optional[dict] = None,
+                                   orden_tratamientos_modo: Optional[str] = None) -> str:
         """Genera el PDF del cuaderno completo con diseño moderno.
         Analiza los datos antes de exportar: omite secciones/hojas vacías.
         orden_parcelas/orden_tratamientos: IDs en el orden deseado (del editor).
@@ -827,14 +1049,14 @@ class PDFGenerator:
         if _base_ok("info_general"):
             pdf.add_page()
             seccion_num += 1
-            self._seccion_header(pdf, seccion_num, "Datos de la Explotacion")
+            self._seccion_header(pdf, seccion_num, "Datos de la Explotación")
             self._tabla_info_moderna(pdf, [
-                ("Nombre Explotacion", cuaderno.nombre_explotacion),
+                ("Nombre Explotación", cuaderno.nombre_explotacion),
                 ("Titular", cuaderno.titular),
                 ("NIF/CIF", cuaderno.nif_titular),
                 ("Domicilio", cuaderno.domicilio),
-                ("Codigo Explotacion", cuaderno.codigo_explotacion),
-                ("Ano", str(cuaderno.año)),
+                ("Código Explotación", cuaderno.codigo_explotacion),
+                ("Año", str(cuaderno.año)),
             ])
             pdf.ln(6)
             self._resumen_ejecutivo(pdf, cuaderno, num_tratamientos=len(tratamientos_validos))
@@ -843,7 +1065,7 @@ class PDFGenerator:
         if parcelas_validas and _base_ok("parcelas"):
             seccion_num += 1
             pdf.add_page()
-            self._seccion_header(pdf, seccion_num, "Relacion de Parcelas")
+            self._seccion_header(pdf, seccion_num, "Relación de Parcelas")
             self._nota_info(pdf,
                 f"{len(parcelas_validas)} parcela(s) activa(s) con datos")
 
@@ -893,85 +1115,18 @@ class PDFGenerator:
             self._tabla_moderna(pdf, prod_data, (70, 42, 40, 40, 42),
                                 row_colors=prod_colors)
 
-        # --- TRATAMIENTOS (solo si hay datos y seleccionada; sin asesorados) ---
+        # --- TRATAMIENTOS 3.1 y ASESORADOS: mismo diseño que el Excel ---
+        separar = (orden_tratamientos_modo or "").strip().lower() in ("parcela", "cultivo")
         if tratamientos_31 and _base_ok("tratamientos"):
             seccion_num += 1
-            pdf.add_page()
-            self._seccion_header(pdf, seccion_num, "Registro de Tratamientos Realizados")
+            self._hoja_registro(pdf, cuaderno, "tratamientos",
+                                regtrat.filas_registro(tratamientos_31, cuaderno.parcelas, separar))
 
-            if date_desde or date_hasta:
-                filtro = "Periodo: "
-                if date_desde:
-                    filtro += f"desde {date_desde} "
-                if date_hasta:
-                    filtro += f"hasta {date_hasta}"
-                self._nota_info(pdf, filtro.strip())
-
-            self._nota_info(pdf, f"{len(tratamientos_31)} tratamiento(s) registrado(s)")
-
-            trat_data = [["Fecha", "Parcela(s)", "Producto", "N. Reg.",
-                          "Dosis", "Plaga/Enferm.", "Operador"]]
-            trat_colors = []
-            for t in tratamientos_31:
-                parcelas_str = ", ".join(t.parcela_nombres[:2])
-                if len(t.parcela_nombres) > 2:
-                    parcelas_str += f" (+{len(t.parcela_nombres)-2})"
-                if not parcelas_str and t.num_orden_parcelas:
-                    parcelas_str = f"Ord. {t.num_orden_parcelas}"
-
-                operador = t.operador or t.aplicador or ""
-                t_color = (getattr(t, "color_fila", None) or "").strip() or None
-                for prod in t.productos:
-                    if not (prod.nombre_comercial and prod.nombre_comercial.strip()):
-                        continue
-                    trat_data.append([
-                        t.fecha_aplicacion or "-",
-                        parcelas_str or "-",
-                        prod.nombre_comercial or "-",
-                        prod.numero_registro or "-",
-                        f"{prod.dosis} {prod.unidad_dosis}" if prod.dosis else "-",
-                        t.plaga_enfermedad or "-",
-                        operador or "-",
-                    ])
-                    trat_colors.append(t_color)
-            self._tabla_moderna(pdf, trat_data, (28, 40, 50, 30, 30, 38, 28), font_size=7,
-                                row_colors=trat_colors)
-
-        # --- TRATAMIENTOS ASESORADOS (mismo formato/columnas que 3.1) ---
         if tratamientos_asesorados and _base_ok("trat_asesor"):
             seccion_num += 1
-            pdf.add_page()
-            self._seccion_header(pdf, seccion_num, "Tratamientos Asesorados")
-            self._nota_info(pdf, f"{len(tratamientos_asesorados)} tratamiento(s) con asesoramiento")
-            # Misma tabla y filas (1 por producto) que la hoja normal 3.1.
-            ta_data = [["Fecha", "Parcela(s)", "Producto", "N. Reg.",
-                        "Dosis", "Plaga/Enferm.", "Operador"]]
-            ta_colors = []
-            for t in tratamientos_asesorados:
-                parcelas_str = ", ".join(t.parcela_nombres[:2])
-                if len(t.parcela_nombres) > 2:
-                    parcelas_str += f" (+{len(t.parcela_nombres)-2})"
-                if not parcelas_str and t.num_orden_parcelas:
-                    parcelas_str = f"Ord. {t.num_orden_parcelas}"
-                operador = t.operador or t.aplicador or ""
-                t_color = (getattr(t, "color_fila", None) or "").strip() or None
-                for prod in (t.productos or []):
-                    if not (prod.nombre_comercial and prod.nombre_comercial.strip()):
-                        continue
-                    ta_data.append([
-                        t.fecha_aplicacion or "-",
-                        parcelas_str or "-",
-                        prod.nombre_comercial or "-",
-                        prod.numero_registro or "-",
-                        f"{prod.dosis} {prod.unidad_dosis}" if prod.dosis else "-",
-                        t.plaga_enfermedad or t.problema_fitosanitario or "-",
-                        operador or "-",
-                    ])
-                    ta_colors.append(t_color)
-            if len(ta_data) > 1:
-                self._tabla_moderna(pdf, ta_data, (28, 40, 50, 30, 30, 38, 28), font_size=7,
-                                    row_colors=ta_colors)
-            # Datos del asesor + firmas van en el bloque de firmas al final.
+            self._hoja_registro(pdf, cuaderno, "trat_asesor",
+                                regtrat.filas_registro(tratamientos_asesorados, cuaderno.parcelas, separar),
+                                validacion=regtrat.datos_validacion(tratamientos_asesorados))
 
         # --- 3.2 ASESORAMIENTO FITOSANITARIO ---
         if asesoramientos and _base_ok("asesoramiento"):
@@ -1082,26 +1237,9 @@ class PDFGenerator:
                     self._tabla_moderna(pdf, tabla_data,
                                          tuple([cw] * num_cols), font_size=6)
 
-        # --- BLOQUE DE FIRMAS (al final del documento) ---
-        # Campo de firma del asesor y del titular al pie de todo el cuaderno.
-        # Usa la firma digital capturada en un tratamiento asesorado si existe;
-        # si no, deja la línea para firmar a mano.
-        if tratamientos_asesorados:
-            firma_asesor = next((getattr(t, "firma_asesor", "") for t in tratamientos_asesorados
-                                 if getattr(t, "firma_asesor", "")), "")
-            firma_cliente = next((getattr(t, "firma_cliente", "") for t in tratamientos_asesorados
-                                  if getattr(t, "firma_cliente", "")), "")
-            nombre_asesor = next((getattr(t, "nombre_asesor_trat", "") for t in tratamientos_asesorados
-                                  if getattr(t, "nombre_asesor_trat", "")), "")
-            num_colegiado = next((getattr(t, "num_colegiado_asesor", "") for t in tratamientos_asesorados
-                                  if getattr(t, "num_colegiado_asesor", "")), "")
-            fecha_recom = next((getattr(t, "fecha_recomendacion_asesor", "") for t in tratamientos_asesorados
-                                if getattr(t, "fecha_recomendacion_asesor", "")), "")
-            self._bloque_firmas_final(pdf, firma_asesor, firma_cliente, nombre_asesor,
-                                      cuaderno.titular, num_colegiado, fecha_recom)
-
-        # --- PIE FINAL ---
-        self._pie_documento(pdf, cuaderno)
+        # --- PIE FINAL (no en páginas con el diseño de la plantilla) ---
+        if pdf.page_no() not in pdf._paginas_planas:
+            self._pie_documento(pdf, cuaderno)
         pdf.output(output_path)
         return output_path
 

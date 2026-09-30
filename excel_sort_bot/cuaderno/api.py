@@ -28,6 +28,7 @@ from .models import (
 )
 from .storage import get_storage
 from .productos_catalogo import get_catalogo
+from . import registro_tratamientos as regtrat
 from .pdf_generator import PDFGenerator, _sort_key_parcela
 from .file_processor import FileProcessor, get_processor
 
@@ -3133,6 +3134,7 @@ async def exportar_pdf_cuaderno(
     orden_fertilizaciones: Optional[str] = Query(None, description="IDs de fertilizaciones en el orden deseado (separados por coma)"),
     orden_parcelas_modo: Optional[str] = Query(None, description="Modo de orden: num_orden, cultivo, alfabetico, etc."),
     check_hojas_editadas: Optional[bool] = Query(False, description="Solo verificar si hay hojas editadas sin exportar"),
+    orden_tratamientos_modo: Optional[str] = Query(None, description="Modo orden tratamientos del editor (separa por parcela en 3.1)"),
 ):
     """
     Exporta el cuaderno a PDF. 
@@ -3202,6 +3204,7 @@ async def exportar_pdf_cuaderno(
             orden_tratamientos=orden_tratamientos_list,
             orden_parcelas_modo=orden_parcelas_modo,
             incluir_base=incluir_base,
+            orden_tratamientos_modo=orden_tratamientos_modo,
         )
         
         return FileResponse(
@@ -3481,14 +3484,16 @@ async def exportar_excel_cuaderno(
 
     hdr_font       = Font(name="Calibri", bold=True, size=10, color=WHITE)
     hdr_font_sm    = Font(name="Calibri", bold=True, size=9,  color=WHITE)
-    title_font     = Font(name="Calibri", bold=True, size=13, color=NAVY)
-    section_font   = Font(name="Calibri", bold=True, size=11, color=NAVY)
+    title_font     = Font(name="Calibri", bold=True, size=13)
+    section_font   = Font(name="Calibri", bold=True, size=11)
     info_bold_font = Font(name="Calibri", bold=True, size=10)
     info_font      = Font(name="Calibri", size=10)
     label_font     = Font(name="Calibri", bold=True, size=11)
     value_font     = Font(name="Calibri", size=11)
     total_font     = Font(name="Calibri", bold=True, size=11, color=NAVY)
-    year_font      = Font(name="Calibri", bold=True, size=12, color=NAVY)
+    year_font      = Font(name="Calibri", bold=True, size=12)
+    # Bandas de título en gris, como en la plantilla del cliente
+    title_band_fill = PatternFill(start_color="BFBFBF", end_color="BFBFBF", fill_type="solid")
 
     center_align     = Alignment(horizontal="center", vertical="center", wrap_text=True)
     left_align       = Alignment(horizontal="left",   vertical="center", wrap_text=False)
@@ -3668,17 +3673,16 @@ async def exportar_excel_cuaderno(
         ws.cell(row=1, column=num_cols).alignment = Alignment(horizontal="left", vertical="center")
         ws.row_dimensions[1].height = 22
 
-        # Row 3: Título
-        ws.cell(row=3, column=1, value=section_title).font = title_font
-        ws.merge_cells(start_row=3, start_column=1, end_row=3, end_column=num_cols)
-        ws.cell(row=3, column=1).alignment = center_align
-        ws.row_dimensions[3].height = 24
-
-        # Row 4: Subtítulo
-        ws.cell(row=4, column=1, value=section_subtitle).font = section_font
-        ws.merge_cells(start_row=4, start_column=1, end_row=4, end_column=num_cols)
-        ws.cell(row=4, column=1).alignment = center_align
-        ws.row_dimensions[4].height = 22
+        # Rows 3-4: Título y subtítulo en bandas grises con borde
+        for r_band, texto, fnt, alto in ((3, section_title, title_font, 24), (4, section_subtitle, section_font, 21.95)):
+            for cc in range(1, num_cols + 1):
+                cx = ws.cell(row=r_band, column=cc)
+                cx.fill = title_band_fill
+                cx.border = thin_border
+            ws.cell(row=r_band, column=1, value=texto).font = fnt
+            ws.merge_cells(start_row=r_band, start_column=1, end_row=r_band, end_column=num_cols)
+            ws.cell(row=r_band, column=1).alignment = center_align
+            ws.row_dimensions[r_band].height = alto
 
         # Row 5: Group headers (merged) — sin color, solo bordes y negrita
         if group_headers:
@@ -3731,6 +3735,80 @@ async def exportar_excel_cuaderno(
         ws.freeze_panes = f"A{data_start}"
 
         return data_start
+
+    def _hoja_registro_tratamientos(ws, *, clave: str, filas: list, validacion=None):
+        """Hoja 3.1 / Trat. Asesorados exactamente como PLANTILLA_EXPORTACION.xlsx."""
+        titulo, subtitulo = regtrat.TITULOS[clave]
+        _build_oficial_sheet(
+            ws, sheet_title=ws.title, section_title=titulo, section_subtitle=subtitulo,
+            group_headers=regtrat.GRUPOS, col_headers=regtrat.COLUMNAS,
+            col_types=["str"] * len(regtrat.COLUMNAS), col_widths=regtrat.ANCHOS_EXCEL, data_rows=[],
+        )
+        ws.row_dimensions[1].height = 21.95
+        ncols = len(regtrat.COLUMNAS)
+        row_n = 7
+        for fila in filas:
+            if fila.separador:
+                # Fila vacía que separa parcelas (sin texto "Ord.", sin color)
+                for cc in range(1, ncols + 1):
+                    ws.cell(row=row_n, column=cc).border = thin_border
+                ws.merge_cells(start_row=row_n, start_column=1, end_row=row_n, end_column=ncols)
+            else:
+                for ci, val in enumerate(fila.valores, 1):
+                    cell = ws.cell(row=row_n, column=ci, value=val)
+                    cell.border = thin_border
+                    cell.font = info_font
+                    cell.alignment = data_align
+                    if ci - 1 == regtrat.COL_SUPERFICIE:
+                        cell.alignment = num_align
+                        if isinstance(val, (int, float)):
+                            cell.number_format = num_format_2d
+                    elif ci - 1 == regtrat.COL_FECHA and isinstance(val, date):
+                        cell.number_format = date_format_es
+                ws.row_dimensions[row_n].height = ROW_HEIGHT
+            row_n += 1
+        last = max(row_n - 1, 6)
+        ws.auto_filter.ref = f"A6:{get_column_letter(ncols)}{last}"
+        ws.freeze_panes = "A7"
+        # Impresión: A4 horizontal, ajustado al ancho y con cabecera repetida
+        ws.page_setup.orientation = "landscape"
+        ws.page_setup.paperSize = ws.PAPERSIZE_A4
+        ws.page_setup.fitToWidth = 1
+        ws.page_setup.fitToHeight = 0
+        ws.sheet_properties.pageSetUpPr.fitToPage = True
+        ws.print_title_rows = "5:6"
+        if validacion is not None:
+            _cuadros_validacion_excel(ws, start_row=last + 4, datos=validacion)
+
+    def _cuadros_validacion_excel(ws, *, start_row: int, datos):
+        """Dos cuadros "VALIDACIÓN INTERMEDIA" (columnas B-D y G-I) con firma,
+        asesor, Nº inscripción ROPO y fecha, como en la plantilla."""
+        negro = Side(style="thin", color="000000")
+        lineas = regtrat.lineas_validacion(datos)
+        for c_ini, c_fin in ((2, 4), (7, 9)):
+            for i, texto in enumerate(lineas):
+                r = start_row + i
+                ws.merge_cells(start_row=r, start_column=c_ini, end_row=r, end_column=c_fin)
+                cell = ws.cell(row=r, column=c_ini, value=texto or None)
+                if i == 0:
+                    cell.font = Font(name="Calibri", bold=True, size=11, underline="single")
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
+                else:
+                    cell.font = Font(name="Calibri", size=11)
+                    cell.alignment = Alignment(horizontal="left", vertical="center")
+                for cc in range(c_ini, c_fin + 1):
+                    ws.cell(row=r, column=cc).border = Border(
+                        left=negro if cc == c_ini else None,
+                        right=negro if cc == c_fin else None,
+                        top=negro if i == 0 else None,
+                        bottom=negro if i == len(lineas) - 1 else None,
+                    )
+            ximg = _firma_xlimage(datos.firma_asesor, max_w=160, max_h=38)
+            if ximg is not None:
+                try:
+                    ws.add_image(ximg, f"{get_column_letter(c_ini)}{start_row + 2}")
+                except Exception:
+                    pass
 
     # ================================================================
     # 1. INFORMACIÓN GENERAL  — Formato oficial del cuaderno
@@ -3983,41 +4061,6 @@ async def exportar_excel_cuaderno(
     ws_trat = wb.create_sheet("3.1. Reg. Tratamientos")
     ws_trat.sheet_properties.tabColor = "F44336"
 
-    trat_col_headers = [
-        "Nº Parcela",           # 1
-        "Nombre",               # 2 (nombre/código SIGPAC de la parcela, como en 2.1)
-        "Cultivo",              # 3
-        "Sup. Tratada\n(ha)",   # 4
-        "Fecha\nAplicación",    # 5
-        "Problemática",         # 6
-        "Aplicador",            # 7
-        "Equipo",               # 8
-        "Producto",             # 9
-        "Nº Registro",          # 10
-        "Dosis",                # 11
-        "Eficacia",             # 12
-    ]
-    trat_col_types  = ["str", "str", "str", "num", "date", "str", "str", "str", "str", "str", "str", "str"]
-    trat_col_widths = [14, 24, 18, 14, 14, 20, 14, 14, 24, 14, 12, 12]
-
-    num_trat_cols = len(trat_col_headers)
-
-    # Build title/header portion via helper
-    _build_oficial_sheet(
-        ws_trat,
-        sheet_title="3.1. Reg. Tratamientos",
-        section_title="3. TRATAMIENTOS FITOSANITARIOS",
-        section_subtitle="3.1 REGISTRO DE TRATAMIENTOS FITOSANITARIOS",
-        group_headers=[
-            ("IDENTIFICACIÓN PARCELA", 1, 3),
-            ("TRATAMIENTO APLICADO", 4, 12),
-        ],
-        col_headers=trat_col_headers,
-        col_types=trat_col_types,
-        col_widths=trat_col_widths,
-        data_rows=[],
-    )
-
     tratamientos = tratamientos_ordenados
     # Los tratamientos asesorados NO van en 3.1: tienen su propia hoja.
     tratamientos = [t for t in tratamientos if not getattr(t, "asesorado", False)]
@@ -4027,39 +4070,13 @@ async def exportar_excel_cuaderno(
         if hasta:
             tratamientos = [t for t in tratamientos if (t.fecha_aplicacion or "") <= hasta]
 
-    # La separación por Ord. de parcela se aplica en los modos que agrupan por
+    # La separación por parcela se aplica en los modos que agrupan por
     # parcela: "parcela" y "cultivo → parcela → fecha" (igual que en el editor).
     modo_parcela_export = (orden_tratamientos_modo or "").strip().lower() in ("parcela", "cultivo")
-    trat_data_start = 7
-    row = trat_data_start
-    prev_parcela_key: Optional[str] = None
-    for t in tratamientos:
-        parcela_key = _trat_parcela_group_key(t)
-        if modo_parcela_export and parcela_key != prev_parcela_key:
-            _write_blank_separator_row(ws_trat, row, num_trat_cols, label=_trat_parcela_label(t))
-            row += 1
-        prev_parcela_key = parcela_key
-
-        parcela_ref = t.num_orden_parcelas or ", ".join(t.parcela_nombres) or ""
-        parcela_nombre = ", ".join(t.parcela_nombres) if t.parcela_nombres else ""
-        productos = t.productos if t.productos else [ProductoAplicado()]
-        color_hex = (getattr(t, "color_fila", None) or "").strip() or None
-        for pi, prod in enumerate(productos):
-            _write_data_row(ws_trat, row, [
-                parcela_ref if pi == 0 else "",
-                parcela_nombre if pi == 0 else "",
-                t.cultivo_especie if pi == 0 else "",
-                t.superficie_tratada if pi == 0 else None,
-                t.fecha_aplicacion if pi == 0 else "",
-                (t.problema_fitosanitario or t.plaga_enfermedad) if pi == 0 else "",
-                (t.aplicador or t.operador) if pi == 0 else "",
-                t.equipo if pi == 0 else "",
-                prod.nombre_comercial,
-                prod.numero_registro,
-                (f"{prod.dosis} {prod.unidad_dosis}".strip() if prod.dosis else None),
-                t.eficacia if pi == 0 else "",
-            ], trat_col_types, row_fill_hex=color_hex, use_zebra=True)
-            row += 1
+    _hoja_registro_tratamientos(
+        ws_trat, clave="tratamientos",
+        filas=regtrat.filas_registro(tratamientos, cuaderno.parcelas, modo_parcela_export),
+    )
 
     # ================================================================
     # 5. FERTILIZACIONES — Reg. Fertilizantes
@@ -4162,75 +4179,11 @@ async def exportar_excel_cuaderno(
     if trat_asesorados and BASE_SHEET_IDS["trat_asesor"] in ids_incluir_set:
         ws_ta = wb.create_sheet("Trat. Asesorados")
         ws_ta.sheet_properties.tabColor = "8E24AA"
-        # Mismas columnas y estructura que 3.1 Registro Tratamientos + asesor.
-        ta_headers = trat_col_headers + ["Asesor", "Nº inscripción\nROPO", "Fecha\nrecom."]
-        ta_types = trat_col_types + ["str", "str", "date"]
-        ta_widths = trat_col_widths + [22, 18, 14]
-        num_ta_cols = len(ta_headers)
-        _build_oficial_sheet(
-            ws_ta, sheet_title="Trat. Asesorados",
-            section_title="TRATAMIENTOS ASESORADOS",
-            section_subtitle="3.1 REGISTRO DE TRATAMIENTOS CON ASESORAMIENTO",
-            group_headers=[
-                ("IDENTIFICACIÓN PARCELA", 1, 3),
-                ("TRATAMIENTO APLICADO", 4, 12),
-                ("ASESORAMIENTO", 13, num_ta_cols),
-            ],
-            col_headers=ta_headers, col_types=ta_types,
-            col_widths=ta_widths, data_rows=[],
-        )
-        # Filas con desglose por producto y separación por Ord. de parcela,
-        # exactamente igual que la hoja 3.1.
-        ta_data_start = 7
-        row = ta_data_start
-        prev_parcela_key_ta: Optional[str] = None
-        for t in trat_asesorados:
-            parcela_key = _trat_parcela_group_key(t)
-            if modo_parcela_export and parcela_key != prev_parcela_key_ta:
-                _write_blank_separator_row(ws_ta, row, num_ta_cols, label=_trat_parcela_label(t))
-                row += 1
-            prev_parcela_key_ta = parcela_key
-
-            parcela_ref = t.num_orden_parcelas or ", ".join(t.parcela_nombres) or ""
-            parcela_nombre = ", ".join(t.parcela_nombres) if t.parcela_nombres else ""
-            productos = t.productos if t.productos else [ProductoAplicado()]
-            color_hex = (getattr(t, "color_fila", None) or "").strip() or None
-            for pi, prod in enumerate(productos):
-                _write_data_row(ws_ta, row, [
-                    parcela_ref if pi == 0 else "",
-                    parcela_nombre if pi == 0 else "",
-                    t.cultivo_especie if pi == 0 else "",
-                    t.superficie_tratada if pi == 0 else None,
-                    t.fecha_aplicacion if pi == 0 else "",
-                    (t.problema_fitosanitario or t.plaga_enfermedad) if pi == 0 else "",
-                    (t.aplicador or t.operador) if pi == 0 else "",
-                    t.equipo if pi == 0 else "",
-                    prod.nombre_comercial,
-                    prod.numero_registro,
-                    (f"{prod.dosis} {prod.unidad_dosis}".strip() if prod.dosis else None),
-                    t.eficacia if pi == 0 else "",
-                    getattr(t, "nombre_asesor_trat", "") if pi == 0 else "",
-                    getattr(t, "num_colegiado_asesor", "") if pi == 0 else "",
-                    getattr(t, "fecha_recomendacion_asesor", "") if pi == 0 else "",
-                ], ta_types, row_fill_hex=color_hex, use_zebra=True)
-                row += 1
-        # Bloque de firmas al pie de la hoja: asesor, nº inscripción, fecha y las
-        # firmas digitales (asesor + titular) incrustadas como imagen.
-        _bloque_firmas_excel(
-            ws_ta,
-            start_row=row + 2,
-            num_cols=num_ta_cols,
-            nombre_asesor=next((getattr(t, "nombre_asesor_trat", "") for t in trat_asesorados
-                                if getattr(t, "nombre_asesor_trat", "")), ""),
-            num_colegiado=next((getattr(t, "num_colegiado_asesor", "") for t in trat_asesorados
-                                if getattr(t, "num_colegiado_asesor", "")), ""),
-            fecha_recom=next((getattr(t, "fecha_recomendacion_asesor", "") for t in trat_asesorados
-                              if getattr(t, "fecha_recomendacion_asesor", "")), ""),
-            nombre_titular=cuaderno.titular or cuaderno.nombre_explotacion or "",
-            firma_asesor=next((getattr(t, "firma_asesor", "") for t in trat_asesorados
-                               if getattr(t, "firma_asesor", "")), ""),
-            firma_cliente=next((getattr(t, "firma_cliente", "") for t in trat_asesorados
-                                if getattr(t, "firma_cliente", "")), ""),
+        # Mismas 12 columnas que 3.1 y, debajo, los cuadros de validación del asesor.
+        _hoja_registro_tratamientos(
+            ws_ta, clave="trat_asesor",
+            filas=regtrat.filas_registro(trat_asesorados, cuaderno.parcelas, modo_parcela_export),
+            validacion=regtrat.datos_validacion(trat_asesorados),
         )
 
     # ================================================================
