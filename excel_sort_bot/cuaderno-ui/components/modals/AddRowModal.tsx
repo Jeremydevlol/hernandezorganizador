@@ -7,6 +7,7 @@ import { api } from "@/lib/api";
 import SignatureModal from "./SignatureModal";
 import { fechaFlexibleAISO, fechaFlexibleADDMMYYYY, isoToDisplayDDMM, normalizeSpanishDateInput } from "@/lib/dateSpanish";
 import { parseDecimalInput } from "@/lib/parseDecimal";
+import { UNIDADES_DOSIS, migrateUnidadDosis } from "@/lib/unidadesDosis";
 
 /** Convierte YYYY-MM-DD a DD/MM/YYYY para mostrar en el formulario */
 function fechaAFormatoDDMM(fecha: string): string {
@@ -19,14 +20,11 @@ function fechaAFormatoISO(fecha: string): string {
     return fechaFlexibleAISO(fecha || "");
 }
 
-const UNIDADES_DOSIS = ["L/Ha", "Kg/Ha", "ml/H", "g/Ha"] as const;
 const CULTIVOS_ASESORAMIENTO = ["PATATA", "REMOLACHA"] as const;
 
-/** Unidades antiguas del desplegable → equivalentes actuales */
-function migrateUnidadDosis(u: string | undefined): string {
-    const m: Record<string, string> = { "cc/L": "ml/H", "g/L": "g/Ha" };
-    const x = (u || "").trim();
-    return m[x] || x || "L/Ha";
+/** Hectáreas con 2 decimales y coma decimal (formato español). */
+function formatHa(ha: number): string {
+    return (Math.round(ha * 100) / 100).toLocaleString("es-ES", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 function formulacionPareceNpk(s: string): boolean {
@@ -256,10 +254,48 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
     };
 
     /**
+     * Busca en el catálogo global (resultados ya cargados) el producto con ese
+     * nombre, prefiriendo el mismo Nº de registro y uno que tenga datos de uso.
+     */
+    const buscarEnCatalogo = (nombre?: string, registro?: string, lista: CatalogoProducto[] = catalogoResults): CatalogoProducto | undefined => {
+        const n = (nombre || "").trim().toLowerCase();
+        if (!n) return undefined;
+        const r = (registro || "").trim().toLowerCase();
+        const mismos = lista.filter((c) => (c.nombre_comercial || "").trim().toLowerCase() === n);
+        const conDatos = (c: CatalogoProducto) => !!(c.problematica || c.unidad_dosis);
+        return mismos.find((c) => (c.numero_registro || "").trim().toLowerCase() === r && conDatos(c))
+            || mismos.find(conDatos);
+    };
+
+    /**
+     * Problemática y unidad de dosis asociadas a un producto en la base de datos
+     * de productos (catálogo global; si no, la ficha del inventario del cuaderno).
+     */
+    const datosDeUso = (prod: { nombre_comercial?: string; numero_registro?: string; problematica?: string; unidad_dosis?: string }) => {
+        const cat = buscarEnCatalogo(prod.nombre_comercial, prod.numero_registro);
+        return {
+            problematica: (cat?.problematica || prod.problematica || "").trim(),
+            unidad_dosis: (cat?.unidad_dosis || prod.unidad_dosis || "").trim(),
+        };
+    };
+
+    /**
+     * Si el producto elegido no estaba entre los resultados cargados, consulta el
+     * catálogo y rellena problemática/unidad en cuanto llegue la respuesta.
+     */
+    const completarDatosDeUsoAsync = (nombre: string, registro: string, aplicar: (d: { problematica: string; unidad_dosis: string }) => void) => {
+        if (!nombre.trim()) return;
+        api.searchCatalogoProductos(nombre.trim(), 50).then(({ productos }) => {
+            const cat = buscarEnCatalogo(nombre, registro, Array.isArray(productos) ? productos : []);
+            if (cat) aplicar({ problematica: (cat.problematica || "").trim(), unidad_dosis: (cat.unidad_dosis || "").trim() });
+        }).catch(() => { /* sin catálogo: se queda como está */ });
+    };
+
+    /**
      * Selecciona un producto del catálogo global: lo importa al inventario del cuaderno
      * y devuelve los campos ya listos para meter en el formulario.
      */
-    const importarCatalogoProducto = async (catalogoId: string): Promise<{ id: string; nombre_comercial: string; numero_registro: string; numero_lote: string } | null> => {
+    const importarCatalogoProducto = async (catalogoId: string): Promise<{ id: string; nombre_comercial: string; numero_registro: string; numero_lote: string; problematica: string; unidad_dosis: string } | null> => {
         try {
             const resp = await api.importarProductoDesdeCatalogo(cuaderno.id, catalogoId);
             const p = resp?.producto || {};
@@ -270,6 +306,8 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                 nombre_comercial: p.nombre_comercial || "",
                 numero_registro: p.numero_registro || "",
                 numero_lote: p.numero_lote || "",
+                problematica: p.problematica || "",
+                unidad_dosis: p.unidad_dosis || "",
             };
         } catch (err: any) {
             alert(`No se pudo importar del catálogo: ${err?.message || err}`);
@@ -291,6 +329,19 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
             return bSup - aSup;
         });
     }, [cuaderno.parcelas]);
+
+    // Resumen de la selección de parcelas: nº de parcelas y hectáreas a tratar.
+    const parcelasSeleccionadasResumen = useMemo(() => {
+        const ids = new Set(Array.isArray(formData.parcela_ids) ? formData.parcela_ids : []);
+        let num = 0;
+        let ha = 0;
+        for (const p of (cuaderno.parcelas || []) as any[]) {
+            if (!ids.has(p.id)) continue;
+            num += 1;
+            ha += Number(p.superficie_cultivada || p.superficie_ha || p.superficie_sigpac || 0) || 0;
+        }
+        return { num, ha };
+    }, [formData.parcela_ids, cuaderno.parcelas]);
 
     const parcelasSeleccionadasEspeciales = useMemo(() => {
         if (sheet !== "tratamientos") return [];
@@ -876,6 +927,16 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                         <p className="text-gray-500 text-sm col-span-2">No hay parcelas</p>
                                     )}
                                 </div>
+                                <p className="mt-1.5 text-xs text-gray-600">
+                                    {parcelasSeleccionadasResumen.num > 0 ? (
+                                        <>
+                                            {parcelasSeleccionadasResumen.num} parcela{parcelasSeleccionadasResumen.num !== 1 ? "s" : ""} seleccionada{parcelasSeleccionadasResumen.num !== 1 ? "s" : ""} ·{" "}
+                                            <span className="font-semibold text-green-700">{formatHa(parcelasSeleccionadasResumen.ha)} ha</span> a tratar
+                                        </>
+                                    ) : (
+                                        <span className="text-gray-400">Ninguna parcela seleccionada · 0 ha</span>
+                                    )}
+                                </p>
                             </div>
                             {Array.isArray(formData.parcela_ids) && formData.parcela_ids.length > 0 && (
                                 <div className={`p-3 rounded-lg border ${asesoramientoObligatorio ? "bg-red-50 border-red-300" : "bg-amber-50 border-amber-200"}`}>
@@ -996,14 +1057,25 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                                     onMouseDown={(e) => {
                                                         e.preventDefault();
                                                         setProductInputValue(p.nombre_comercial || "");
+                                                        const uso = datosDeUso(p);
                                                         setFormData((prev) => ({
                                                             ...prev,
                                                             producto_id: p.id,
                                                             nombre_comercial: p.nombre_comercial,
                                                             numero_registro: p.numero_registro,
                                                             numero_lote: p.numero_lote,
-                                                            plaga_enfermedad: (p as any).problema_fitosanitario || (p as any).plaga_enfermedad || problematicaDeProducto(p.id, p.nombre_comercial) || (prev as any).plaga_enfermedad || "",
+                                                            plaga_enfermedad: uso.problematica || problematicaDeProducto(p.id, p.nombre_comercial) || (prev as any).plaga_enfermedad || "",
+                                                            unidad_dosis: uso.unidad_dosis ? migrateUnidadDosis(uso.unidad_dosis) : prev.unidad_dosis,
                                                         }));
+                                                        if (!uso.problematica || !uso.unidad_dosis) {
+                                                            completarDatosDeUsoAsync(p.nombre_comercial || "", p.numero_registro || "", (d) => {
+                                                                setFormData((prev) => prev.producto_id !== p.id ? prev : ({
+                                                                    ...prev,
+                                                                    plaga_enfermedad: !uso.problematica && d.problematica ? d.problematica : prev.plaga_enfermedad,
+                                                                    unidad_dosis: !uso.unidad_dosis && d.unidad_dosis ? migrateUnidadDosis(d.unidad_dosis) : prev.unidad_dosis,
+                                                                }));
+                                                            });
+                                                        }
                                                         setProductDropdownOpen(false);
                                                     }}
                                                     className="w-full px-3 py-2 text-left text-sm text-gray-800 hover:bg-gray-100 transition-colors"
@@ -1036,13 +1108,15 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                                             importingGlobalRef.current = false;
                                                             if (!imported) return;
                                                             setProductInputValue(imported.nombre_comercial);
+                                                            const usoCat = { problematica: (c.problematica || imported.problematica || "").trim(), unidad_dosis: (c.unidad_dosis || imported.unidad_dosis || "").trim() };
                                                             setFormData((prev) => ({
                                                                 ...prev,
                                                                 producto_id: imported.id,
                                                                 nombre_comercial: imported.nombre_comercial,
                                                                 numero_registro: imported.numero_registro,
                                                                 numero_lote: imported.numero_lote,
-                                                                plaga_enfermedad: (imported as any).problema_fitosanitario || (imported as any).plaga_enfermedad || problematicaDeProducto(imported.id, imported.nombre_comercial) || (prev as any).plaga_enfermedad || "",
+                                                                plaga_enfermedad: usoCat.problematica || problematicaDeProducto(imported.id, imported.nombre_comercial) || (prev as any).plaga_enfermedad || "",
+                                                                unidad_dosis: usoCat.unidad_dosis ? migrateUnidadDosis(usoCat.unidad_dosis) : prev.unidad_dosis,
                                                             }));
                                                             setProductDropdownOpen(false);
                                                         }}
@@ -1132,7 +1206,7 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                         return (
                                         <div key={idx} className="grid grid-cols-1 gap-2 p-2 rounded-lg bg-gray-50 border border-gray-200">
                                             <div className="flex gap-2 items-center flex-wrap">
-                                                <div className="relative flex-1 min-w-[120px]">
+                                                <div className="relative basis-full">
                                                     <input
                                                         type="text"
                                                         value={p.nombre_comercial || ""}
@@ -1156,7 +1230,7 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                                     {secDropdownOpen === idx && (() => {
                                                         const secCat = catalogoFiltradoPorTexto(p.nombre_comercial || "");
                                                         return (
-                                                        <div className="absolute z-20 mt-1 w-full max-h-48 overflow-y-auto rounded-lg bg-white border border-gray-300 shadow-xl">
+                                                        <div className="absolute z-20 mt-1 w-full max-h-64 overflow-y-auto rounded-lg bg-white border border-gray-300 shadow-xl">
                                                             {secFiltered.length > 0 ? (
                                                                 secFiltered.map((pr) => (
                                                                     <button
@@ -1165,14 +1239,32 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                                                         onMouseDown={(e) => {
                                                                             e.preventDefault();
                                                                             const list = [...(formData.productos_lista || [])];
+                                                                            const uso = datosDeUso(pr);
                                                                             list[idx + 1] = {
                                                                                 ...list[idx + 1],
                                                                                 producto_id: pr.id,
                                                                                 nombre_comercial: pr.nombre_comercial,
                                                                                 numero_registro: pr.numero_registro,
                                                                                 numero_lote: pr.numero_lote || list[idx + 1]?.numero_lote,
+                                                                                plaga_enfermedad: uso.problematica || problematicaDeProducto(pr.id, pr.nombre_comercial) || list[idx + 1]?.plaga_enfermedad || "",
+                                                                                unidad_dosis: uso.unidad_dosis ? migrateUnidadDosis(uso.unidad_dosis) : list[idx + 1]?.unidad_dosis,
                                                                             };
                                                                             setFormData((prev) => ({ ...prev, productos_lista: list }));
+                                                                            if (!uso.problematica || !uso.unidad_dosis) {
+                                                                                completarDatosDeUsoAsync(pr.nombre_comercial || "", pr.numero_registro || "", (d) => {
+                                                                                    setFormData((prev) => {
+                                                                                        const l2 = [...(prev.productos_lista || [])];
+                                                                                        const actual = l2[idx + 1];
+                                                                                        if (!actual || actual.producto_id !== pr.id) return prev;
+                                                                                        l2[idx + 1] = {
+                                                                                            ...actual,
+                                                                                            plaga_enfermedad: !actual.plaga_enfermedad && d.problematica ? d.problematica : actual.plaga_enfermedad,
+                                                                                            unidad_dosis: !uso.unidad_dosis && d.unidad_dosis ? migrateUnidadDosis(d.unidad_dosis) : actual.unidad_dosis,
+                                                                                        };
+                                                                                        return { ...prev, productos_lista: l2 };
+                                                                                    });
+                                                                                });
+                                                                            }
                                                                             setSecDropdownOpen(null);
                                                                         }}
                                                                         className="w-full px-3 py-2 text-left text-sm text-gray-800 hover:bg-gray-100"
@@ -1202,12 +1294,15 @@ export default function AddRowModal({ isOpen, onClose, sheet, cuaderno, onSucces
                                                                                 importingGlobalRef.current = false;
                                                                                 if (!imported) return;
                                                                                 const list = [...(formData.productos_lista || [])];
+                                                                                const usoCat = { problematica: (c.problematica || imported.problematica || "").trim(), unidad_dosis: (c.unidad_dosis || imported.unidad_dosis || "").trim() };
                                                                                 list[idx + 1] = {
                                                                                     ...list[idx + 1],
                                                                                     producto_id: imported.id,
                                                                                     nombre_comercial: imported.nombre_comercial,
                                                                                     numero_registro: imported.numero_registro,
                                                                                     numero_lote: imported.numero_lote || list[idx + 1]?.numero_lote,
+                                                                                    plaga_enfermedad: usoCat.problematica || problematicaDeProducto(imported.id, imported.nombre_comercial) || list[idx + 1]?.plaga_enfermedad || "",
+                                                                                    unidad_dosis: usoCat.unidad_dosis ? migrateUnidadDosis(usoCat.unidad_dosis) : list[idx + 1]?.unidad_dosis,
                                                                                 };
                                                                                 setFormData((prev) => ({ ...prev, productos_lista: list }));
                                                                                 setSecDropdownOpen(null);
