@@ -155,6 +155,74 @@ type ParcelSortMode = "num_orden" | "cultivo_superficie" | "cultivo" | "alfabeti
 type TratSortMode = "fecha_desc" | "fecha_asc" | "cultivo" | "parcela" | "producto";
 type FertSortMode = "fecha_desc" | "fecha_asc" | "cultivo" | "dosis_desc" | "dosis_asc";
 
+/** Color de fila normalizado para filtrar: "" / blanco = "sin" (fila sin color). */
+function normColorFila(c: unknown): string {
+    const x = String(c || "").trim().toLowerCase();
+    if (!x || x === "#ffffff" || x === "#fff" || x === "white" || x === "transparent") return "sin";
+    return x;
+}
+
+/** Desplegable "Color" con casillas: filtra filas por su color de fila. */
+function ColorFilterDropdown({ opciones, seleccion, onChange }: {
+    opciones: { key: string; count: number }[];
+    seleccion: Set<string>;
+    onChange: (next: Set<string>) => void;
+}) {
+    const [open, setOpen] = useState(false);
+    const ref = useRef<HTMLDivElement | null>(null);
+    useEffect(() => {
+        if (!open) return;
+        const onDown = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+        document.addEventListener("mousedown", onDown);
+        return () => document.removeEventListener("mousedown", onDown);
+    }, [open]);
+    const activo = seleccion.size > 0;
+    return (
+        <div className="relative" ref={ref}>
+            <button
+                type="button"
+                onClick={() => setOpen((o) => !o)}
+                title="Filtrar filas por color"
+                className={`flex items-center gap-1.5 rounded-md border px-2 py-1.5 text-xs transition-colors ${activo ? "bg-emerald-50 border-emerald-400 text-emerald-800 font-medium" : "bg-gray-100 border-gray-300 text-gray-800"}`}
+            >
+                <Palette size={13} className="text-gray-500" />
+                {activo ? `Color (${seleccion.size})` : "Todos los colores"}
+                <svg className="w-3 h-3 text-gray-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+            </button>
+            {open && (
+                <div className="absolute left-0 top-full mt-1 z-30 bg-white border border-gray-200 rounded-lg shadow-lg min-w-[170px] max-h-72 overflow-y-auto py-1">
+                    <button
+                        type="button"
+                        className="w-full px-3 py-1.5 text-left text-xs text-gray-500 hover:bg-gray-50"
+                        onClick={() => onChange(new Set())}
+                    >Todos los colores</button>
+                    <div className="border-t border-gray-100 my-1" />
+                    {opciones.map(({ key, count }) => (
+                        <label key={key} className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-50 cursor-pointer text-xs text-gray-800">
+                            <input
+                                type="checkbox"
+                                checked={seleccion.has(key)}
+                                onChange={() => {
+                                    const next = new Set(seleccion);
+                                    if (next.has(key)) next.delete(key); else next.add(key);
+                                    onChange(next);
+                                }}
+                                className="accent-emerald-500"
+                            />
+                            <span
+                                className="inline-block w-4 h-4 rounded border border-gray-300 shrink-0"
+                                style={{ backgroundColor: key === "sin" ? "#ffffff" : key }}
+                            />
+                            <span>{key === "sin" ? "Sin color" : "Color"}</span>
+                            <span className="ml-auto text-gray-400">{count}</span>
+                        </label>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+}
+
 /** Filtro del desplegable: igualdad exacta (trim + minúsculas). Evita que "AVENA" incluya "AVENA/COLIFLOR". */
 function cultivoCoincideConFiltro(celdaCultivo: string, filtros: Set<string>): boolean {
     if (!filtros || filtros.size === 0) return true;
@@ -196,6 +264,9 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
     const [undoing, setUndoing] = useState(false);
     const [parcelaTratamientoFilter, setParcelaTratamientoFilter] = useState<"" | "con_tratamiento" | "sin_tratamiento">("");
     const [tratCultivoFilter, setTratCultivoFilter] = useState<string>("");
+    // Filtro por color de fila ("sin" = sin color), uno para parcelas y otro para hojas de tratamientos
+    const [colorFilterParcelas, setColorFilterParcelas] = useState<Set<string>>(new Set());
+    const [colorFilterTrat, setColorFilterTrat] = useState<Set<string>>(new Set());
     const [parcelSortMode, setParcelSortMode] = useState<ParcelSortMode>("num_orden");
     const [tratSortMode, setTratSortMode] = useState<TratSortMode>("cultivo");
     const [fertSortMode, setFertSortMode] = useState<FertSortMode>("fecha_desc");
@@ -425,6 +496,36 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
 
     const data = getData();
 
+    /** Color efectivo de una fila (incluye un color recién aplicado aún sin recargar). */
+    const colorEfectivoFila = (row: any): string => {
+        const pend = row?.id ? pendingEdits.get(`${effectiveSheet}|${row.id}|color_fila`) : undefined;
+        return normColorFila(pend ? pend.v : row?.color_fila);
+    };
+    const esHojaTratamientos = effectiveSheet === "tratamientos" || effectiveSheet === "trat_asesor" || effectiveSheet === "tratamientos_especiales";
+    const colorFilterActivo = effectiveSheet === "parcelas" ? colorFilterParcelas : esHojaTratamientos ? colorFilterTrat : null;
+    const setColorFilterActivo = (next: Set<string>) => {
+        if (effectiveSheet === "parcelas") { setColorFilterParcelas(next); setSelectedParcelas(new Set()); }
+        else if (esHojaTratamientos) { setColorFilterTrat(next); setSelectedTratamientos(new Set()); }
+    };
+    /** Colores presentes en la hoja (con nº de filas), en el orden de la paleta. */
+    const opcionesColorFila = (() => {
+        if (!colorFilterActivo) return [];
+        const counts = new Map<string, number>();
+        for (const row of data as any[]) {
+            const k = colorEfectivoFila(row);
+            counts.set(k, (counts.get(k) || 0) + 1);
+        }
+        for (const k of colorFilterActivo) if (!counts.has(k)) counts.set(k, 0);
+        const orden = (k: string) => {
+            if (k === "sin") return -1;
+            const i = (ROW_COLOR_SWATCHES as readonly string[]).indexOf(k);
+            return i === -1 ? 999 : i;
+        };
+        return Array.from(counts.entries())
+            .map(([key, count]) => ({ key, count }))
+            .sort((a, b) => orden(a.key) - orden(b.key) || a.key.localeCompare(b.key));
+    })();
+
     // ---- Cultivos únicos para filtro ----
     const uniqueCultivos = useMemo(() => {
         if (effectiveSheet !== "parcelas") return [];
@@ -487,6 +588,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
         // de Trat. Asesorados y Trat. Especiales (son vistas de tratamientos).
         if (effectiveSheet === "tratamientos" || effectiveSheet === "trat_asesor" || effectiveSheet === "tratamientos_especiales") {
             const tratamientos = (data as any[]).filter((t: any) => {
+                if (colorFilterTrat.size > 0 && !colorFilterTrat.has(colorEfectivoFila(t))) return false;
                 if (!tratCultivoFilter) return true;
                 const cultivo = (t.cultivo_especie || "").trim().toLowerCase();
                 return cultivo === (tratCultivoFilter || "").trim().toLowerCase();
@@ -535,6 +637,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
         }
         if (effectiveSheet !== "parcelas") return data;
         const filtered = (data as any[]).filter((row: any) => {
+            if (colorFilterParcelas.size > 0 && !colorFilterParcelas.has(colorEfectivoFila(row))) return false;
             if (cultivoFilters.size > 0) {
                 const cultivo = row.especie || row.cultivo || "";
                 if (!cultivoCoincideConFiltro(cultivo, cultivoFilters)) return false;
@@ -604,7 +707,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
             }
         });
         return sorted;
-    }, [data, effectiveSheet, cultivoFilters, parcelaTratamientoFilter, parcelaIdsConTratamiento, parcelSortMode, tratCultivoFilter, tratSortMode, fertSortMode, minNumOrdenTratamiento, colSort]);
+    }, [data, effectiveSheet, cultivoFilters, parcelaTratamientoFilter, parcelaIdsConTratamiento, parcelSortMode, tratCultivoFilter, tratSortMode, fertSortMode, minNumOrdenTratamiento, colSort, colorFilterParcelas, colorFilterTrat, pendingEdits]);
 
     // ---- Ediciones optimistas sobre displayData ----
     // Al llegar datos frescos NO se borran todas las ediciones pendientes a
@@ -763,14 +866,31 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
         const parseHa = (t: any) => parseFloat(t.superficie_tratada) || 0;
         const totalHa = tratamientos.reduce((sum: number, t: any) => sum + parseHa(t), 0);
         const selectedArr = tratamientos.filter((t: any) => t.id && selectedTratamientos.has(t.id));
-        const selectedHa = selectedArr.reduce((sum: number, t: any) => sum + parseHa(t), 0);
+        // Hectáreas de la selección: cada parcela cuenta UNA vez aunque tenga varias
+        // filas seleccionadas (al añadir un tratamiento se crea uno por parcela, no por fila).
+        const supParcela = new Map<string, number>();
+        for (const p of (cuaderno.parcelas || []) as any[]) {
+            if (p?.id) supParcela.set(p.id, Number(p.superficie_cultivada || p.superficie_ha || p.superficie_sigpac || 0) || 0);
+        }
+        const haPorParcela = new Map<string, number>();
+        for (const t of selectedArr) {
+            const pids = (Array.isArray(t.parcela_ids) ? t.parcela_ids : []).filter((pid: string) => pid && supParcela.has(pid));
+            if (pids.length > 0) {
+                for (const pid of pids) haPorParcela.set(pid, supParcela.get(pid) || 0);
+            } else {
+                // Sin parcela vinculada: agrupar por su Nº de orden (o la propia fila).
+                const clave = "ord:" + (String(t.num_orden_parcelas || "").trim() || t.id);
+                haPorParcela.set(clave, Math.max(haPorParcela.get(clave) || 0, parseHa(t)));
+            }
+        }
+        const selectedHa = Array.from(haPorParcela.values()).reduce((sum, ha) => sum + ha, 0);
         return {
             total: tratamientos.length,
             totalHa,
             selected: selectedArr.length,
             selectedHa,
         };
-    }, [effectiveSheet, displayData, selectedTratamientos]);
+    }, [effectiveSheet, displayData, selectedTratamientos, cuaderno.parcelas]);
 
     const parcelasFromSelectedAsesoramientos = useMemo(() => {
         if (selectedAsesoramientos.size === 0) return [];
@@ -2274,6 +2394,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                     )}
                                 </div>
                                 )}
+                                <ColorFilterDropdown opciones={opcionesColorFila} seleccion={colorFilterParcelas} onChange={setColorFilterActivo} />
                                 <select
                                     value={parcelSortMode}
                                     onChange={(e) => { setParcelSortMode(e.target.value as ParcelSortMode); setColSort(null); }}
@@ -2322,6 +2443,7 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                     ))}
                                 </select>
                                 )}
+                                <ColorFilterDropdown opciones={opcionesColorFila} seleccion={colorFilterTrat} onChange={setColorFilterActivo} />
                                 <select
                                     value={tratSortMode}
                                     onChange={(e) => setTratSortMode(e.target.value as TratSortMode)}
@@ -2891,8 +3013,8 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                             <div className="w-12 h-12 rounded-xl bg-gray-100 flex items-center justify-center text-gray-600">
                                                 {SHEET_ICONS[effectiveSheet]}
                                             </div>
-                                            <p>{(effectiveSheet === "parcelas" && cultivoFilters.size > 0) ? `Sin parcelas con los cultivos seleccionados` : (effectiveSheet === "parcelas" && parcelaTratamientoFilter === "sin_tratamiento") ? "¡Todas las parcelas tienen tratamiento!" : (effectiveSheet === "parcelas" && parcelaTratamientoFilter === "con_tratamiento") ? "Ninguna parcela tiene tratamiento aún" : (effectiveSheet === "tratamientos" && tratCultivoFilter) ? `Sin tratamientos con cultivo "${tratCultivoFilter}"` : `Sin datos en ${config.title.toLowerCase()}`}</p>
-                                            {effectiveSheet !== "historico" && cultivoFilters.size === 0 && !parcelaTratamientoFilter && (
+                                            <p>{(colorFilterActivo && colorFilterActivo.size > 0) ? "Ninguna fila con los colores seleccionados" : (effectiveSheet === "parcelas" && cultivoFilters.size > 0) ? `Sin parcelas con los cultivos seleccionados` : (effectiveSheet === "parcelas" && parcelaTratamientoFilter === "sin_tratamiento") ? "¡Todas las parcelas tienen tratamiento!" : (effectiveSheet === "parcelas" && parcelaTratamientoFilter === "con_tratamiento") ? "Ninguna parcela tiene tratamiento aún" : (effectiveSheet === "tratamientos" && tratCultivoFilter) ? `Sin tratamientos con cultivo "${tratCultivoFilter}"` : `Sin datos en ${config.title.toLowerCase()}`}</p>
+                                            {effectiveSheet !== "historico" && cultivoFilters.size === 0 && !parcelaTratamientoFilter && !(colorFilterActivo && colorFilterActivo.size > 0) && (
                                                 <button
                                                     onClick={() => setShowAddModal(true)}
                                                     className="mt-2 flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium transition-colors"
@@ -2901,9 +3023,9 @@ export default function Editor({ cuaderno, activeSheet, onSheetChange, onRefresh
                                                     Añadir {effectiveSheet === "parcelas" ? "parcela" : effectiveSheet === "productos" ? "producto" : effectiveSheet === "fertilizantes" ? "fertilizante" : effectiveSheet === "cosecha" ? "cosecha" : "tratamiento"}
                                                 </button>
                                             )}
-                                            {(cultivoFilters.size > 0 || tratCultivoFilter || parcelaTratamientoFilter) && (
+                                            {(cultivoFilters.size > 0 || tratCultivoFilter || parcelaTratamientoFilter || colorFilterParcelas.size > 0 || colorFilterTrat.size > 0) && (
                                                 <button
-                                                    onClick={() => { setCultivoFilters(new Set()); setTratCultivoFilter(""); setParcelaTratamientoFilter(""); }}
+                                                    onClick={() => { setCultivoFilters(new Set()); setTratCultivoFilter(""); setParcelaTratamientoFilter(""); setColorFilterParcelas(new Set()); setColorFilterTrat(new Set()); }}
                                                     className="mt-2 text-xs text-emerald-400 hover:text-emerald-300 transition-colors"
                                                 >
                                                     Limpiar filtro
