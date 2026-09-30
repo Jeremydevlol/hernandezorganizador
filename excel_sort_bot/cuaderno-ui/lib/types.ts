@@ -59,6 +59,8 @@ export interface Producto {
     fecha_adquisicion?: string;           // Fecha compra
     fecha_caducidad?: string;             // Fecha caducidad
     proveedor?: string;                   // Proveedor
+    problematica?: string;                // Plaga/enfermedad para la que se emplea
+    unidad_dosis?: string;                // Unidad de dosis al aplicarlo (L/Ha, Kg/Ha...)
     color_fila?: string;
 }
 
@@ -73,6 +75,8 @@ export interface CatalogoProducto {
     formulacion: string;
     tipo: string;           // fitosanitario | fertilizante | ...
     unidad: string;         // L, Kg, etc.
+    problematica?: string;  // Plaga/enfermedad para la que se emplea
+    unidad_dosis?: string;  // Unidad de dosis al aplicarlo (L/Ha, Kg/Ha...)
     proveedor: string;
     notas: string;
     created_at?: string;

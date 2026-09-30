@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { Plus, Search, Pencil, Trash2, BookMarked, ArrowDownToLine } from "lucide-react";
 import { api } from "@/lib/api";
+import { UNIDADES_DOSIS } from "@/lib/unidadesDosis";
 
 interface CatalogoViewProps {
     /** Si se pasa, muestra botón de importar al cuaderno. Si null/undefined = vista global standalone. */
@@ -21,7 +22,7 @@ export default function CatalogoView({ cuadernoId, standalone }: CatalogoViewPro
     const [showNew, setShowNew] = useState(false);
     const [newProd, setNewProd] = useState({
         nombre_comercial: "", numero_registro: "", materia_activa: "",
-        formulacion: "", tipo: "fitosanitario", unidad: "L", proveedor: "", notas: ""
+        formulacion: "", tipo: "fitosanitario", unidad: "L", problematica: "", unidad_dosis: "", proveedor: "", notas: ""
     });
 
     const load = async (q = "") => {
@@ -59,6 +60,11 @@ export default function CatalogoView({ cuadernoId, standalone }: CatalogoViewPro
             if (!esDerivadoDeCuaderno) {
                 // Producto real del catálogo → actualiza la tabla del catálogo
                 await api.updateCatalogoProducto(editingId, editFields);
+            } else if (editFields.problematica || editFields.unidad_dosis) {
+                // Producto que solo existía en cuadernos: darlo de alta en el catálogo
+                // para que la problemática y la unidad de dosis queden guardadas.
+                const { id: _id, ...campos } = editFields;
+                await api.createCatalogoProducto({ ...campos, nombre_comercial: editFields.nombre_comercial || "" });
             }
             // Propagar nombre/registro/unidad a TODOS los cuadernos donde aparezca
             // (para productos derivados de cuaderno es la única vía; para los reales
@@ -85,7 +91,7 @@ export default function CatalogoView({ cuadernoId, standalone }: CatalogoViewPro
         if (!newProd.nombre_comercial.trim()) return;
         await api.createCatalogoProducto(newProd);
         setShowNew(false);
-        setNewProd({ nombre_comercial: "", numero_registro: "", materia_activa: "", formulacion: "", tipo: "fitosanitario", unidad: "L", proveedor: "", notas: "" });
+        setNewProd({ nombre_comercial: "", numero_registro: "", materia_activa: "", formulacion: "", tipo: "fitosanitario", unidad: "L", problematica: "", unidad_dosis: "", proveedor: "", notas: "" });
         load(query);
     };
 
@@ -147,6 +153,7 @@ export default function CatalogoView({ cuadernoId, standalone }: CatalogoViewPro
                         ["numero_registro", "Nº Registro"],
                         ["materia_activa", "Materia activa"],
                         ["formulacion", "Formulación"],
+                        ["problematica", "Problemática"],
                         ["proveedor", "Proveedor"],
                     ] as [string, string][]).map(([k, label]) => (
                         <div key={k} className="flex flex-col gap-1">
@@ -181,6 +188,14 @@ export default function CatalogoView({ cuadernoId, standalone }: CatalogoViewPro
                         </select>
                     </div>
                     <div className="flex flex-col gap-1">
+                        <label className="text-[10px] text-gray-500">Unidad de dosis</label>
+                        <select value={newProd.unidad_dosis} onChange={(e) => setNewProd(p => ({ ...p, unidad_dosis: e.target.value }))}
+                            className="px-2 py-1.5 rounded-md border border-gray-300 text-xs focus:outline-none focus:border-emerald-400">
+                            <option value="">—</option>
+                            {UNIDADES_DOSIS.map((u) => <option key={u} value={u}>{u}</option>)}
+                        </select>
+                    </div>
+                    <div className="flex flex-col gap-1">
                         <label className="text-[10px] text-gray-500">Notas</label>
                         <input
                             type="text"
@@ -199,17 +214,17 @@ export default function CatalogoView({ cuadernoId, standalone }: CatalogoViewPro
                 <table className="w-full text-sm border-collapse">
                     <thead className="sticky top-0 z-10">
                         <tr>
-                            {["Nombre Comercial", "Nº Registro", "Materia Activa", "Formulación", "Tipo", "Ud.", "Proveedor", "Notas", ""].map(h => (
+                            {["Nombre Comercial", "Nº Registro", "Materia Activa", "Formulación", "Problemática", "Ud. dosis", "Tipo", "Ud.", "Proveedor", "Notas", ""].map(h => (
                                 <th key={h} className={TH}>{h}</th>
                             ))}
                         </tr>
                     </thead>
                     <tbody>
                         {loading ? (
-                            <tr><td colSpan={9} className="text-center py-10 text-xs text-gray-400">Cargando...</td></tr>
+                            <tr><td colSpan={11} className="text-center py-10 text-xs text-gray-400">Cargando...</td></tr>
                         ) : productos.length === 0 ? (
                             <tr>
-                                <td colSpan={9} className="text-center py-10 text-xs text-gray-400">
+                                <td colSpan={11} className="text-center py-10 text-xs text-gray-400">
                                     {query
                                         ? `No hay productos que coincidan con "${query}".`
                                         : "El catálogo está vacío. Crea el primer producto con el botón de arriba."}
@@ -228,6 +243,21 @@ export default function CatalogoView({ cuadernoId, standalone }: CatalogoViewPro
                                                 />
                                             </td>
                                         ))}
+                                        <td className={COL}>
+                                            <input
+                                                value={editFields.problematica || ""}
+                                                onChange={(e) => setEditFields(f => ({ ...f, problematica: e.target.value }))}
+                                                placeholder="Ej: malas hierbas"
+                                                className="w-full min-w-[100px] px-1.5 py-1 border border-emerald-400 rounded text-xs focus:outline-none"
+                                            />
+                                        </td>
+                                        <td className={COL}>
+                                            <select value={editFields.unidad_dosis || ""} onChange={(e) => setEditFields(f => ({ ...f, unidad_dosis: e.target.value }))}
+                                                className="w-full border border-emerald-400 rounded text-xs px-1 py-1 focus:outline-none">
+                                                <option value="">—</option>
+                                                {UNIDADES_DOSIS.map((u) => <option key={u} value={u}>{u}</option>)}
+                                            </select>
+                                        </td>
                                         <td className={COL}>
                                             <select value={editFields.tipo || ""} onChange={(e) => setEditFields(f => ({ ...f, tipo: e.target.value }))}
                                                 className="w-full border border-emerald-400 rounded text-xs px-1 py-1 focus:outline-none">
@@ -263,6 +293,10 @@ export default function CatalogoView({ cuadernoId, standalone }: CatalogoViewPro
                                             <span className="block truncate" title={p.materia_activa}>{p.materia_activa || "—"}</span>
                                         </td>
                                         <td className={COL + " text-gray-500 text-[11px]"}>{p.formulacion || "—"}</td>
+                                        <td className={COL + " text-gray-600 text-[11px] max-w-[160px]"}>
+                                            <span className="block truncate" title={p.problematica}>{p.problematica || "—"}</span>
+                                        </td>
+                                        <td className={COL + " text-gray-500 text-[11px]"}>{p.unidad_dosis || "—"}</td>
                                         <td className={COL}>
                                             <span className={`px-1.5 py-0.5 rounded text-[11px] font-medium ${p.tipo === "fitosanitario" ? "bg-amber-100 text-amber-700" : p.tipo === "fertilizante" ? "bg-emerald-100 text-emerald-700" : p.tipo === "biologico" ? "bg-blue-100 text-blue-700" : "bg-gray-100 text-gray-600"}`}>
                                                 {p.tipo}

@@ -527,6 +527,8 @@ class ProductoCreate(BaseModel):
     proveedor: str = ""
     fecha_caducidad: str = ""
     notas: str = ""
+    problematica: str = ""
+    unidad_dosis: str = ""
 
 
 class CatalogoProductoCreate(BaseModel):
@@ -537,6 +539,8 @@ class CatalogoProductoCreate(BaseModel):
     formulacion: str = ""
     tipo: str = "fitosanitario"
     unidad: str = "L"
+    problematica: str = ""
+    unidad_dosis: str = ""
     proveedor: str = ""
     notas: str = ""
 
@@ -548,6 +552,8 @@ class CatalogoProductoUpdate(BaseModel):
     formulacion: Optional[str] = None
     tipo: Optional[str] = None
     unidad: Optional[str] = None
+    problematica: Optional[str] = None
+    unidad_dosis: Optional[str] = None
     proveedor: Optional[str] = None
     notas: Optional[str] = None
 
@@ -1381,7 +1387,9 @@ async def crear_producto(cuaderno_id: str, data: ProductoCreate):
         fecha_adquisicion=data.fecha_adquisicion,
         proveedor=data.proveedor,
         fecha_caducidad=data.fecha_caducidad,
-        notas=data.notas
+        notas=data.notas,
+        problematica=data.problematica,
+        unidad_dosis=data.unidad_dosis,
     )
     
     cuaderno.agregar_producto(producto)
@@ -1395,6 +1403,8 @@ async def crear_producto(cuaderno_id: str, data: ProductoCreate):
             "formulacion": producto.formulacion,
             "tipo": producto.tipo.value if hasattr(producto.tipo, "value") else str(producto.tipo or "fitosanitario"),
             "unidad": producto.unidad or "L",
+            "problematica": producto.problematica,
+            "unidad_dosis": producto.unidad_dosis,
             "proveedor": producto.proveedor,
             "notas": producto.notas,
         })
@@ -1452,6 +1462,8 @@ def _sync_catalogo_desde_cuadernos() -> None:
                             "formulacion": p.get("formulacion") or "",
                             "tipo": tipo_raw if isinstance(tipo_raw, str) else str(tipo_raw),
                             "unidad": p.get("unidad") or "L",
+                            "problematica": p.get("problematica") or "",
+                            "unidad_dosis": p.get("unidad_dosis") or "",
                             "proveedor": p.get("proveedor") or "",
                             "notas": p.get("notas") or "",
                         })
@@ -1479,6 +1491,8 @@ def _sync_catalogo_desde_cuadernos() -> None:
                         "formulacion": prod.formulacion,
                         "tipo": prod.tipo.value if hasattr(prod.tipo, "value") else str(prod.tipo or "fitosanitario"),
                         "unidad": prod.unidad or "L",
+                        "problematica": getattr(prod, "problematica", ""),
+                        "unidad_dosis": getattr(prod, "unidad_dosis", ""),
                         "proveedor": prod.proveedor,
                         "notas": prod.notas,
                     })
@@ -1782,6 +1796,8 @@ async def publicar_producto_en_catalogo(cuaderno_id: str, producto_id: str):
             "formulacion": prod.formulacion,
             "tipo": prod.tipo.value if hasattr(prod.tipo, "value") else str(prod.tipo or "fitosanitario"),
             "unidad": prod.unidad or "L",
+            "problematica": prod.problematica,
+            "unidad_dosis": prod.unidad_dosis,
             "proveedor": prod.proveedor,
             "notas": prod.notas,
         })
@@ -1815,6 +1831,14 @@ async def importar_desde_catalogo(cuaderno_id: str, data: ImportarDesdeCatalogoR
         None,
     )
     if existente:
+        # Completar problemática/unidad de dosis que el producto del cuaderno aún no tenga.
+        cambiado = False
+        for campo in ("problematica", "unidad_dosis"):
+            if not getattr(existente, campo, "") and cat.get(campo):
+                setattr(existente, campo, cat.get(campo))
+                cambiado = True
+        if cambiado:
+            _guardar_cuaderno(storage, cuaderno)
         return {
             "success": True,
             "producto": existente.to_dict(),
@@ -1833,6 +1857,8 @@ async def importar_desde_catalogo(cuaderno_id: str, data: ImportarDesdeCatalogoR
             unidad=cat.get("unidad", "L") or "L",
             proveedor=cat.get("proveedor", ""),
             notas=cat.get("notas", ""),
+            problematica=cat.get("problematica", "") or "",
+            unidad_dosis=cat.get("unidad_dosis", "") or "",
         )
         cuaderno.agregar_producto(producto)
         _guardar_cuaderno(storage, cuaderno)
@@ -2004,12 +2030,15 @@ async def crear_tratamiento(cuaderno_id: str, data: TratamientoCreate, backgroun
                 if not nombre:
                     continue
                 try:
+                    # Aprende problemática y unidad de dosis solo si el catálogo
+                    # aún no las tiene (nunca pisa lo configurado a mano).
                     catalogo.upsert({
                         "nombre_comercial": nombre,
                         "numero_registro": prod.numero_registro or "",
-                        "numero_lote": prod.numero_lote or "",
                         "tipo": "fitosanitario",
-                    })
+                        "problematica": (prod.problema_fitosanitario or "").strip(),
+                        "unidad_dosis": (prod.unidad_dosis or "").strip(),
+                    }, solo_vacios=True)
                 except Exception:
                     pass
 

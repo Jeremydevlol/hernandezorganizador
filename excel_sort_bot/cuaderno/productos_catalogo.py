@@ -32,11 +32,36 @@ CAMPOS = (
     "formulacion",
     "tipo",
     "unidad",
+    "problematica",   # plaga/enfermedad para la que se emplea el producto
+    "unidad_dosis",   # unidad de la dosis al aplicarlo (L/Ha, Kg/Ha, ml/H, g/Ha)
     "proveedor",
     "notas",
     "created_at",
     "updated_at",
 )
+
+# Columnas que la tabla antigua de Supabase no tiene: se guardan solo en local.
+CAMPOS_SOLO_LOCAL = ("problematica", "unidad_dosis")
+
+
+def _fusionar(existente: Dict, nuevo: Dict, solo_vacios: bool = False) -> Dict:
+    """
+    Combina un producto existente con datos nuevos sin perder información:
+    un valor vacío nunca borra uno guardado. Con solo_vacios=True solo se
+    rellenan los campos que estaban vacíos (para datos aprendidos de tratamientos).
+    """
+    out = dict(existente)
+    for k in CAMPOS:
+        if k in ("id", "created_at", "updated_at"):
+            continue
+        v = nuevo.get(k)
+        if v in (None, ""):
+            continue
+        if solo_vacios and existente.get(k):
+            continue
+        out[k] = v
+    out["updated_at"] = datetime.now().isoformat()
+    return out
 
 
 def _normalizar_entrada(data: Dict) -> Dict:
@@ -94,7 +119,7 @@ class LocalCatalogoStorage:
         q_norm = (q or "").strip().lower()
         if q_norm:
             def match(r: Dict) -> bool:
-                for field in ("nombre_comercial", "numero_registro", "materia_activa", "formulacion"):
+                for field in ("nombre_comercial", "numero_registro", "materia_activa", "formulacion", "problematica"):
                     if q_norm in (r.get(field) or "").lower():
                         return True
                 return False
@@ -108,18 +133,17 @@ class LocalCatalogoStorage:
                 return r
         return None
 
-    def upsert(self, data: Dict) -> Dict:
+    def upsert(self, data: Dict, solo_vacios: bool = False) -> Dict:
         rows = self._leer()
-        nuevo = _normalizar_entrada(data)
-        clave = _clave_unicidad(nuevo)
-        # Si ya existe uno con misma (nombre+registro), actualizar.
+        clave = _clave_unicidad(data)
+        # Si ya existe uno con misma (nombre+registro), completarlo sin borrar
+        # lo que ya tenía (antes se sobrescribía la fila entera con vacíos).
         for i, r in enumerate(rows):
             if _clave_unicidad(r) == clave:
-                nuevo["id"] = r.get("id") or nuevo["id"]
-                nuevo["created_at"] = r.get("created_at") or nuevo["created_at"]
-                rows[i] = nuevo
+                rows[i] = _fusionar(r, data, solo_vacios=solo_vacios)
                 self._escribir(rows)
-                return nuevo
+                return rows[i]
+        nuevo = _normalizar_entrada(data)
         rows.append(nuevo)
         self._escribir(rows)
         return nuevo
@@ -187,8 +211,10 @@ class SupabaseCatalogoStorage:
             return result.data[0]
         return None
 
-    def upsert(self, data: Dict) -> Dict:
+    def upsert(self, data: Dict, solo_vacios: bool = False) -> Dict:
         nuevo = _normalizar_entrada(data)
+        for k in CAMPOS_SOLO_LOCAL:
+            nuevo.pop(k, None)
         # upsert con on_conflict por el índice único (nombre_comercial+numero_registro).
         # Si falla (p.ej. sin índice único o Postgrest lo rechaza), hacemos búsqueda + update/insert manual.
         try:
@@ -214,7 +240,7 @@ class SupabaseCatalogoStorage:
         current = self.obtener(producto_id)
         if not current:
             return None
-        merged = {**current, **{k: v for k, v in (patch or {}).items() if k in CAMPOS and k not in ("id", "created_at")}}
+        merged = {**current, **{k: v for k, v in (patch or {}).items() if k in CAMPOS and k not in ("id", "created_at") and k not in CAMPOS_SOLO_LOCAL}}
         merged["updated_at"] = datetime.now().isoformat()
         self.client.table(self.table).update(merged).eq("id", producto_id).execute()
         return merged
@@ -275,25 +301,35 @@ class CatalogoProductos:
         return out[: max(1, int(limit or 50))]
 
     def obtener(self, producto_id: str) -> Optional[Dict]:
+        local = None
+        try:
+            local = self._fallback_local.obtener(producto_id)
+        except Exception:
+            local = None
         try:
             r = self._backend.obtener(producto_id)
             if r:
+                if local and local is not r:
+                    # Supabase no guarda problemática/unidad de dosis: completarlas desde local.
+                    r = {**r, **{k: local.get(k) for k in CAMPOS_SOLO_LOCAL if local.get(k)}}
                 return r
         except Exception:
             pass
-        return self._fallback_local.obtener(producto_id)
+        return local
 
-    def upsert(self, data: Dict) -> Dict:
+    def upsert(self, data: Dict, solo_vacios: bool = False) -> Dict:
         try:
-            result = self._backend.upsert(data)
-            # Mantener también copia local para resiliencia
+            result = self._backend.upsert(data, solo_vacios=solo_vacios)
+            if isinstance(self._backend, LocalCatalogoStorage):
+                return result
+            # Mantener también copia local (con los campos que Supabase no guarda)
             try:
-                self._fallback_local.upsert(result)
+                extra = {k: data.get(k) for k in CAMPOS_SOLO_LOCAL if data.get(k)}
+                return self._fallback_local.upsert({**result, **extra}, solo_vacios=solo_vacios)
             except Exception:
-                pass
-            return result
+                return result
         except Exception:
-            return self._fallback_local.upsert(data)
+            return self._fallback_local.upsert(data, solo_vacios=solo_vacios)
 
     def actualizar(self, producto_id: str, patch: Dict) -> Optional[Dict]:
         result = None

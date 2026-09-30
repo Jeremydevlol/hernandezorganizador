@@ -136,6 +136,8 @@ class ProductoFitosanitario:
     proveedor: str = ""
     fecha_caducidad: str = ""
     notas: str = ""
+    problematica: str = ""   # Plaga/enfermedad para la que se emplea
+    unidad_dosis: str = ""   # Unidad de dosis al aplicarlo (L/Ha, Kg/Ha, ...)
     color_fila: str = ""
     fecha_creacion: str = field(default_factory=lambda: datetime.now().isoformat())
     
@@ -154,6 +156,8 @@ class ProductoFitosanitario:
             "proveedor": self.proveedor,
             "fecha_caducidad": self.fecha_caducidad,
             "notas": self.notas,
+            "problematica": self.problematica or "",
+            "unidad_dosis": self.unidad_dosis or "",
             "color_fila": self.color_fila or "",
             "fecha_creacion": self.fecha_creacion
         }
